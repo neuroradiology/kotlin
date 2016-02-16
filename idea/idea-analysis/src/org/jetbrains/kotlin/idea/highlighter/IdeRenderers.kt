@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.idea.highlighter
 
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
+import org.jetbrains.kotlin.diagnostics.rendering.ContextDependentRenderer
 import org.jetbrains.kotlin.diagnostics.rendering.Renderer
 import org.jetbrains.kotlin.diagnostics.rendering.Renderers
 import org.jetbrains.kotlin.diagnostics.rendering.asRenderer
@@ -76,19 +77,20 @@ object IdeRenderers {
         withDefinedIn = false
     }.asRenderer()
 
-    @JvmField val HTML_CONFLICTING_JVM_DECLARATIONS_DATA = Renderer {
-        data: ConflictingJvmDeclarationsData ->
+    @JvmField val HTML_CONFLICTING_JVM_DECLARATIONS_DATA = ContextDependentRenderer {
+        data: ConflictingJvmDeclarationsData, renderingContext ->
 
         val conflicts = data.signatureOrigins
-            .mapNotNull { it.descriptor }
-            .sortedWith(MemberComparator.INSTANCE)
-            .joinToString("") { "<li>" + HTML_COMPACT_WITH_MODIFIERS.render(it) + "</li>\n" }
+                .mapNotNull { it.descriptor }
+                .sortedWith(MemberComparator.INSTANCE)
+                .joinToString("") { "<li>" + HTML_COMPACT_WITH_MODIFIERS.render(it, renderingContext) + "</li>\n" }
 
         "The following declarations have the same JVM signature (<code>${data.signature.name}${data.signature.desc}</code>):<br/>\n<ul>\n$conflicts</ul>"
     }
 
-    @JvmField val HTML_THROWABLE = Renderer<Throwable> {
-        Renderers.THROWABLE.render(it).replace("\n", "<br/>")
+    @JvmField val HTML_THROWABLE = ContextDependentRenderer<Throwable> {
+        throwable, context ->
+        Renderers.THROWABLE.render(throwable, context).replace("\n", "<br/>")
     }
 
     @JvmField val HTML = DescriptorRenderer.HTML.asRenderer()

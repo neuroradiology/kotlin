@@ -44,8 +44,6 @@ class DiagnosticWithParameters1Renderer<A : Any>(
     override fun renderParameters(diagnostic: DiagnosticWithParameters1<*, A>): Array<out Any> {
         return arrayOf(renderParameter(diagnostic.a, rendererForA))
     }
-
-
 }
 
 class DiagnosticWithParameters2Renderer<A : Any, B : Any>(
