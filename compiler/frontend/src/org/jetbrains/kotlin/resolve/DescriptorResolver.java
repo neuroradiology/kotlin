@@ -42,6 +42,7 @@ import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.psi.psiUtil.PsiUtilsKt;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfo;
+import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfoFactory;
 import org.jetbrains.kotlin.resolve.dataClassUtils.DataClassUtilsKt;
 import org.jetbrains.kotlin.resolve.lazy.ForceResolveUtil;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope;
@@ -53,6 +54,8 @@ import org.jetbrains.kotlin.resolve.source.KotlinSourceElementKt;
 import org.jetbrains.kotlin.storage.StorageManager;
 import org.jetbrains.kotlin.types.*;
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker;
+import org.jetbrains.kotlin.types.expressions.ExpressionTypingServices;
+import org.jetbrains.kotlin.types.expressions.PreliminaryDeclarationVisitor;
 
 import java.util.*;
 
@@ -74,6 +77,7 @@ public class DescriptorResolver {
     @NotNull private final KotlinBuiltIns builtIns;
     @NotNull private final SupertypeLoopChecker supertypeLoopsResolver;
     @NotNull private final VariableTypeResolver variableTypeResolver;
+    @NotNull private final ExpressionTypingServices expressionTypingServices;
 
     public DescriptorResolver(
             @NotNull AnnotationResolver annotationResolver,
@@ -81,7 +85,8 @@ public class DescriptorResolver {
             @NotNull StorageManager storageManager,
             @NotNull TypeResolver typeResolver,
             @NotNull SupertypeLoopChecker supertypeLoopsResolver,
-            @NotNull VariableTypeResolver variableTypeResolver
+            @NotNull VariableTypeResolver variableTypeResolver,
+            @NotNull ExpressionTypingServices expressionTypingServices
     ) {
         this.annotationResolver = annotationResolver;
         this.builtIns = builtIns;
@@ -89,6 +94,7 @@ public class DescriptorResolver {
         this.typeResolver = typeResolver;
         this.supertypeLoopsResolver = supertypeLoopsResolver;
         this.variableTypeResolver = variableTypeResolver;
+        this.expressionTypingServices = expressionTypingServices;
     }
 
     public List<KotlinType> resolveSupertypes(
@@ -774,7 +780,7 @@ public class DescriptorResolver {
     @Nullable
     /*package*/ static KotlinType transformAnonymousTypeIfNeeded(
             @NotNull DeclarationDescriptorWithVisibility descriptor,
-            @NotNull KtNamedDeclaration declaration,
+            @NotNull KtDeclaration declaration,
             @NotNull KotlinType type,
             @NotNull BindingTrace trace
     ) {
@@ -879,14 +885,14 @@ public class DescriptorResolver {
 
     @NotNull
     private PropertyGetterDescriptorImpl resolvePropertyGetterDescriptor(
-            @NotNull LexicalScope scopeWithTypeParameters,
+            @NotNull final LexicalScope scopeWithTypeParameters,
             @NotNull KtProperty property,
             @NotNull PropertyDescriptor propertyDescriptor,
             @NotNull AnnotationSplitter annotationSplitter,
-            BindingTrace trace
+            final BindingTrace trace
     ) {
-        PropertyGetterDescriptorImpl getterDescriptor;
-        KtPropertyAccessor getter = property.getGetter();
+        final PropertyGetterDescriptorImpl getterDescriptor;
+        final KtPropertyAccessor getter = property.getGetter();
         if (getter != null) {
             Annotations getterAnnotations = new CompositeAnnotations(CollectionsKt.listOf(
                     annotationSplitter.getAnnotationsForTarget(PROPERTY_GETTER),
@@ -897,7 +903,7 @@ public class DescriptorResolver {
             KtTypeReference returnTypeReference = getter.getReturnTypeReference();
             if (returnTypeReference != null) {
                 returnType = typeResolver.resolveType(scopeWithTypeParameters, returnTypeReference, trace, true);
-                if (outType != null && !TypeUtils.equalTypes(returnType, outType)) {
+                if (!TypeUtils.equalTypes(returnType, outType)) {
                     trace.report(WRONG_GETTER_RETURN_TYPE.on(returnTypeReference, propertyDescriptor.getReturnType(), outType));
                 }
             }
@@ -908,6 +914,17 @@ public class DescriptorResolver {
                                                                 getter.hasBody(), false, getter.hasModifier(EXTERNAL_KEYWORD),
                                                                 CallableMemberDescriptor.Kind.DECLARATION, null, KotlinSourceElementKt
                                                                         .toSourceElement(getter));
+            if (returnType.isError() && !getter.hasBlockBody() && getter.hasBody()) {
+                returnType = DeferredType.createRecursionIntolerant(storageManager, trace, new Function0<KotlinType>() {
+                    @Override
+                    public KotlinType invoke() {
+                        PreliminaryDeclarationVisitor.Companion.createForDeclaration(getter, trace);
+                        KotlinType type = expressionTypingServices.getBodyExpressionType(
+                                trace, scopeWithTypeParameters, DataFlowInfoFactory.EMPTY, getter, getterDescriptor);
+                        return transformAnonymousTypeIfNeeded(getterDescriptor, getter, type, trace);
+                    }
+                });
+            }
             getterDescriptor.initialize(returnType);
             trace.record(BindingContext.PROPERTY_ACCESSOR, getter, getterDescriptor);
         }
