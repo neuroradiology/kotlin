@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,10 +23,7 @@ import org.jetbrains.kotlin.diagnostics.DiagnosticSink
 import org.jetbrains.kotlin.diagnostics.Errors
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.TypeConstructor
-import org.jetbrains.kotlin.types.TypeUtils
-import org.jetbrains.kotlin.types.Variance
+import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.typeUtil.boundClosure
 import org.jetbrains.kotlin.types.typeUtil.constituentTypes
 import org.jetbrains.kotlin.utils.DFS
@@ -34,9 +31,9 @@ import org.jetbrains.kotlin.utils.DFS
 object NonExpansiveInheritanceRestrictionChecker {
     @JvmStatic
     fun check(
-            declaration: KtClass,
-            classDescriptor: ClassDescriptor,
-            diagnosticHolder: DiagnosticSink
+        declaration: KtClass,
+        classDescriptor: ClassDescriptor,
+        diagnosticHolder: DiagnosticSink
     ) {
         val typeConstructor = classDescriptor.typeConstructor
         if (typeConstructor.parameters.isEmpty()) return
@@ -106,20 +103,24 @@ object NonExpansiveInheritanceRestrictionChecker {
                         val constituents = constituentTypes(setOf(typeProjection.type))
 
                         for (typeParameter in typeParameters) {
-                            if (typeParameter.defaultType in constituents || TypeUtils.makeNullable(typeParameter.defaultType) in constituents) {
-                                addEdge(typeParameter, constituentTypeConstructor.parameters[i], !TypeUtils.isTypeParameter(typeProjection.type))
+                            if (typeParameter.defaultType in constituents || typeParameter.defaultType.makeNullableAsSpecified(true) in constituents) {
+                                addEdge(
+                                    typeParameter,
+                                    constituentTypeConstructor.parameters[i],
+                                    !TypeUtils.isTypeParameter(typeProjection.type)
+                                )
                             }
                         }
-                    }
-                    else {
+                    } else {
                         // Furthermore, if T appears as a constituent type of an element of the B-closure of the set of lower and
                         // upper bounds of a skolem type variable Q in a skolemization of a projected generic type in ST, add an
                         // expanding edge from T to V, where V is the type parameter corresponding to Q.
                         val originalTypeParameter = constituentTypeConstructor.parameters[i]
                         val bounds = hashSetOf<KotlinType>()
 
-                        val substitutor = constituentType.substitution.buildSubstitutor()
-                        val adaptedUpperBounds = originalTypeParameter.upperBounds.mapNotNull { substitutor.substitute(it, Variance.INVARIANT) }
+                        val substitutor = TypeConstructorSubstitution.create(constituentType).buildSubstitutor()
+                        val adaptedUpperBounds =
+                            originalTypeParameter.upperBounds.mapNotNull { substitutor.substitute(it, Variance.INVARIANT) }
                         bounds.addAll(adaptedUpperBounds)
 
                         if (!typeProjection.isStarProjection) {
@@ -129,7 +130,7 @@ object NonExpansiveInheritanceRestrictionChecker {
                         val boundClosure = boundClosure(bounds)
                         val constituentTypes = constituentTypes(boundClosure)
                         for (typeParameter in typeParameters) {
-                            if (typeParameter.defaultType in constituentTypes || TypeUtils.makeNullable(typeParameter.defaultType) in constituentTypes) {
+                            if (typeParameter.defaultType in constituentTypes || typeParameter.defaultType.makeNullableAsSpecified(true) in constituentTypes) {
                                 addEdge(typeParameter, originalTypeParameter, true)
                             }
                         }
@@ -139,9 +140,9 @@ object NonExpansiveInheritanceRestrictionChecker {
         }
     }
 
-    private data class ExpansiveEdge<T>(val from: T, val to: T)
+    private data class ExpansiveEdge<out T>(val from: T, val to: T)
 
-    private interface  Graph<T> {
+    private interface Graph<T> {
         fun getNeighbors(node: T): Collection<T>
         val expansiveEdges: Set<ExpansiveEdge<T>>
     }

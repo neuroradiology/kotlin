@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 // !DIAGNOSTICS: -UNUSED_PARAMETER -UNUSED_VARIABLE
 
 fun println() {}
@@ -16,8 +17,8 @@ fun testResultOfLambda2() =
 
 fun testResultOfAnonFun1() =
         run(fun () =
-                if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
-                else <!IMPLICIT_CAST_TO_ANY!>println()<!>
+                if (true) <!OI;IMPLICIT_CAST_TO_ANY!>42<!>
+                else <!OI;IMPLICIT_CAST_TO_ANY!>println()<!>
         )
 
 fun testResultOfAnonFun2() =
@@ -27,20 +28,20 @@ fun testResultOfAnonFun2() =
 
 fun testReturnFromAnonFun() =
         run(fun () {
-            return if (true) <!CONSTANT_EXPECTED_TYPE_MISMATCH!>42<!> else println()
+            return <!NI;TYPE_MISMATCH!>if (true) <!OI;CONSTANT_EXPECTED_TYPE_MISMATCH!>42<!> else println()<!>
         })
 
 fun <!IMPLICIT_NOTHING_RETURN_TYPE!>testReturn1<!>() =
         run {
-            return if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
-                   else <!IMPLICIT_CAST_TO_ANY!>println()<!>
+            return <!TYPE_MISMATCH!>if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
+                   else <!IMPLICIT_CAST_TO_ANY!>println()<!><!>
         }
 
 fun <!IMPLICIT_NOTHING_RETURN_TYPE!>testReturn2<!>() =
         run {
-            return if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
+            return <!TYPE_MISMATCH!>if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
                    else if (true) <!IMPLICIT_CAST_TO_ANY!>42<!>
-                   else <!IMPLICIT_CAST_TO_ANY!>println()<!>
+                   else <!IMPLICIT_CAST_TO_ANY!>println()<!><!>
         }
 
 fun testUsage1() =

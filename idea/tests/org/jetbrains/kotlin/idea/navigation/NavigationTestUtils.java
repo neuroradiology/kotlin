@@ -19,7 +19,6 @@ package org.jetbrains.kotlin.idea.navigation;
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
-import com.intellij.codeInsight.navigation.GotoImplementationHandler;
 import com.intellij.codeInsight.navigation.GotoTargetHandler;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
@@ -30,13 +29,16 @@ import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.UsefulTestCase;
+import com.intellij.testFramework.fixtures.CodeInsightTestUtil;
 import com.intellij.util.PathUtil;
 import com.intellij.util.containers.MultiMap;
 import junit.framework.TestCase;
+import kotlin.collections.ArraysKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.asJava.LightClassUtilsKt;
 import org.jetbrains.kotlin.test.InTextDirectivesUtils;
-import org.jetbrains.kotlin.test.ReferenceUtils;
+import org.jetbrains.kotlin.test.util.ReferenceUtils;
 import org.junit.Assert;
 
 import java.util.*;
@@ -46,25 +48,35 @@ public final class NavigationTestUtils {
     }
 
     public static GotoTargetHandler.GotoData invokeGotoImplementations(Editor editor, PsiFile psiFile) {
-        return new GotoImplementationHandler().getSourceAndTargetElements(editor, psiFile);
+        return CodeInsightTestUtil.gotoImplementation(editor, psiFile);
     }
 
     public static void assertGotoDataMatching(Editor editor, GotoTargetHandler.GotoData gotoData) {
+        assertGotoDataMatching(editor, gotoData, false);
+    }
+
+    public static void assertGotoDataMatching(Editor editor, GotoTargetHandler.GotoData gotoData, boolean renderModule) {
         // Get expected references from the tested document
         List<String> expectedReferences = InTextDirectivesUtils.findListWithPrefixes(editor.getDocument().getText(), "// REF:");
         for (int i = 0; i < expectedReferences.size(); i++) {
-            expectedReferences.set(i, PathUtil.toSystemDependentName(expectedReferences.get(i)).replace("//", "/"));
+            String expectedText = expectedReferences.get(i);
+            expectedText = expectedText.replace("\\n", "\n");
+            if (!expectedText.startsWith("<")) {
+                expectedText = PathUtil.toSystemDependentName(expectedText).replace("//", "/");
+            }
+            expectedReferences.set(i, expectedText);
         }
 
         Collections.sort(expectedReferences);
 
         if (gotoData != null) {
+            List<PsiElement> distinctTargets = ArraysKt.distinctBy(gotoData.targets, element -> LightClassUtilsKt.getUnwrapped(element));
             // Transform given reference result to strings
-            List<String> psiElements = Lists.transform(Arrays.asList(gotoData.targets), new Function<PsiElement, String>() {
+            List<String> psiElements = Lists.transform(distinctTargets, new Function<PsiElement, String>() {
                 @Override
                 public String apply(@Nullable PsiElement element) {
                     Assert.assertNotNull(element);
-                    return ReferenceUtils.renderAsGotoImplementation(element);
+                    return ReferenceUtils.renderAsGotoImplementation(element, renderModule);
                 }
             });
 

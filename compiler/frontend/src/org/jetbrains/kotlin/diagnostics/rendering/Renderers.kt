@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,103 +17,150 @@
 package org.jetbrains.kotlin.diagnostics.rendering
 
 import com.google.common.collect.Lists
-import com.google.common.collect.Sets
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.analyzer.ModuleInfo
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.cfg.WhenMissingCase
 import org.jetbrains.kotlin.cfg.hasUnknown
 import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptor
 import org.jetbrains.kotlin.diagnostics.rendering.TabledDescriptorRenderer.newTable
 import org.jetbrains.kotlin.diagnostics.rendering.TabledDescriptorRenderer.newText
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.renderer.DescriptorRenderer
-import org.jetbrains.kotlin.renderer.Renderer
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.MemberComparator
+import org.jetbrains.kotlin.resolve.MultiTargetPlatform
 import org.jetbrains.kotlin.resolve.calls.inference.*
 import org.jetbrains.kotlin.resolve.calls.inference.TypeBounds.Bound
 import org.jetbrains.kotlin.resolve.calls.inference.TypeBounds.BoundKind.LOWER_BOUND
 import org.jetbrains.kotlin.resolve.calls.inference.TypeBounds.BoundKind.UPPER_BOUND
 import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPosition
-import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPositionKind
-import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPositionKind.RECEIVER_POSITION
-import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPositionKind.VALUE_PARAMETER_POSITION
+import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPositionKind.*
+import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.getValidityConstraintForConstituentType
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.TypeIntersector
-import org.jetbrains.kotlin.types.TypeUtils
-import org.jetbrains.kotlin.types.Variance
+import org.jetbrains.kotlin.resolve.getMultiTargetPlatform
+import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.lang.AssertionError
 
 object Renderers {
 
     private val LOG = Logger.getInstance(Renderers::class.java)
 
-    @JvmField val TO_STRING: Renderer<Any> = Renderer {
-        element ->
+    @JvmField
+    val TO_STRING = Renderer<Any> { element ->
         if (element is DeclarationDescriptor) {
-            LOG.warn("Diagnostic renderer TO_STRING was used to render an instance of DeclarationDescriptor.\n"
-                     + "This is usually a bad idea, because descriptors' toString() includes some debug information, "
-                     + "which should not be seen by the user.\nDescriptor: " + element)
+            LOG.warn(
+                "Diagnostic renderer TO_STRING was used to render an instance of DeclarationDescriptor.\n"
+                        + "This is usually a bad idea, because descriptors' toString() includes some debug information, "
+                        + "which should not be seen by the user.\nDescriptor: " + element
+            )
         }
         element.toString()
     }
 
-    @JvmField val STRING: Renderer<String> = Renderer { it }
+    @JvmField
+    val STRING = Renderer<String> { it }
 
-    @JvmField val THROWABLE: Renderer<Throwable> = Renderer {
+    @JvmField
+    val THROWABLE = Renderer<Throwable> {
         val writer = StringWriter()
         it.printStackTrace(PrintWriter(writer))
         StringUtil.first(writer.toString(), 2048, true)
     }
 
-    @JvmField val NAME: Renderer<Named> = Renderer { it.name.asString() }
+    @JvmField
+    val NAME = Renderer<Named> { it.name.asString() }
 
-    @JvmField val DECLARATION_NAME_WITH_KIND: Renderer<DeclarationDescriptor> = Renderer {
-        val declarationKindWithSpace = when (it) {
-            is PackageFragmentDescriptor -> "package "
-            is ClassDescriptor -> "${it.renderKind()} "
-            is ConstructorDescriptor -> "constructor "
-            is PropertyGetterDescriptor -> "property getter "
-            is PropertySetterDescriptor -> "property setter "
-            is FunctionDescriptor -> "function "
+    @JvmField
+    val PLATFORM = Renderer<ModuleDescriptor> {
+        val platform = it.getMultiTargetPlatform()
+        " ${it.getCapability(ModuleInfo.Capability)?.displayedName ?: ""}" + when (platform) {
+            MultiTargetPlatform.Common -> ""
+            is MultiTargetPlatform.Specific -> " for " + platform.platform
+            null -> ""
+        }
+    }
+
+    @JvmField
+    val VISIBILITY = Renderer<Visibility> {
+        if (it == Visibilities.INVISIBLE_FAKE)
+            "invisible (private in a supertype)"
+        else it.displayName
+    }
+
+    @JvmField
+    val DECLARATION_NAME_WITH_KIND = Renderer<DeclarationDescriptor> {
+        val name = it.name.asString()
+        when (it) {
+            is PackageFragmentDescriptor -> "package '$name'"
+            is ClassDescriptor -> "${it.renderKind()} '$name'"
+            is TypeAliasDescriptor -> "typealias '$name'"
+            is TypeAliasConstructorDescriptor -> "constructor of '${it.typeAliasDescriptor.name.asString()}'"
+            is ConstructorDescriptor -> "constructor of '${it.constructedClass.name.asString()}'"
+            is PropertyGetterDescriptor -> "getter of property '${it.correspondingProperty.name.asString()}'"
+            is PropertySetterDescriptor -> "setter of property '${it.correspondingProperty.name.asString()}'"
+            is FunctionDescriptor -> "function '$name'"
+            is PropertyDescriptor -> "property '$name'"
             else -> throw AssertionError("Unexpected declaration kind: $it")
         }
-        "$declarationKindWithSpace'${it.name.asString()}'"
     }
 
-    @JvmField val NAME_OF_PARENT_OR_FILE: Renderer<DeclarationDescriptor> = Renderer {
+    @JvmField
+    val CAPITALIZED_DECLARATION_NAME_WITH_KIND_AND_PLATFORM = ContextDependentRenderer<DeclarationDescriptor> { descriptor, context ->
+        val declarationWithNameAndKind = DECLARATION_NAME_WITH_KIND.render(descriptor, context)
+        val withPlatform = if (descriptor is MemberDescriptor && descriptor.isActual)
+            "actual $declarationWithNameAndKind"
+        else
+            declarationWithNameAndKind
+
+        withPlatform.capitalize()
+    }
+
+
+    @JvmField
+    val NAME_OF_CONTAINING_DECLARATION_OR_FILE = Renderer<DeclarationDescriptor> {
         if (DescriptorUtils.isTopLevelDeclaration(it) && it is DeclarationDescriptorWithVisibility && it.visibility == Visibilities.PRIVATE) {
             "file"
-        }
-        else {
-            "'" + it.containingDeclaration!!.name + "'"
+        } else {
+            val containingDeclaration = it.containingDeclaration
+            if (containingDeclaration is PackageFragmentDescriptor) {
+                containingDeclaration.fqName.asString().wrapIntoQuotes()
+            } else {
+                containingDeclaration!!.name.asString().wrapIntoQuotes()
+            }
         }
     }
 
-    @JvmField val ELEMENT_TEXT: Renderer<PsiElement> = Renderer { it.text }
+    @JvmField
+    val ELEMENT_TEXT = Renderer<PsiElement> { it.text }
 
-    @JvmField val DECLARATION_NAME: Renderer<KtNamedDeclaration> = Renderer { it.nameAsSafeName.asString() }
+    @JvmField
+    val DECLARATION_NAME = Renderer<KtNamedDeclaration> { it.nameAsSafeName.asString() }
 
-    @JvmField val RENDER_CLASS_OR_OBJECT: Renderer<KtClassOrObject> = Renderer {
-        classOrObject: KtClassOrObject ->
-        val name = if (classOrObject.getName() != null) " '" + classOrObject.getName() + "'" else ""
+    @JvmField
+    val RENDER_CLASS_OR_OBJECT = Renderer { classOrObject: KtClassOrObject ->
+        val name = classOrObject.name?.let { " ${it.wrapIntoQuotes()}" } ?: ""
         if (classOrObject is KtClass) "Class" + name else "Object" + name
     }
 
-    @JvmField val RENDER_CLASS_OR_OBJECT_NAME: Renderer<ClassDescriptor> = Renderer { it.renderKindWithName() }
+    @JvmField
+    val RENDER_CLASS_OR_OBJECT_NAME = Renderer<ClassifierDescriptorWithTypeParameters> { it.renderKindWithName() }
 
-    @JvmField val RENDER_TYPE: Renderer<KotlinType> = Renderer { DescriptorRenderer.FQ_NAMES_IN_TYPES.renderType(it) }
+    @JvmField
+    val RENDER_TYPE = SmartTypeRenderer(DescriptorRenderer.FQ_NAMES_IN_TYPES.withOptions { parameterNamesInFunctionalTypes = false })
 
-    @JvmField val RENDER_POSITION_VARIANCE: Renderer<Variance> = Renderer {
-        variance: Variance ->
+    @JvmField
+    val RENDER_POSITION_VARIANCE = Renderer { variance: Variance ->
         when (variance) {
             Variance.INVARIANT -> "invariant"
             Variance.IN_VARIANCE -> "in"
@@ -121,21 +168,22 @@ object Renderers {
         }
     }
 
-    @JvmField val AMBIGUOUS_CALLS: Renderer<Collection<ResolvedCall<*>>> = Renderer {
-        calls: Collection<ResolvedCall<*>> ->
-        calls
-                .map { it.resultingDescriptor }
-                .sortedWith(MemberComparator.INSTANCE)
-                .joinToString(separator = "\n", prefix = "\n") { DescriptorRenderer.FQ_NAMES_IN_TYPES.render(it) }
+    @JvmField
+    val AMBIGUOUS_CALLS = Renderer { calls: Collection<ResolvedCall<*>> ->
+        val descriptors = calls.map { it.resultingDescriptor }
+        val context = RenderingContext.Impl(descriptors)
+        descriptors
+            .sortedWith(MemberComparator.INSTANCE)
+            .joinToString(separator = "\n", prefix = "\n") { FQ_NAMES_IN_TYPES.render(it, context) }
     }
 
-    @JvmStatic fun <T> commaSeparated(itemRenderer: Renderer<T>): Renderer<Collection<T>> = Renderer {
-        collection ->
+    @JvmStatic
+    fun <T> commaSeparated(itemRenderer: DiagnosticParameterRenderer<T>) = ContextDependentRenderer<Collection<T>> { collection, context ->
         buildString {
             val iterator = collection.iterator()
             while (iterator.hasNext()) {
                 val next = iterator.next()
-                append(itemRenderer.render(next))
+                append(itemRenderer.render(next, context))
                 if (iterator.hasNext()) {
                     append(", ")
                 }
@@ -143,31 +191,39 @@ object Renderers {
         }
     }
 
-    @JvmField val TYPE_INFERENCE_CONFLICTING_SUBSTITUTIONS_RENDERER: Renderer<InferenceErrorData> = Renderer {
+    @JvmField
+    val TYPE_INFERENCE_CONFLICTING_SUBSTITUTIONS_RENDERER = Renderer<InferenceErrorData> {
         renderConflictingSubstitutionsInferenceError(it, TabledDescriptorRenderer.create()).toString()
     }
 
-    @JvmField val TYPE_INFERENCE_PARAMETER_CONSTRAINT_ERROR_RENDERER: Renderer<InferenceErrorData> = Renderer {
+    @JvmField
+    val TYPE_INFERENCE_PARAMETER_CONSTRAINT_ERROR_RENDERER = Renderer<InferenceErrorData> {
         renderParameterConstraintError(it, TabledDescriptorRenderer.create()).toString()
     }
 
-    @JvmField val TYPE_INFERENCE_NO_INFORMATION_FOR_PARAMETER_RENDERER: Renderer<InferenceErrorData> = Renderer {
+    @JvmField
+    val TYPE_INFERENCE_NO_INFORMATION_FOR_PARAMETER_RENDERER = Renderer<InferenceErrorData> {
         renderNoInformationForParameterError(it, TabledDescriptorRenderer.create()).toString()
     }
 
-    @JvmField val TYPE_INFERENCE_UPPER_BOUND_VIOLATED_RENDERER: Renderer<InferenceErrorData> = Renderer {
+    @JvmField
+    val TYPE_INFERENCE_UPPER_BOUND_VIOLATED_RENDERER = Renderer<InferenceErrorData> {
         renderUpperBoundViolatedInferenceError(it, TabledDescriptorRenderer.create()).toString()
     }
 
-    @JvmField val TYPE_INFERENCE_CANNOT_CAPTURE_TYPES_RENDERER: Renderer<InferenceErrorData> = Renderer {
+    @JvmField
+    val TYPE_INFERENCE_CANNOT_CAPTURE_TYPES_RENDERER = Renderer<InferenceErrorData> {
         renderCannotCaptureTypeParameterError(it, TabledDescriptorRenderer.create()).toString()
     }
 
-    @JvmStatic fun renderConflictingSubstitutionsInferenceError(
-            inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
+    @JvmStatic
+    fun renderConflictingSubstitutionsInferenceError(
+        inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
     ): TabledDescriptorRenderer {
-        LOG.assertTrue(inferenceErrorData.constraintSystem.status.hasConflictingConstraints(),
-                       renderDebugMessage("Conflicting substitutions inference error renderer is applied for incorrect status", inferenceErrorData))
+        LOG.assertTrue(
+            inferenceErrorData.constraintSystem.status.hasConflictingConstraints(),
+            debugMessage("Conflicting substitutions inference error renderer is applied for incorrect status", inferenceErrorData)
+        )
 
         val substitutedDescriptors = Lists.newArrayList<CallableDescriptor>()
         val substitutors = ConstraintsUtil.getSubstitutorsForConflictingParameters(inferenceErrorData.constraintSystem)
@@ -178,14 +234,16 @@ object Renderers {
 
         val firstConflictingVariable = ConstraintsUtil.getFirstConflictingVariable(inferenceErrorData.constraintSystem)
         if (firstConflictingVariable == null) {
-            LOG.error(renderDebugMessage("There is no conflicting parameter for 'conflicting constraints' error.", inferenceErrorData))
+            LOG.error(debugMessage("There is no conflicting parameter for 'conflicting constraints' error.", inferenceErrorData))
             return result
         }
 
-        result.text(newText()
-                            .normal("Cannot infer type parameter ")
-                            .strong(firstConflictingVariable.name)
-                            .normal(" in "))
+        result.text(
+            newText()
+                .normal("Cannot infer type parameter ")
+                .strong(firstConflictingVariable.name)
+                .normal(" in ")
+        )
         val table = newTable()
         result.table(table)
         table.descriptor(inferenceErrorData.descriptor).text("None of the following substitutions")
@@ -193,7 +251,7 @@ object Renderers {
         for (substitutedDescriptor in substitutedDescriptors) {
             val receiverType = DescriptorUtils.getReceiverParameterType(substitutedDescriptor.extensionReceiverParameter)
 
-            val errorPositions = Sets.newHashSet<ConstraintPosition>()
+            val errorPositions = hashSetOf<ConstraintPosition>()
             val parameterTypes = Lists.newArrayList<KotlinType>()
             for (valueParameterDescriptor in substitutedDescriptor.valueParameters) {
                 parameterTypes.add(valueParameterDescriptor.type)
@@ -212,83 +270,119 @@ object Renderers {
             table.functionArgumentTypeList(receiverType, parameterTypes, { errorPositions.contains(it) })
         }
 
-        table.text("can be applied to").functionArgumentTypeList(inferenceErrorData.receiverArgumentType, inferenceErrorData.valueArgumentsTypes)
+        table.text("can be applied to")
+            .functionArgumentTypeList(inferenceErrorData.receiverArgumentType, inferenceErrorData.valueArgumentsTypes)
 
         return result
     }
 
-    @JvmStatic fun renderParameterConstraintError(
-            inferenceErrorData: InferenceErrorData, renderer: TabledDescriptorRenderer
+    @JvmStatic
+    fun renderParameterConstraintError(
+        inferenceErrorData: InferenceErrorData, renderer: TabledDescriptorRenderer
     ): TabledDescriptorRenderer {
         val constraintErrors = inferenceErrorData.constraintSystem.status.constraintErrors
         val errorPositions = constraintErrors.filter { it is ParameterConstraintError }.map { it.constraintPosition }
         return renderer.table(
-                TabledDescriptorRenderer
-                        .newTable()
-                        .descriptor(inferenceErrorData.descriptor)
-                        .text("cannot be applied to")
-                        .functionArgumentTypeList(inferenceErrorData.receiverArgumentType,
-                                                  inferenceErrorData.valueArgumentsTypes,
-                                                  { errorPositions.contains(it) }))
+            TabledDescriptorRenderer
+                .newTable()
+                .descriptor(inferenceErrorData.descriptor)
+                .text("cannot be applied to")
+                .functionArgumentTypeList(inferenceErrorData.receiverArgumentType,
+                                          inferenceErrorData.valueArgumentsTypes,
+                                          { errorPositions.contains(it) })
+        )
     }
 
 
-    @JvmStatic fun renderNoInformationForParameterError(
-            inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
+    @JvmStatic
+    fun renderNoInformationForParameterError(
+        inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
     ): TabledDescriptorRenderer {
         val firstUnknownVariable = inferenceErrorData.constraintSystem.typeVariables.firstOrNull { variable ->
             inferenceErrorData.constraintSystem.getTypeBounds(variable).values.isEmpty()
         } ?: return result.apply {
-            LOG.error(renderDebugMessage("There is no unknown parameter for 'no information for parameter error'.", inferenceErrorData))
+            LOG.error(debugMessage("There is no unknown parameter for 'no information for parameter error'.", inferenceErrorData))
         }
 
         return result
-                .text(newText().normal("Not enough information to infer parameter ")
-                              .strong(firstUnknownVariable.name)
-                              .normal(" in "))
-                .table(newTable()
-                               .descriptor(inferenceErrorData.descriptor)
-                               .text("Please specify it explicitly."))
+            .text(
+                newText().normal("Not enough information to infer parameter ")
+                    .strong(firstUnknownVariable.name)
+                    .normal(" in ")
+            )
+            .table(
+                newTable()
+                    .descriptor(inferenceErrorData.descriptor)
+                    .text("Please specify it explicitly.")
+            )
     }
 
-    @JvmStatic fun renderUpperBoundViolatedInferenceError(
-            inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
+    @JvmStatic
+    fun renderUpperBoundViolatedInferenceError(
+        inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
     ): TabledDescriptorRenderer {
         val constraintSystem = inferenceErrorData.constraintSystem
         val status = constraintSystem.status
-        LOG.assertTrue(status.hasViolatedUpperBound(),
-                       renderDebugMessage("Upper bound violated renderer is applied for incorrect status", inferenceErrorData))
+        LOG.assertTrue(
+            status.hasViolatedUpperBound(),
+            debugMessage("Upper bound violated renderer is applied for incorrect status", inferenceErrorData)
+        )
 
-        val systemWithoutWeakConstraints = constraintSystem.filterConstraintsOut(ConstraintPositionKind.TYPE_BOUND_POSITION)
+        val systemWithoutWeakConstraints = constraintSystem.filterConstraintsOut(TYPE_BOUND_POSITION)
         val typeParameterDescriptor = inferenceErrorData.descriptor.typeParameters.firstOrNull {
             !ConstraintsUtil.checkUpperBoundIsSatisfied(systemWithoutWeakConstraints, it, inferenceErrorData.call, true)
         }
-        if (typeParameterDescriptor == null && status.hasConflictingConstraints()) {
-            return renderConflictingSubstitutionsInferenceError(inferenceErrorData, result)
-        }
+
         if (typeParameterDescriptor == null) {
-            LOG.error(renderDebugMessage("There is no type parameter with violated upper bound for 'upper bound violated' error", inferenceErrorData))
-            return result
+            if (inferenceErrorData.descriptor is TypeAliasConstructorDescriptor) {
+                renderUpperBoundViolatedInferenceErrorForTypeAliasConstructor(
+                    inferenceErrorData, result, systemWithoutWeakConstraints
+                )?.let {
+                    return it
+                }
+            }
+
+            return if (status.hasConflictingConstraints())
+                renderConflictingSubstitutionsInferenceError(inferenceErrorData, result)
+            else {
+                LOG.error(
+                    debugMessage(
+                        "There is no type parameter with violated upper bound for 'upper bound violated' error",
+                        inferenceErrorData,
+                        verbosity = ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE
+                    )
+                )
+                result
+            }
         }
 
         val typeVariable = systemWithoutWeakConstraints.descriptorToVariable(inferenceErrorData.call.toHandle(), typeParameterDescriptor)
         val inferredValueForTypeParameter = systemWithoutWeakConstraints.getTypeBounds(typeVariable).value
         if (inferredValueForTypeParameter == null) {
-            LOG.error(renderDebugMessage("System without weak constraints is not successful, there is no value for type parameter " +
-                                         typeParameterDescriptor.name + "\n: " + systemWithoutWeakConstraints, inferenceErrorData))
+            LOG.error(
+                debugMessage(
+                    "System without weak constraints is not successful, there is no value for type parameter " +
+                            typeParameterDescriptor.name + "\n: " + systemWithoutWeakConstraints, inferenceErrorData
+                )
+            )
             return result
         }
 
-        result.text(newText()
-                            .normal("Type parameter bound for ")
-                            .strong(typeParameterDescriptor.name)
-                            .normal(" in "))
-                .table(newTable()
-                               .descriptor(inferenceErrorData.descriptor))
+        result.text(
+            newText()
+                .normal("Type parameter bound for ")
+                .strong(typeParameterDescriptor.name)
+                .normal(" in ")
+        )
+            .table(
+                newTable()
+                    .descriptor(inferenceErrorData.descriptor)
+            )
 
         var violatedUpperBound: KotlinType? = null
         for (upperBound in typeParameterDescriptor.upperBounds) {
-            val upperBoundWithSubstitutedInferredTypes = systemWithoutWeakConstraints.resultingSubstitutor.substitute(upperBound, Variance.INVARIANT)
+            val upperBoundWithSubstitutedInferredTypes =
+                systemWithoutWeakConstraints.resultingSubstitutor.substitute(upperBound, Variance.INVARIANT)
             if (upperBoundWithSubstitutedInferredTypes != null
                 && !KotlinTypeChecker.DEFAULT.isSubtypeOf(inferredValueForTypeParameter, upperBoundWithSubstitutedInferredTypes)) {
                 violatedUpperBound = upperBoundWithSubstitutedInferredTypes
@@ -296,28 +390,86 @@ object Renderers {
             }
         }
         if (violatedUpperBound == null) {
-            LOG.error(renderDebugMessage("Type parameter (chosen as violating its upper bound)" +
-                                         typeParameterDescriptor.name + " violates no bounds after substitution", inferenceErrorData))
+            LOG.error(
+                debugMessage(
+                    "Type parameter (chosen as violating its upper bound)" +
+                            typeParameterDescriptor.name + " violates no bounds after substitution", inferenceErrorData
+                )
+            )
             return result
         }
 
+        // TODO: context should be in fact shared for the table and these two types
+        val context = RenderingContext.of(inferredValueForTypeParameter, violatedUpperBound)
         val typeRenderer = result.typeRenderer
-        result.text(newText()
-                            .normal(" is not satisfied: inferred type ")
-                            .error(typeRenderer.render(inferredValueForTypeParameter))
-                            .normal(" is not a subtype of ")
-                            .strong(typeRenderer.render(violatedUpperBound)))
+        result.text(
+            newText()
+                .normal(" is not satisfied: inferred type ")
+                .error(typeRenderer.render(inferredValueForTypeParameter, context))
+                .normal(" is not a subtype of ")
+                .strong(typeRenderer.render(violatedUpperBound, context))
+        )
         return result
     }
 
-    @JvmStatic fun renderCannotCaptureTypeParameterError(
-            inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
+    private fun renderUpperBoundViolatedInferenceErrorForTypeAliasConstructor(
+        inferenceErrorData: InferenceErrorData,
+        result: TabledDescriptorRenderer,
+        systemWithoutWeakConstraints: ConstraintSystem
+    ): TabledDescriptorRenderer? {
+        val descriptor = inferenceErrorData.descriptor
+        if (descriptor !is TypeAliasConstructorDescriptor) {
+            LOG.error("Type alias constructor descriptor expected: $descriptor")
+            return result
+        }
+
+        val inferredTypesForTypeParameters = descriptor.typeParameters.map {
+            val typeVariable = systemWithoutWeakConstraints.descriptorToVariable(inferenceErrorData.call.toHandle(), it)
+            systemWithoutWeakConstraints.getTypeBounds(typeVariable).value
+        }
+        val inferredTypeSubstitutor = TypeSubstitutor.create(object : TypeConstructorSubstitution() {
+            override fun get(key: TypeConstructor): TypeProjection? {
+                val typeDescriptor = key.declarationDescriptor as? TypeParameterDescriptor ?: return null
+                if (typeDescriptor.containingDeclaration != descriptor.typeAliasDescriptor) return null
+                return inferredTypesForTypeParameters[typeDescriptor.index]?.let(::TypeProjectionImpl)
+            }
+        })
+
+        for (constraintError in inferenceErrorData.constraintSystem.status.constraintErrors) {
+            val constraintInfo = constraintError.constraintPosition.getValidityConstraintForConstituentType() ?: continue
+
+            val violatedUpperBound = inferredTypeSubstitutor.safeSubstitute(constraintInfo.bound, Variance.INVARIANT)
+            val violatingInferredType = inferredTypeSubstitutor.safeSubstitute(constraintInfo.typeArgument, Variance.INVARIANT)
+
+            val context = RenderingContext.of(violatingInferredType, violatedUpperBound)
+            val typeRenderer = result.typeRenderer
+
+            result.text(
+                newText().normal("Type parameter bound for ").strong(constraintInfo.typeParameter.name)
+                    .normal(" in type inferred from type alias expansion for ")
+            )
+                .table(newTable().descriptor(inferenceErrorData.descriptor))
+
+            result.text(
+                newText().normal(" is not satisfied: inferred type ").error(typeRenderer.render(violatingInferredType, context))
+                    .normal(" is not a subtype of ").strong(typeRenderer.render(violatedUpperBound, context))
+            )
+
+            return result
+        }
+
+        return null
+    }
+
+    @JvmStatic
+    fun renderCannotCaptureTypeParameterError(
+        inferenceErrorData: InferenceErrorData, result: TabledDescriptorRenderer
     ): TabledDescriptorRenderer {
         val system = inferenceErrorData.constraintSystem
         val errors = system.status.constraintErrors
         val typeVariableWithCapturedConstraint = errors.firstIsInstanceOrNull<CannotCapture>()?.typeVariable
         if (typeVariableWithCapturedConstraint == null) {
-            LOG.error(renderDebugMessage("An error 'cannot capture type parameter' is not found in errors", inferenceErrorData))
+            LOG.error(debugMessage("An error 'cannot capture type parameter' is not found in errors", inferenceErrorData))
             return result
         }
 
@@ -325,32 +477,42 @@ object Renderers {
         val boundWithCapturedType = typeBounds.bounds.firstOrNull { it.constrainingType.isCaptured() }
         val capturedTypeConstructor = boundWithCapturedType?.constrainingType?.constructor as? CapturedTypeConstructor
         if (capturedTypeConstructor == null) {
-            LOG.error(renderDebugMessage("There is no captured type in bounds, but there is an error 'cannot capture type parameter'", inferenceErrorData))
+            LOG.error(
+                debugMessage(
+                    "There is no captured type in bounds, but there is an error 'cannot capture type parameter'",
+                    inferenceErrorData
+                )
+            )
             return result
         }
 
         val typeParameter = typeVariableWithCapturedConstraint.originalTypeParameter
-
-        val explanation: String
         val upperBound = TypeIntersector.getUpperBoundsAsType(typeParameter)
-        if (!KotlinBuiltIns.isNullableAny(upperBound) && capturedTypeConstructor.typeProjection.projectionKind == Variance.IN_VARIANCE) {
-            explanation = "Type parameter has an upper bound '" + result.typeRenderer.render(upperBound) + "'" +
-                          " that cannot be satisfied capturing 'in' projection"
+
+        assert(!KotlinBuiltIns.isNullableAny(upperBound) && capturedTypeConstructor.typeProjection.projectionKind == Variance.IN_VARIANCE) {
+            "There is the only reason to report TYPE_INFERENCE_CANNOT_CAPTURE_TYPES"
         }
-        else {
-            explanation = "Only top-level type projections can be captured"
-        }
-        result.text(newText().normal(
-                "'" + typeParameter.name + "'" +
-                " cannot capture " +
-                "'" + capturedTypeConstructor.typeProjection + "'. " +
-                explanation
-        ))
+
+        val explanation =
+            "Type parameter has an upper bound ${result.typeRenderer.render(
+                upperBound,
+                RenderingContext.of(upperBound)
+            ).wrapIntoQuotes()}" +
+                    " that cannot be satisfied capturing 'in' projection"
+
+        result.text(
+            newText().normal(
+                typeParameter.name.wrapIntoQuotes() +
+                        " cannot capture " +
+                        "${capturedTypeConstructor.typeProjection.toString().wrapIntoQuotes()}. " +
+                        explanation
+            )
+        )
         return result
     }
 
-    @JvmField val CLASSES_OR_SEPARATED: Renderer<Collection<ClassDescriptor>> = Renderer {
-        descriptors ->
+    @JvmField
+    val CLASSES_OR_SEPARATED = Renderer<Collection<ClassDescriptor>> { descriptors ->
         buildString {
             var index = 0
             for (descriptor in descriptors) {
@@ -358,81 +520,165 @@ object Renderers {
                 index++
                 if (index <= descriptors.size - 2) {
                     append(", ")
-                }
-                else if (index == descriptors.size - 1) {
+                } else if (index == descriptors.size - 1) {
                     append(" or ")
                 }
             }
         }
     }
 
-    private fun renderTypes(types: Collection<KotlinType>) = StringUtil.join(types, { RENDER_TYPE.render(it) }, ", ")
+    private fun renderTypes(types: Collection<KotlinType>, context: RenderingContext) =
+        StringUtil.join(types, { RENDER_TYPE.render(it, context) }, ", ")
 
-    @JvmField val RENDER_COLLECTION_OF_TYPES: Renderer<Collection<KotlinType>> = Renderer { renderTypes(it) }
+    @JvmField
+    val RENDER_COLLECTION_OF_TYPES = ContextDependentRenderer<Collection<KotlinType>> { types, context -> renderTypes(types, context) }
 
-    private fun renderConstraintSystem(constraintSystem: ConstraintSystem, renderTypeBounds: Renderer<TypeBounds>): String {
+    enum class ConstraintSystemRenderingVerbosity {
+        COMPACT,
+        DEBUG, // Includes type bounds positions, types are rendered with FQNs instead of short names
+        EXTRA_VERBOSE // Additionally includes all supertypes of each bounds and type constructors of types
+    }
+
+    fun renderConstraintSystem(constraintSystem: ConstraintSystem, verbosity: ConstraintSystemRenderingVerbosity): String {
         val typeBounds = linkedSetOf<TypeBounds>()
         for (variable in constraintSystem.typeVariables) {
             typeBounds.add(constraintSystem.getTypeBounds(variable))
         }
+
+        val separator = if (verbosity == ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE) "\n\n" else "\n"
         return "type parameter bounds:\n" +
-               StringUtil.join(typeBounds, { renderTypeBounds.render(it) }, "\n") + "\n\n" + "status:\n" +
-               ConstraintsUtil.getDebugMessageForStatus(constraintSystem.status)
+                typeBounds.joinToString(separator = separator) { renderTypeBounds(it, verbosity) } +
+                "\n\n" +
+                "status:\n" +
+                ConstraintsUtil.getDebugMessageForStatus(constraintSystem.status)
     }
 
-    @JvmField val RENDER_CONSTRAINT_SYSTEM: Renderer<ConstraintSystem> = Renderer { renderConstraintSystem(it, RENDER_TYPE_BOUNDS) }
+    private fun renderTypeBounds(typeBounds: TypeBounds, verbosity: ConstraintSystemRenderingVerbosity): String {
+        val renderedTypeVariable = renderTypeVariable(
+            typeBounds.typeVariable,
+            includeTypeConstructor = verbosity == ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE
+        )
 
-    @JvmField val RENDER_CONSTRAINT_SYSTEM_SHORT: Renderer<ConstraintSystem> = Renderer { renderConstraintSystem(it, RENDER_TYPE_BOUNDS_SHORT) }
-
-    private fun renderTypeBounds(typeBounds: TypeBounds, short: Boolean): String {
-        val renderBound = { bound: Bound ->
-            val arrow = if (bound.kind == LOWER_BOUND) ">: " else if (bound.kind == UPPER_BOUND) "<: " else ":= "
-            val renderer = if (short) DescriptorRenderer.SHORT_NAMES_IN_TYPES else DescriptorRenderer.FQ_NAMES_IN_TYPES
-            val renderedBound = arrow + renderer.renderType(bound.constrainingType) +  if (!bound.isProper) "*" else ""
-            if (short) renderedBound else renderedBound + '(' + bound.position + ')'
-        }
-        val typeVariableName = typeBounds.typeVariable.name
         return if (typeBounds.bounds.isEmpty()) {
-            typeVariableName.asString()
+            renderedTypeVariable
+        } else {
+            // In 'EXTRA_VERBOSE' bounds take a lot of lines and are rendered as a separate block of text
+            // In other modes they are rendered as a single line
+            val boundsPrefix = if (verbosity == ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE) "\n" else " "
+            val boundsSeparator = if (verbosity == ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE) "\n" else ", "
+
+            val renderedBounds = typeBounds.bounds.joinToString(separator = boundsSeparator) { renderTypeBound(it, verbosity) }
+
+            renderedTypeVariable + boundsPrefix + renderedBounds
         }
-        else
-            "$typeVariableName ${StringUtil.join(typeBounds.bounds, renderBound, ", ")}"
     }
 
-    @JvmField val RENDER_TYPE_BOUNDS: Renderer<TypeBounds> = Renderer { renderTypeBounds(it, short = false) }
+    private fun renderTypeVariable(typeVariable: TypeVariable, includeTypeConstructor: Boolean): String {
+        val typeVariableName = typeVariable.name.asString()
+        if (!includeTypeConstructor) return typeVariableName
 
-    @JvmField val RENDER_TYPE_BOUNDS_SHORT: Renderer<TypeBounds> = Renderer { renderTypeBounds(it, short = true) }
+        return "TypeVariable $typeVariableName, " +
+                "descriptor = ${typeVariable.freshTypeParameter}, " +
+                "typeConstructor = ${renderTypeConstructor(typeVariable.freshTypeParameter.typeConstructor)}"
+    }
 
-    private fun renderDebugMessage(message: String, inferenceErrorData: InferenceErrorData) = buildString {
+    private fun renderTypeBound(bound: Bound, verbosity: ConstraintSystemRenderingVerbosity): String {
+        val typeRendered = if (verbosity == ConstraintSystemRenderingVerbosity.COMPACT)
+            DescriptorRenderer.SHORT_NAMES_IN_TYPES
+        else
+            DescriptorRenderer.FQ_NAMES_IN_TYPES
+
+        val arrow = when (bound.kind) {
+            LOWER_BOUND -> ">: "
+            UPPER_BOUND -> "<: "
+            else -> ":= "
+        }
+
+        val initialBoundRender = arrow + typeRendered.renderType(bound.constrainingType) + if (!bound.isProper) "*" else ""
+
+        return when (verbosity) {
+            ConstraintSystemRenderingVerbosity.COMPACT -> initialBoundRender
+
+            ConstraintSystemRenderingVerbosity.DEBUG -> "$initialBoundRender (${bound.position}) "
+
+            ConstraintSystemRenderingVerbosity.EXTRA_VERBOSE -> {
+                "$initialBoundRender (${bound.position})\n" +
+                        "Constraining type additional info: ${renderTypeConstructor(bound.constrainingType.constructor)}\n" +
+                        "Supertypes of constraining type:\n" +
+                        TypeUtils.getAllSupertypes(bound.constrainingType).joinToString("\n") {
+                            "- " + typeRendered.renderType(it) + ", TypeConstructor info: ${renderTypeConstructor(it.constructor)}"
+                        } +
+                        "\n"
+            }
+        }
+    }
+
+    @Suppress("deprecation")
+    private fun renderTypeConstructor(typeConstructor: TypeConstructor): String {
+        return "$typeConstructor[${typeConstructor.javaClass.name}], " +
+                "${(typeConstructor as? AbstractTypeConstructor)?.renderAdditionalDebugInformation()}"
+    }
+
+    private fun debugMessage(
+        message: String,
+        inferenceErrorData: InferenceErrorData,
+        verbosity: ConstraintSystemRenderingVerbosity = ConstraintSystemRenderingVerbosity.DEBUG
+    ) = buildString {
         append(message)
         append("\nConstraint system: \n")
-        append(RENDER_CONSTRAINT_SYSTEM.render(inferenceErrorData.constraintSystem))
+        append(renderConstraintSystem(inferenceErrorData.constraintSystem, verbosity))
         append("\nDescriptor:\n")
         append(inferenceErrorData.descriptor)
         append("\nExpected type:\n")
+        val context = RenderingContext.Empty
         if (TypeUtils.noExpectedType(inferenceErrorData.expectedType)) {
             append(inferenceErrorData.expectedType)
-        }
-        else {
-            append(RENDER_TYPE.render(inferenceErrorData.expectedType))
+        } else {
+            append(RENDER_TYPE.render(inferenceErrorData.expectedType, context))
         }
         append("\nArgument types:\n")
         if (inferenceErrorData.receiverArgumentType != null) {
-            append(RENDER_TYPE.render(inferenceErrorData.receiverArgumentType)).append(".")
+            append(RENDER_TYPE.render(inferenceErrorData.receiverArgumentType, context)).append(".")
         }
-        append("(").append(renderTypes(inferenceErrorData.valueArgumentsTypes)).append(")")
+        append("(").append(renderTypes(inferenceErrorData.valueArgumentsTypes, context)).append(")")
     }
+
+    private fun String.wrapIntoQuotes(): String = "'$this'"
+    private fun Name.wrapIntoQuotes(): String = "'${this.asString()}'"
 
     private val WHEN_MISSING_LIMIT = 7
 
-    @JvmField val RENDER_WHEN_MISSING_CASES: Renderer<List<WhenMissingCase>> = Renderer {
+    @JvmField
+    val RENDER_WHEN_MISSING_CASES = Renderer<List<WhenMissingCase>> {
         if (!it.hasUnknown) {
             val list = it.joinToString(", ", limit = WHEN_MISSING_LIMIT) { "'$it'" }
             val branches = if (it.size > 1) "branches" else "branch"
             "$list $branches or 'else' branch instead"
-        }
-        else {
+        } else {
             "'else' branch"
         }
     }
+
+    @JvmField
+    val FQ_NAMES_IN_TYPES = DescriptorRenderer.FQ_NAMES_IN_TYPES.asRenderer()
+    @JvmField
+    val COMPACT = DescriptorRenderer.COMPACT.asRenderer()
+    @JvmField
+    val COMPACT_WITHOUT_SUPERTYPES = DescriptorRenderer.COMPACT_WITHOUT_SUPERTYPES.asRenderer()
+    @JvmField
+    val WITHOUT_MODIFIERS = DescriptorRenderer.withOptions {
+        modifiers = emptySet()
+    }.asRenderer()
+    @JvmField
+    val SHORT_NAMES_IN_TYPES = DescriptorRenderer.SHORT_NAMES_IN_TYPES.asRenderer()
+    @JvmField
+    val COMPACT_WITH_MODIFIERS = DescriptorRenderer.COMPACT_WITH_MODIFIERS.asRenderer()
+    @JvmField
+    val DEPRECATION_RENDERER = DescriptorRenderer.ONLY_NAMES_WITH_SHORT_TYPES.withOptions {
+        withoutTypeParameters = false
+        receiverAfterName = false
+        renderAccessors = true
+    }.asRenderer()
 }
+
+fun DescriptorRenderer.asRenderer() = SmartDescriptorRenderer(this)

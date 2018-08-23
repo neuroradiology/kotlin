@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,15 +17,20 @@
 package org.jetbrains.kotlin.idea.util
 
 import com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.config.LanguageFeature
+import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
+import org.jetbrains.kotlin.idea.resolve.frontendService
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getReceiverExpression
 import org.jetbrains.kotlin.psi.psiUtil.isImportDirectiveExpression
 import org.jetbrains.kotlin.psi.psiUtil.isPackageDirectiveExpression
 import org.jetbrains.kotlin.resolve.BindingContext
-import org.jetbrains.kotlin.resolve.bindingContextUtil.getDataFlowInfo
+import org.jetbrains.kotlin.resolve.bindingContextUtil.getDataFlowInfoBefore
+import org.jetbrains.kotlin.resolve.calls.DslMarkerUtils
+import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfo
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactory
 import org.jetbrains.kotlin.resolve.calls.smartcasts.SmartCastManager
 import org.jetbrains.kotlin.resolve.descriptorUtil.classValueType
@@ -34,10 +39,13 @@ import org.jetbrains.kotlin.resolve.scopes.DescriptorKindExclude
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.receivers.ClassQualifier
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
+import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
+import org.jetbrains.kotlin.resolve.scopes.receivers.TypeAliasQualifier
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.expressions.DoubleColonLHS
 import org.jetbrains.kotlin.util.supertypesWithAny
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
-import org.jetbrains.kotlin.utils.addToStdlib.singletonOrEmptyList
+import java.util.*
 
 sealed class CallType<TReceiver : KtElement?>(val descriptorKindFilter: DescriptorKindFilter) {
     object UNKNOWN : CallType<Nothing?>(DescriptorKindFilter.ALL)
@@ -54,7 +62,7 @@ sealed class CallType<TReceiver : KtElement?>(val descriptorKindFilter: Descript
 
     object OPERATOR : CallType<KtExpression>(DescriptorKindFilter.FUNCTIONS exclude NonOperatorExclude)
 
-    object CALLABLE_REFERENCE : CallType<KtTypeReference?>(DescriptorKindFilter.CALLABLES exclude CallableReferenceExclude)
+    object CALLABLE_REFERENCE : CallType<KtExpression?>(DescriptorKindFilter.CALLABLES exclude CallableReferenceExclude)
 
     object IMPORT_DIRECTIVE : CallType<KtExpression?>(DescriptorKindFilter.ALL)
 
@@ -83,8 +91,8 @@ sealed class CallType<TReceiver : KtElement?>(val descriptorKindFilter: Descript
     }
 
     private object CallableReferenceExclude : DescriptorKindExclude() {
-        override fun excludes(descriptor: DeclarationDescriptor) /* currently not supported for locals, synthetic and genetic */
-                = descriptor !is CallableMemberDescriptor || descriptor.kind == CallableMemberDescriptor.Kind.SYNTHESIZED || descriptor.typeParameters.isNotEmpty()
+        override fun excludes(descriptor: DeclarationDescriptor) /* currently not supported for locals and synthetic */
+                = descriptor !is CallableMemberDescriptor || descriptor.kind == CallableMemberDescriptor.Kind.SYNTHESIZED
 
         override val fullyExcludedDescriptorKinds: Int
             get() = 0
@@ -108,7 +116,7 @@ sealed class CallType<TReceiver : KtElement?>(val descriptorKindFilter: Descript
     }
 }
 
-sealed class CallTypeAndReceiver<TReceiver : KtElement?, TCallType : CallType<TReceiver>>(
+sealed class CallTypeAndReceiver<TReceiver : KtElement?, out TCallType : CallType<TReceiver>>(
         val callType: TCallType,
         val receiver: TReceiver
 ) {
@@ -119,7 +127,7 @@ sealed class CallTypeAndReceiver<TReceiver : KtElement?, TCallType : CallType<TR
     class SUPER_MEMBERS(receiver: KtSuperExpression) : CallTypeAndReceiver<KtSuperExpression, CallType.SUPER_MEMBERS>(CallType.SUPER_MEMBERS, receiver)
     class INFIX(receiver: KtExpression) : CallTypeAndReceiver<KtExpression, CallType.INFIX>(CallType.INFIX, receiver)
     class OPERATOR(receiver: KtExpression) : CallTypeAndReceiver<KtExpression, CallType.OPERATOR>(CallType.OPERATOR, receiver)
-    class CALLABLE_REFERENCE(receiver: KtTypeReference?) : CallTypeAndReceiver<KtTypeReference?, CallType.CALLABLE_REFERENCE>(CallType.CALLABLE_REFERENCE, receiver)
+    class CALLABLE_REFERENCE(receiver: KtExpression?) : CallTypeAndReceiver<KtExpression?, CallType.CALLABLE_REFERENCE>(CallType.CALLABLE_REFERENCE, receiver)
     class IMPORT_DIRECTIVE(receiver: KtExpression?) : CallTypeAndReceiver<KtExpression?, CallType.IMPORT_DIRECTIVE>(CallType.IMPORT_DIRECTIVE, receiver)
     class PACKAGE_DIRECTIVE(receiver: KtExpression?) : CallTypeAndReceiver<KtExpression?, CallType.PACKAGE_DIRECTIVE>(CallType.PACKAGE_DIRECTIVE, receiver)
     class TYPE(receiver: KtExpression?) : CallTypeAndReceiver<KtExpression?, CallType.TYPE>(CallType.TYPE, receiver)
@@ -129,8 +137,8 @@ sealed class CallTypeAndReceiver<TReceiver : KtElement?, TCallType : CallType<TR
     companion object {
         fun detect(expression: KtSimpleNameExpression): CallTypeAndReceiver<*, *> {
             val parent = expression.parent
-            if (parent is KtCallableReferenceExpression) {
-                return CallTypeAndReceiver.CALLABLE_REFERENCE(parent.typeReference)
+            if (parent is KtCallableReferenceExpression && expression == parent.callableReference) {
+                return CallTypeAndReceiver.CALLABLE_REFERENCE(parent.receiverExpression)
             }
 
             val receiverExpression = expression.getReceiverExpression()
@@ -205,17 +213,58 @@ sealed class CallTypeAndReceiver<TReceiver : KtElement?, TCallType : CallType<TR
     }
 }
 
+data class ReceiverType(
+    val type: KotlinType,
+    val receiverIndex: Int,
+    val implicitValue: ReceiverValue? = null
+) {
+    val implicit: Boolean get() = implicitValue != null
+
+    fun extractDslMarkers() =
+        implicitValue?.let(DslMarkerUtils::extractDslMarkerFqNames)?.all()
+            ?: DslMarkerUtils.extractDslMarkerFqNames(type)
+}
+
 fun CallTypeAndReceiver<*, *>.receiverTypes(
         bindingContext: BindingContext,
         contextElement: PsiElement,
         moduleDescriptor: ModuleDescriptor,
         resolutionFacade: ResolutionFacade,
-        predictableSmartCastsOnly: Boolean
+        stableSmartCastsOnly: Boolean
 ): Collection<KotlinType>? {
+    return receiverTypesWithIndex(bindingContext, contextElement, moduleDescriptor, resolutionFacade, stableSmartCastsOnly)?.map { it.type }
+}
+
+fun CallTypeAndReceiver<*, *>.receiverTypesWithIndex(
+        bindingContext: BindingContext,
+        contextElement: PsiElement,
+        moduleDescriptor: ModuleDescriptor,
+        resolutionFacade: ResolutionFacade,
+        stableSmartCastsOnly: Boolean,
+        withImplicitReceiversWhenExplicitPresent: Boolean = false
+): Collection<ReceiverType>? {
+    val languageVersionSettings = resolutionFacade.frontendService<LanguageVersionSettings>()
+
     val receiverExpression: KtExpression?
     when (this) {
         is CallTypeAndReceiver.CALLABLE_REFERENCE -> {
-            return receiver?.let { bindingContext[BindingContext.TYPE, it] }.singletonOrEmptyList()
+            if (receiver != null) {
+                val lhs = bindingContext[BindingContext.DOUBLE_COLON_LHS, receiver] ?: return emptyList()
+                when (lhs) {
+                    is DoubleColonLHS.Type -> return listOf(ReceiverType(lhs.type, 0))
+
+                    is DoubleColonLHS.Expression -> {
+                        val receiverValue = ExpressionReceiver.create(receiver, lhs.type, bindingContext)
+                        return receiverValueTypes(receiverValue, lhs.dataFlowInfo, bindingContext,
+                                                  moduleDescriptor, stableSmartCastsOnly, languageVersionSettings,
+                                                  resolutionFacade.frontendService<DataFlowValueFactory>())
+                                .map { ReceiverType(it, 0) }
+                    }
+                }
+            }
+            else {
+                return emptyList()
+            }
         }
 
         is CallTypeAndReceiver.DEFAULT -> receiverExpression = null
@@ -228,13 +277,13 @@ fun CallTypeAndReceiver<*, *>.receiverTypes(
 
         is CallTypeAndReceiver.SUPER_MEMBERS -> {
             val qualifier = receiver.superTypeQualifier
-            if (qualifier != null) {
-                return bindingContext.getType(receiver).singletonOrEmptyList()
+            return if (qualifier != null) {
+                listOfNotNull(bindingContext.getType(receiver)).map { ReceiverType(it, 0) }
             }
             else {
                 val resolutionScope = contextElement.getResolutionScope(bindingContext, resolutionFacade)
                 val classDescriptor = resolutionScope.ownerDescriptor.parentsWithSelf.firstIsInstanceOrNull<ClassDescriptor>() ?: return emptyList()
-                return classDescriptor.typeConstructor.supertypesWithAny()
+                classDescriptor.typeConstructor.supertypesWithAny().map { ReceiverType(it, 0) }
             }
         }
 
@@ -244,33 +293,69 @@ fun CallTypeAndReceiver<*, *>.receiverTypes(
         is CallTypeAndReceiver.ANNOTATION,
         is CallTypeAndReceiver.UNKNOWN ->
             return null
-
-        else -> throw RuntimeException() //TODO: see KT-9394
     }
 
-    val receiverValues = if (receiverExpression != null) {
+    val resolutionScope = contextElement.getResolutionScope(bindingContext, resolutionFacade)
+
+    val expressionReceiver = receiverExpression?.let {
         val receiverType =
                 bindingContext.getType(receiverExpression) ?:
-                (bindingContext.get(BindingContext.QUALIFIER, receiverExpression) as? ClassQualifier)?.let {
-                    it.classifier.classValueType
-                } ?:
+                (bindingContext.get(BindingContext.QUALIFIER, receiverExpression) as? ClassQualifier)?.descriptor?.classValueType ?:
+                (bindingContext.get(BindingContext.QUALIFIER, receiverExpression) as? TypeAliasQualifier)?.classDescriptor?.classValueType ?:
                 return emptyList()
-        listOf(ExpressionReceiver.create(receiverExpression, receiverType, bindingContext))
+        ExpressionReceiver.create(receiverExpression, receiverType, bindingContext)
+    }
+
+    val implicitReceiverValues = resolutionScope.getImplicitReceiversWithInstance(
+        excludeShadowedByDslMarkers = languageVersionSettings.supportsFeature(LanguageFeature.DslMarkersSupport)
+    ).map { it.value }
+
+    val dataFlowInfo = bindingContext.getDataFlowInfoBefore(contextElement)
+
+    val result = ArrayList<ReceiverType>()
+
+    var receiverIndex = 0
+
+    fun addReceiverType(receiverValue: ReceiverValue, implicit: Boolean) {
+        val types = receiverValueTypes(
+            receiverValue, dataFlowInfo, bindingContext, moduleDescriptor, stableSmartCastsOnly, languageVersionSettings,
+            resolutionFacade.frontendService<DataFlowValueFactory>()
+        )
+
+        types.mapTo(result) { type -> ReceiverType(type, receiverIndex, receiverValue.takeIf { implicit }) }
+
+        receiverIndex++
+    }
+    if (withImplicitReceiversWhenExplicitPresent || expressionReceiver == null) {
+        implicitReceiverValues.forEach { addReceiverType(it, true) }
+    }
+    if (expressionReceiver != null) {
+        addReceiverType(expressionReceiver, false)
+    }
+    return result
+}
+
+private fun receiverValueTypes(
+        receiverValue: ReceiverValue,
+        dataFlowInfo: DataFlowInfo,
+        bindingContext: BindingContext,
+        moduleDescriptor: ModuleDescriptor,
+        stableSmartCastsOnly: Boolean,
+        languageVersionSettings: LanguageVersionSettings,
+        dataFlowValueFactory: DataFlowValueFactory
+): List<KotlinType> {
+    val dataFlowValue = dataFlowValueFactory.createDataFlowValue(receiverValue, bindingContext, moduleDescriptor)
+    return if (dataFlowValue.isStable || !stableSmartCastsOnly) { // we don't include smart cast receiver types for "unstable" receiver value to mark members grayed
+        SmartCastManager().getSmartCastVariantsWithLessSpecificExcluded(
+                receiverValue,
+                bindingContext,
+                moduleDescriptor,
+                dataFlowInfo,
+                languageVersionSettings,
+                dataFlowValueFactory
+        )
     }
     else {
-        val resolutionScope = contextElement.getResolutionScope(bindingContext, resolutionFacade)
-        resolutionScope.getImplicitReceiversWithInstance().map { it.value }
-    }
-
-    val dataFlowInfo = bindingContext.getDataFlowInfo(contextElement)
-
-    return receiverValues.flatMap { receiverValue ->
-        val dataFlowValue = DataFlowValueFactory.createDataFlowValue(receiverValue, bindingContext, moduleDescriptor)
-        if (dataFlowValue.isPredictable || !predictableSmartCastsOnly) { // we don't include smart cast receiver types for "unpredictable" receiver value to mark members grayed
-            SmartCastManager().getSmartCastVariantsWithLessSpecificExcluded(receiverValue, bindingContext, moduleDescriptor, dataFlowInfo)
-        }
-        else {
-            listOf(receiverValue.type)
-        }
+        listOf(receiverValue.type)
     }
 }

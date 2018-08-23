@@ -1,5 +1,4 @@
-import java.util.HashSet
-
+// IGNORE_BACKEND: JS_IR
 fun foo() : Int =
     try {
         2

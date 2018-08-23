@@ -1,4 +1,4 @@
-// "Create extension function 'foo'" "true"
+// "Create extension function 'A.foo'" "true"
 // ERROR: Unresolved reference: foo
 
 import package1.A
@@ -10,6 +10,6 @@ class X {
     }
 }
 
-fun package2.A.foo() {
-    throw UnsupportedOperationException("not implemented") //To change body of created functions use File | Settings | File Templates.
+private fun package2.A.foo() {
+    TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
 }

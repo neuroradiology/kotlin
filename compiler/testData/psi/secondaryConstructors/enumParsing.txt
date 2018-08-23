@@ -1,4 +1,4 @@
-JetFile: enumParsing.kt
+KtFile: enumParsing.kt
   PACKAGE_DIRECTIVE
     <empty list>
   IMPORT_LIST
@@ -85,10 +85,10 @@ JetFile: enumParsing.kt
                 REFERENCE_EXPRESSION
                   PsiElement(IDENTIFIER)('Int')
           PsiElement(RPAR)(')')
-        PsiWhiteSpace(' ')
         CONSTRUCTOR_DELEGATION_CALL
           CONSTRUCTOR_DELEGATION_REFERENCE
             <empty list>
+        PsiWhiteSpace(' ')
         BLOCK
           PsiElement(LBRACE)('{')
           PsiElement(RBRACE)('}')

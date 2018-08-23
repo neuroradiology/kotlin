@@ -24,7 +24,7 @@ import java.io.File
 import java.net.URL
 
 fun main(args: Array<String>) {
-    val dir = File("../../idl")
+    val dir = File("../../stdlib/js/idl")
     dir.mkdirs()
 
     var packageFilter: String? = null
@@ -80,6 +80,8 @@ private fun extractIDLText(url: String, out: Appendable) {
             out.appendln(";")
         }
     }
+
+    soup.select(".dfn-panel").remove()
 
     soup.select("pre.idl").filter {!it.hasClass("extract")}.forEach(::append)
     soup.select("code.idl-code").forEach(::append)

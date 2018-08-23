@@ -2,6 +2,7 @@
 
 Cleaning output files:
   out/production/module/B.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/B.kt
@@ -12,6 +13,7 @@ Exit code: ADDITIONAL_PASS_REQUIRED
 ------------------------------------------
 Cleaning output files:
   out/production/module/BA.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/BA.kt
@@ -19,7 +21,7 @@ End of files
 Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
-Class 'BA' must be declared abstract or implement abstract member public abstract fun f(c: C<kotlin.Any>): kotlin.Unit defined in A
+Class 'BA' is not abstract and does not implement abstract member public abstract fun f(c: C<Any>): Unit defined in A
 
 ================ Step #2 =================
 

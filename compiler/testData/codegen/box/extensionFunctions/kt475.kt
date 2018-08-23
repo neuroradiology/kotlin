@@ -1,4 +1,4 @@
-import java.util.ArrayList
+// IGNORE_BACKEND: JS_IR
 
 fun box() : String {
   val array = ArrayList<String>()
@@ -11,7 +11,7 @@ fun box() : String {
 
 var <T> ArrayList<T>.length : Int
     get() = size
-    set(value: Int) = throw java.lang.Error()
+    set(value: Int) = throw Error()
 
 var <T> ArrayList<T>.last : T
     get() = get(size-1)!!

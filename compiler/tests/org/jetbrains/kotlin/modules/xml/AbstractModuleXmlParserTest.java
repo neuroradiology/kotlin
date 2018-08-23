@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +19,14 @@ package org.jetbrains.kotlin.modules.xml;
 import com.intellij.openapi.util.io.FileUtil;
 import junit.framework.TestCase;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageLocation;
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity;
 import org.jetbrains.kotlin.cli.common.messages.MessageCollector;
 import org.jetbrains.kotlin.cli.common.messages.MessageRenderer;
-import org.jetbrains.kotlin.modules.Module;
-import org.jetbrains.kotlin.cli.common.modules.ModuleScriptData;
+import org.jetbrains.kotlin.cli.common.modules.ModuleChunk;
 import org.jetbrains.kotlin.cli.common.modules.ModuleXmlParser;
+import org.jetbrains.kotlin.modules.Module;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
 
 import java.io.File;
@@ -33,15 +34,26 @@ import java.io.IOException;
 
 public abstract class AbstractModuleXmlParserTest extends TestCase {
 
+    @SuppressWarnings("MethodMayBeStatic")
     protected void doTest(String xmlPath) throws IOException {
         File txtFile = new File(FileUtil.getNameWithoutExtension(xmlPath) + ".txt");
 
-        ModuleScriptData result = ModuleXmlParser.parseModuleScript(xmlPath, new MessageCollector() {
+        ModuleChunk result = ModuleXmlParser.parseModuleScript(xmlPath, new MessageCollector() {
             @Override
             public void report(
-                    @NotNull CompilerMessageSeverity severity, @NotNull String message, @NotNull CompilerMessageLocation location
+                    @NotNull CompilerMessageSeverity severity, @NotNull String message, @Nullable CompilerMessageLocation location
             ) {
                 throw new AssertionError(MessageRenderer.PLAIN_FULL_PATHS.render(severity, message, location));
+            }
+
+            @Override
+            public void clear() {
+                // Do nothing
+            }
+
+            @Override
+            public boolean hasErrors() {
+                throw new UnsupportedOperationException();
             }
         });
 

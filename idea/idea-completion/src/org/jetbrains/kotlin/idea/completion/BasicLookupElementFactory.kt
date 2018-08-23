@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,29 +17,46 @@
 package org.jetbrains.kotlin.idea.completion
 
 import com.intellij.codeInsight.lookup.*
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.asJava.KtLightClass
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.idea.KotlinDescriptorIconProvider
 import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
 import org.jetbrains.kotlin.idea.completion.handlers.BaseDeclarationInsertHandler
 import org.jetbrains.kotlin.idea.completion.handlers.KotlinClassifierInsertHandler
 import org.jetbrains.kotlin.idea.completion.handlers.KotlinFunctionInsertHandler
+import org.jetbrains.kotlin.idea.core.completion.DeclarationLookupObject
 import org.jetbrains.kotlin.idea.core.completion.PackageLookupObject
+import org.jetbrains.kotlin.idea.highlighter.dsl.DslHighlighterExtension
+import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
 import org.jetbrains.kotlin.load.java.JvmAbi
+import org.jetbrains.kotlin.load.java.descriptors.JavaClassDescriptor
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.psiUtil.parents
 import org.jetbrains.kotlin.renderer.DescriptorRenderer
+import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
 import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.descriptorUtil.isExtension
 import org.jetbrains.kotlin.synthetic.SamAdapterExtensionFunctionDescriptor
 import org.jetbrains.kotlin.synthetic.SyntheticJavaPropertyDescriptor
+import org.jetbrains.kotlin.utils.addToStdlib.firstNotNullResult
+import java.awt.Font
 
 class BasicLookupElementFactory(
         private val project: Project,
         val insertHandlerProvider: InsertHandlerProvider
 ) {
+    companion object {
+        // we skip parameter names in functional types in most of cases for shortness
+        val SHORT_NAMES_RENDERER = DescriptorRenderer.SHORT_NAMES_IN_TYPES.withOptions {
+            enhancedTypes = true
+            parameterNamesInFunctionalTypes = false
+        }
+    }
+
     fun createLookupElement(
             descriptor: DeclarationDescriptor,
             qualifyNestedClasses: Boolean = false,
@@ -50,12 +67,13 @@ class BasicLookupElementFactory(
             DescriptorUtils.unwrapFakeOverride(descriptor)
         else
             descriptor
-        val declaration = DescriptorToSourceUtilsIde.getAnyDeclaration(project, _descriptor)
-        return createLookupElement(_descriptor, declaration, qualifyNestedClasses, includeClassTypeArguments, parametersAndTypeGrayed)
+        return createLookupElementUnwrappedDescriptor(_descriptor, qualifyNestedClasses, includeClassTypeArguments, parametersAndTypeGrayed)
     }
 
     fun createLookupElementForJavaClass(psiClass: PsiClass, qualifyNestedClasses: Boolean = false, includeClassTypeArguments: Boolean = true): LookupElement {
-        val lookupObject = object : DeclarationLookupObjectImpl(null, psiClass) {
+        val lookupObject = object : DeclarationLookupObjectImpl(null) {
+            override val psiElement: PsiElement?
+                get() = psiClass
             override fun getIcon(flags: Int) = psiClass.getIcon(flags)
         }
         var element = LookupElementBuilder.create(lookupObject, psiClass.name!!)
@@ -104,20 +122,20 @@ class BasicLookupElementFactory(
         return element.withIconFromLookupObject()
     }
 
-    private fun createLookupElement(
+    private fun createLookupElementUnwrappedDescriptor(
             descriptor: DeclarationDescriptor,
-            declaration: PsiElement?,
             qualifyNestedClasses: Boolean,
             includeClassTypeArguments: Boolean,
             parametersAndTypeGrayed: Boolean
     ): LookupElement {
-        if (descriptor is ClassifierDescriptor &&
-            declaration is PsiClass &&
-            declaration !is KtLightClass) {
-            // for java classes we create special lookup elements
-            // because they must be equal to ones created in TypesCompletion
-            // otherwise we may have duplicates
-            return createLookupElementForJavaClass(declaration, qualifyNestedClasses, includeClassTypeArguments)
+        if (descriptor is JavaClassDescriptor) {
+            val declaration = DescriptorToSourceUtilsIde.getAnyDeclaration(project, descriptor)
+            if (declaration is PsiClass && declaration !is KtLightClass) {
+                // for java classes we create special lookup elements
+                // because they must be equal to ones created in TypesCompletion
+                // otherwise we may have duplicates
+                return createLookupElementForJavaClass(declaration, qualifyNestedClasses, includeClassTypeArguments)
+            }
         }
 
         if (descriptor is PackageViewDescriptor) {
@@ -127,22 +145,39 @@ class BasicLookupElementFactory(
             return createLookupElementForPackage(descriptor.fqName)
         }
 
-        // for constructor use name and icon of containing class
-        val nameAndIconDescriptor: DeclarationDescriptor
-        val iconDeclaration: PsiElement?
-        if (descriptor is ConstructorDescriptor) {
-            nameAndIconDescriptor = descriptor.containingDeclaration
-            iconDeclaration = DescriptorToSourceUtilsIde.getAnyDeclaration(project, nameAndIconDescriptor)
-        }
-        else {
-            nameAndIconDescriptor = descriptor
-            iconDeclaration = declaration
-        }
-        val name = nameAndIconDescriptor.name.asString()
+        val lookupObject: DeclarationLookupObject
+        val name: String = when (descriptor) {
+            is ConstructorDescriptor -> {
+                // for constructor use name and icon of containing class
+                val classifierDescriptor = descriptor.containingDeclaration
+                lookupObject = object : DeclarationLookupObjectImpl(descriptor) {
+                    override val psiElement by lazy { DescriptorToSourceUtilsIde.getAnyDeclaration(project, classifierDescriptor) }
+                    override fun getIcon(flags: Int) = KotlinDescriptorIconProvider.getIcon(classifierDescriptor, psiElement, flags)
+                }
+                classifierDescriptor.name.asString()
+            }
 
-        val lookupObject = object : DeclarationLookupObjectImpl(descriptor, declaration) {
-            override fun getIcon(flags: Int) = KotlinDescriptorIconProvider.getIcon(nameAndIconDescriptor, iconDeclaration, flags)
+            is SyntheticJavaPropertyDescriptor -> {
+                lookupObject = object : DeclarationLookupObjectImpl(descriptor) {
+                    override val psiElement by lazy { DescriptorToSourceUtilsIde.getAnyDeclaration(project, descriptor.getMethod) }
+                    override fun getIcon(flags: Int) = KotlinDescriptorIconProvider.getIcon(descriptor, null, flags)
+                }
+                descriptor.name.asString()
+            }
+
+            else -> {
+                lookupObject = object : DeclarationLookupObjectImpl(descriptor) {
+                    override val psiElement by lazy {
+                        DescriptorToSourceUtils.getSourceFromDescriptor(descriptor)
+                                ?: DescriptorToSourceUtilsIde.getAnyDeclaration(project, descriptor)
+                    }
+
+                    override fun getIcon(flags: Int) = KotlinDescriptorIconProvider.getIcon(descriptor, psiElement, flags)
+                }
+                descriptor.name.asString()
+            }
         }
+
         var element = LookupElementBuilder.create(lookupObject, name)
 
         val insertHandler = insertHandlerProvider.insertHandler(descriptor)
@@ -151,30 +186,33 @@ class BasicLookupElementFactory(
         when (descriptor) {
             is FunctionDescriptor -> {
                 val returnType = descriptor.returnType
-                element = element.withTypeText(if (returnType != null) DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(returnType) else "", parametersAndTypeGrayed)
+                element = element.withTypeText(if (returnType != null) SHORT_NAMES_RENDERER.renderType(returnType) else "", parametersAndTypeGrayed)
 
                 val insertsLambda = (insertHandler as? KotlinFunctionInsertHandler.Normal)?.lambdaInfo != null
                 if (insertsLambda) {
                     element = element.appendTailText(" {...} ", parametersAndTypeGrayed)
                 }
 
-                element = element.appendTailText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderFunctionParameters(descriptor), parametersAndTypeGrayed || insertsLambda)
+                element = element.appendTailText(SHORT_NAMES_RENDERER.renderFunctionParameters(descriptor), parametersAndTypeGrayed || insertsLambda)
             }
 
             is VariableDescriptor -> {
-                element = element.withTypeText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(descriptor.type), parametersAndTypeGrayed)
+                element = element.withTypeText(SHORT_NAMES_RENDERER.renderType(descriptor.type), parametersAndTypeGrayed)
             }
 
-            is ClassDescriptor -> {
+            is ClassifierDescriptorWithTypeParameters -> {
                 val typeParams = descriptor.declaredTypeParameters
                 if (includeClassTypeArguments && typeParams.isNotEmpty()) {
-                    element = element.appendTailText(typeParams.map { it.name.asString() }.joinToString(", ", "<", ">"), true)
+                    element = element.appendTailText(typeParams.joinToString(", ", "<", ">") { it.name.asString() }, true)
                 }
 
                 var container = descriptor.containingDeclaration
 
-                if (qualifyNestedClasses) {
-                    element = element.withPresentableText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderClassifierName(descriptor))
+                if (descriptor.isArtificialImportAliasedDescriptor) {
+                    container = descriptor.original // we show original descriptor instead of container for import aliased descriptors
+                }
+                else if (qualifyNestedClasses) {
+                    element = element.withPresentableText(SHORT_NAMES_RENDERER.renderClassifierName(descriptor))
 
                     while (container is ClassDescriptor) {
                         val containerName = container.name
@@ -185,18 +223,33 @@ class BasicLookupElementFactory(
                     }
                 }
 
-                if (container is PackageFragmentDescriptor || container is ClassDescriptor) {
+                if (container is PackageFragmentDescriptor || container is ClassifierDescriptor) {
                     element = element.appendTailText(" (" + DescriptorUtils.getFqName(container) + ")", true)
+                }
+
+                if (descriptor is TypeAliasDescriptor) {
+                    // here we render with DescriptorRenderer.SHORT_NAMES_IN_TYPES to include parameter names in functional types
+                    element = element.withTypeText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(descriptor.underlyingType), false)
                 }
             }
 
             else -> {
-                element = element.withTypeText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.render(descriptor), parametersAndTypeGrayed)
+                element = element.withTypeText(SHORT_NAMES_RENDERER.render(descriptor), parametersAndTypeGrayed)
             }
         }
 
+        var isMarkedAsDsl = false
         if (descriptor is CallableDescriptor) {
             appendContainerAndReceiverInformation(descriptor) { element = element.appendTailText(it, true) }
+
+            val dslTextAttributes = DslHighlighterExtension.dslCustomTextStyle(descriptor)?.let {
+                EditorColorsManager.getInstance().globalScheme.getAttributes(it)
+            }
+            if (dslTextAttributes != null) {
+                isMarkedAsDsl = true
+                element = element.withBoldness(dslTextAttributes.fontType == Font.BOLD)
+                dslTextAttributes.foregroundColor?.let { element = element.withItemTextForeground(it) }
+            }
         }
 
         if (descriptor is PropertyDescriptor) {
@@ -217,45 +270,72 @@ class BasicLookupElementFactory(
             element.putUserData(KotlinCompletionCharFilter.ACCEPT_OPENING_BRACE, Unit)
         }
 
-        return element.withIconFromLookupObject()
+        val result = element.withIconFromLookupObject()
+        result.isDslMember = isMarkedAsDsl
+        return result
     }
 
     fun appendContainerAndReceiverInformation(descriptor: CallableDescriptor, appendTailText: (String) -> Unit) {
+        val information = CompletionInformationProvider.EP_NAME.extensions.firstNotNullResult {
+            it.getContainerAndReceiverInformation(descriptor)
+        }
+
+        if (information != null) {
+            appendTailText(information)
+            return
+        }
+
         val extensionReceiver = descriptor.original.extensionReceiverParameter
-        when {
-            descriptor is SyntheticJavaPropertyDescriptor -> {
-                var from = descriptor.getMethod.name.asString() + "()"
-                descriptor.setMethod?.let { from += "/" + it.name.asString() + "()" }
-                appendTailText(" (from $from)")
-            }
-
-        // no need to show them as extensions
-            descriptor is SamAdapterExtensionFunctionDescriptor -> {
-            }
-
-            extensionReceiver != null -> {
-                val receiverPresentation = DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(extensionReceiver.type)
-                appendTailText(" for $receiverPresentation")
-
-                val container = descriptor.containingDeclaration
-                val containerPresentation = if (container is ClassDescriptor)
-                    DescriptorUtils.getFqNameFromTopLevelClass(container).toString()
-                else if (container is PackageFragmentDescriptor)
-                    container.fqName.toString()
-                else
-                    null
-                if (containerPresentation != null) {
-                    appendTailText(" in $containerPresentation")
+        if (extensionReceiver != null) {
+            when {
+                descriptor is SamAdapterExtensionFunctionDescriptor -> {
+                    // no need to show them as extensions
+                    return
                 }
+
+                descriptor is SyntheticJavaPropertyDescriptor -> {
+                    var from = descriptor.getMethod.name.asString() + "()"
+                    descriptor.setMethod?.let { from += "/" + it.name.asString() + "()" }
+                    appendTailText(" (from $from)")
+                    return
+                }
+
+                else -> {
+                    val receiverPresentation = SHORT_NAMES_RENDERER.renderType(extensionReceiver.type)
+                    appendTailText(" for $receiverPresentation")
+                }
+            }
+        }
+
+        val containerPresentation = containerPresentation(descriptor)
+        if (containerPresentation != null) {
+            appendTailText(" ")
+            appendTailText(containerPresentation)
+        }
+    }
+
+    private fun containerPresentation(descriptor: DeclarationDescriptor): String? {
+        when {
+            descriptor.isArtificialImportAliasedDescriptor -> {
+                return "(${DescriptorUtils.getFqName(descriptor.original)})"
+            }
+
+            descriptor.isExtension -> {
+                val container = descriptor.containingDeclaration
+                val containerPresentation = when (container) {
+                    is ClassDescriptor -> DescriptorUtils.getFqNameFromTopLevelClass(container).toString()
+                    is PackageFragmentDescriptor -> container.fqName.toString()
+                    else -> return null
+                }
+                return "in $containerPresentation"
             }
 
             else -> {
-                val container = descriptor.containingDeclaration
-                if (container is PackageFragmentDescriptor) {
-                    // we show container only for global functions and properties
-                    //TODO: it would be probably better to show it also for static declarations which are not from the current class (imported)
-                    appendTailText(" (${container.fqName})")
-                }
+                val container = descriptor.containingDeclaration as? PackageFragmentDescriptor
+                                // we show container only for global functions and properties
+                                ?: return null
+                //TODO: it would be probably better to show it also for static declarations which are not from the current class (imported)
+                return "(${container.fqName})"
             }
         }
     }

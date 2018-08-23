@@ -1,6 +1,7 @@
 // FILE: first.before.kt
-// "Import" "false"
-// ERROR: Missing 'getValue(kotlin.Nothing?, kotlin.reflect.KProperty<*>)' method on delegate of type 'kotlin.String'
+// "class org.jetbrains.kotlin.idea.quickfix.ImportFix" "false"
+// ERROR: Missing 'getValue(Nothing?, KProperty<*>)' method on delegate of type 'String'
+// ACTION: To raw string literal
 
 package b
 
@@ -13,8 +14,3 @@ package a
 import kotlin.reflect.KProperty
 
 fun String.getValue(x: Any?, y: KProperty<*>) = ""
-
-
-
-// FILE: first.after.kt
-// Should not be checked

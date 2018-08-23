@@ -1,3 +1,7 @@
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// IGNORE_BACKEND: JS, NATIVE
+
 // This test checks that our bytecode is consistent with javac bytecode
 
 fun _assert(condition: Boolean) {

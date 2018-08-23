@@ -1,9 +1,9 @@
 // FILE: first.before.kt
-// "Import" "false"
+// "class org.jetbrains.kotlin.idea.quickfix.ImportFix" "false"
 // ERROR: Unresolved reference: foo()["str"]
 // ERROR: No set method providing array access
-// ACTION: Create extension function 'set'
-// ACTION: Create member function 'set'
+// ACTION: Create extension function 'Some.set'
+// ACTION: Create member function 'Some.set'
 // ACTION: Replace overloaded operator with function call
 
 
@@ -25,7 +25,3 @@ package some
 public class Some
 
 operator fun Some.get(s: String) {}
-
-
-// FILE: first.after.kt
-// Empty File

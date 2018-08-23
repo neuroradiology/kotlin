@@ -26,6 +26,26 @@ constructor() {}
     constructor()   : this() {}
 constructor():this() {}
 
+
+    constructor(a: Int) : this()
+    constructor(a: Byte) : this()
     constructor(): this   ()
     constructor(): super(){}
+
+
+    constructor(): this   ()
+
+    constructor(): super(){}
+
+    constructor():
+    this()
+
+    constructor()
+    :this()
+
+    constructor():
+    super()
+
+    constructor()
+    :super()
 }

@@ -20,14 +20,21 @@ import com.intellij.codeInsight.completion.InsertionContext
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.psi.PsiDocumentManager
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
-import org.jetbrains.kotlin.idea.completion.isAfterDot
+import org.jetbrains.kotlin.idea.completion.isArtificialImportAliasedDescriptor
+import org.jetbrains.kotlin.idea.core.ShortenReferences
 import org.jetbrains.kotlin.idea.core.completion.DeclarationLookupObject
+import org.jetbrains.kotlin.idea.imports.importableFqName
+import org.jetbrains.kotlin.idea.util.CallType
 import org.jetbrains.kotlin.idea.util.ImportInsertHelper
-import org.jetbrains.kotlin.idea.util.application.runWriteAction
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.renderer.render
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 
-abstract class KotlinCallableInsertHandler : BaseDeclarationInsertHandler() {
+abstract class KotlinCallableInsertHandler(val callType: CallType<*>) : BaseDeclarationInsertHandler() {
+    companion object {
+        private val shortenReferences = ShortenReferences({ ShortenReferences.Options.DEFAULT.copy(dropBracesInStringTemplates = false)})
+    }
+
     override fun handleInsert(context: InsertionContext, item: LookupElement) {
         super.handleInsert(context, item)
 
@@ -35,22 +42,32 @@ abstract class KotlinCallableInsertHandler : BaseDeclarationInsertHandler() {
     }
 
     private fun addImport(context : InsertionContext, item : LookupElement) {
-        PsiDocumentManager.getInstance(context.project).commitAllDocuments()
+        val psiDocumentManager = PsiDocumentManager.getInstance(context.project)
+        psiDocumentManager.commitAllDocuments()
 
         val file = context.file
         val o = item.`object`
         if (file is KtFile && o is DeclarationLookupObject) {
-            val descriptor = o.descriptor as? CallableDescriptor
-            if (descriptor != null) {
-                // for completion after dot, import insertion may be required only for extensions
-                if (context.isAfterDot() && descriptor.extensionReceiverParameter == null) {
-                    return
+            val descriptor = o.descriptor as? CallableDescriptor ?: return
+            if (descriptor.extensionReceiverParameter != null || callType == CallType.CALLABLE_REFERENCE) {
+                if (DescriptorUtils.isTopLevelDeclaration(descriptor) && !descriptor.isArtificialImportAliasedDescriptor) {
+                    ImportInsertHelper.getInstance(context.project).importDescriptor(file, descriptor)
                 }
+            }
+            else if (callType == CallType.DEFAULT) {
+                if (descriptor.isArtificialImportAliasedDescriptor) return
+                val fqName = descriptor.importableFqName ?: return
+                context.document.replaceString(context.startOffset, context.tailOffset, fqName.render() + " ") // insert space after for correct parsing
 
-                if (DescriptorUtils.isTopLevelDeclaration(descriptor)) {
-                    runWriteAction {
-                        ImportInsertHelper.getInstance(context.getProject()).importDescriptor(file, descriptor)
-                    }
+                psiDocumentManager.commitAllDocuments()
+
+                shortenReferences.process(file, context.startOffset, context.tailOffset - 1)
+
+                psiDocumentManager.doPostponedOperationsAndUnblockDocument(context.document)
+
+                // delete space
+                if (context.document.isTextAt(context.tailOffset - 1, " ")) { // sometimes space can be lost because of reformatting
+                    context.document.deleteString(context.tailOffset - 1, context.tailOffset)
                 }
             }
         }

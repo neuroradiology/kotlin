@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.utils
 
 import java.util.*
+import kotlin.coroutines.experimental.SequenceBuilder
 
 fun <K, V> Iterable<K>.keysToMap(value: (K) -> V): Map<K, V> {
     return associateBy({ it }, value)
@@ -41,8 +42,7 @@ fun <K> Iterable<K>.mapToIndex(): Map<K, Int> {
     return map
 }
 
-
-public inline fun <K, V> MutableMap<K, V>.getOrPutNullable(key: K, defaultValue: () -> V): V {
+inline fun <K, V> MutableMap<K, V>.getOrPutNullable(key: K, defaultValue: () -> V): V {
     return if (!containsKey(key)) {
         val answer = defaultValue()
         put(key, answer)
@@ -55,28 +55,41 @@ public inline fun <K, V> MutableMap<K, V>.getOrPutNullable(key: K, defaultValue:
 
 inline fun <T, C: Collection<T>> C.ifEmpty(body: () -> C): C = if (isEmpty()) body() else this
 
-inline fun <T> Array<out T>.ifEmpty(body: () -> Array<out T>): Array<out T> = if (isEmpty()) body() else this
+inline fun <K, V, M: Map<K, V>> M.ifEmpty(body: () -> M): M = if (isEmpty()) body() else this
 
-fun <T: Any> emptyOrSingletonList(item: T?): List<T> = listOfNotNull(item)
+inline fun <T> Array<out T>.ifEmpty(body: () -> Array<out T>): Array<out T> = if (isEmpty()) body() else this
 
 fun <T: Any> MutableCollection<T>.addIfNotNull(t: T?) {
     if (t != null) add(t)
 }
 
-fun <K, V> newHashMapWithExpectedSize(expectedSize: Int): HashMap<K, V> {
-    return HashMap(if (expectedSize < 3) 3 else expectedSize + expectedSize / 3 + 1)
-}
+suspend fun <T: Any> SequenceBuilder<T>.yieldIfNotNull(t: T?) = if (t != null) yield(t) else Unit
 
-fun <E> newHashSetWithExpectedSize(expectedSize: Int): HashSet<E> {
-    return HashSet(if (expectedSize < 3) 3 else expectedSize + expectedSize / 3 + 1)
-}
+fun <K, V> newHashMapWithExpectedSize(expectedSize: Int): HashMap<K, V> =
+        HashMap(capacity(expectedSize))
 
-fun <T> Collection<T>.toReadOnlyList(): List<T> =
+fun <E> newHashSetWithExpectedSize(expectedSize: Int): HashSet<E> =
+        HashSet(capacity(expectedSize))
+
+fun <K, V> newLinkedHashMapWithExpectedSize(expectedSize: Int): LinkedHashMap<K, V> =
+        LinkedHashMap(capacity(expectedSize))
+
+fun <E> newLinkedHashSetWithExpectedSize(expectedSize: Int): LinkedHashSet<E> =
+        LinkedHashSet(capacity(expectedSize))
+
+private fun capacity(expectedSize: Int): Int =
+        if (expectedSize < 3) 3 else expectedSize + expectedSize / 3 + 1
+
+fun <T> ArrayList<T>.compact(): List<T> =
         when (size) {
             0 -> emptyList()
             1 -> listOf(first())
-            else -> ArrayList(this)
+            else -> apply { trimToSize() }
         }
 
-fun <T: Any> T?.singletonOrEmptyList(): List<T> =
-        if (this != null) listOf(this) else emptyList()
+fun <T> List<T>.indexOfFirst(startFrom: Int, predicate: (T) -> Boolean): Int {
+    for (index in startFrom..lastIndex) {
+        if (predicate(this[index])) return index
+    }
+    return -1
+}

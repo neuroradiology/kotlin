@@ -21,11 +21,9 @@ import com.intellij.codeInsight.template.TemplateBuilderImpl
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
-import org.jetbrains.kotlin.idea.analysis.analyzeInContext
+import org.jetbrains.kotlin.idea.analysis.analyzeAsReplacement
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
 import org.jetbrains.kotlin.idea.core.replaced
-import org.jetbrains.kotlin.idea.util.getResolutionScope
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.endOffset
 import org.jetbrains.kotlin.psi.psiUtil.startOffset
@@ -33,23 +31,24 @@ import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 
-class AddForLoopIndicesIntention : SelfTargetingRangeIntention<KtForExpression>(KtForExpression::class.java, "Add indices to 'for' loop"), LowPriorityAction {
+class AddForLoopIndicesIntention : SelfTargetingRangeIntention<KtForExpression>(KtForExpression::class.java, "Add indices to 'for' loop"),
+    LowPriorityAction {
     private val WITH_INDEX_NAME = "withIndex"
-    private val WITH_INDEX_FQ_NAMES = listOf("collections", "sequences", "text", "ranges").map { "kotlin.$it.$WITH_INDEX_NAME" }.toSet()
+    private val WITH_INDEX_FQ_NAMES = sequenceOf("collections", "sequences", "text", "ranges").map { "kotlin.$it.$WITH_INDEX_NAME" }.toSet()
 
     override fun applicabilityRange(element: KtForExpression): TextRange? {
         if (element.loopParameter == null) return null
+        if (element.loopParameter?.destructuringDeclaration != null) return null
         val loopRange = element.loopRange ?: return null
 
-        val bindingContext = element.analyze(BodyResolveMode.PARTIAL)
+        val bindingContext = element.analyze(BodyResolveMode.PARTIAL_WITH_CFA)
 
         val resolvedCall = loopRange.getResolvedCall(bindingContext)
         if (resolvedCall?.resultingDescriptor?.fqNameUnsafe?.asString() in WITH_INDEX_FQ_NAMES) return null // already withIndex() call
 
-        val resolutionScope = element.getResolutionScope(bindingContext, element.getResolutionFacade())
-        val potentialExpression = createWithIndexExpression(loopRange)
+        val potentialExpression = createWithIndexExpression(loopRange, reformat = false)
 
-        val newBindingContext = potentialExpression.analyzeInContext(resolutionScope, loopRange)
+        val newBindingContext = potentialExpression.analyzeAsReplacement(loopRange, bindingContext)
         val newResolvedCall = potentialExpression.getResolvedCall(newBindingContext) ?: return null
         if (newResolvedCall.resultingDescriptor.fqNameUnsafe.asString() !in WITH_INDEX_FQ_NAMES) return null
 
@@ -62,9 +61,12 @@ class AddForLoopIndicesIntention : SelfTargetingRangeIntention<KtForExpression>(
         val loopParameter = element.loopParameter!!
         val psiFactory = KtPsiFactory(element)
 
-        loopRange.replace(createWithIndexExpression(loopRange))
+        loopRange.replace(createWithIndexExpression(loopRange, reformat = true))
 
-        var multiParameter = (psiFactory.createExpressionByPattern("for((index, $0) in x){}", loopParameter.text) as KtForExpression).destructuringParameter!!
+        var multiParameter = (psiFactory.createExpressionByPattern(
+            "for((index, $0) in x){}",
+            loopParameter.text
+        ) as KtForExpression).destructuringDeclaration!!
 
         multiParameter = loopParameter.replaced(multiParameter)
 
@@ -86,8 +88,7 @@ class AddForLoopIndicesIntention : SelfTargetingRangeIntention<KtForExpression>(
                 val statement = body.statements.firstOrNull()
                 if (statement != null) {
                     templateBuilder.setEndVariableBefore(statement)
-                }
-                else {
+                } else {
                     templateBuilder.setEndVariableAfter(body.lBrace)
                 }
             }
@@ -100,7 +101,10 @@ class AddForLoopIndicesIntention : SelfTargetingRangeIntention<KtForExpression>(
         templateBuilder.run(editor, true)
     }
 
-    private fun createWithIndexExpression(originalExpression: KtExpression): KtExpression {
-        return KtPsiFactory(originalExpression).createExpressionByPattern("$0.$WITH_INDEX_NAME()", originalExpression)
+    private fun createWithIndexExpression(originalExpression: KtExpression, reformat: Boolean): KtExpression {
+        return KtPsiFactory(originalExpression).createExpressionByPattern(
+            "$0.$WITH_INDEX_NAME()", originalExpression,
+            reformat = reformat
+        )
     }
 }

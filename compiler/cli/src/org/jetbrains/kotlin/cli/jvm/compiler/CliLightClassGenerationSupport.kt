@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,36 +16,15 @@
 
 package org.jetbrains.kotlin.cli.jvm.compiler
 
-import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiClass
-import com.intellij.psi.PsiManager
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.psi.search.PsiSearchScopeUtil
-import com.intellij.util.Function
-import com.intellij.util.SmartList
-import com.intellij.util.containers.ContainerUtil
-import org.jetbrains.annotations.TestOnly
-import org.jetbrains.kotlin.asJava.*
-import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.asJava.LightClassBuilder
+import org.jetbrains.kotlin.asJava.LightClassGenerationSupport
+import org.jetbrains.kotlin.asJava.builder.InvalidLightClassDataHolder
+import org.jetbrains.kotlin.asJava.builder.LightClassConstructionContext
+import org.jetbrains.kotlin.asJava.builder.LightClassDataHolder
+import org.jetbrains.kotlin.asJava.builder.LightClassDataHolderImpl
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
-import org.jetbrains.kotlin.descriptors.ModuleDescriptor
-import org.jetbrains.kotlin.descriptors.PackageViewDescriptor
-import org.jetbrains.kotlin.fileClasses.JvmFileClassUtil
-import org.jetbrains.kotlin.load.kotlin.PackagePartClassUtils
-import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.psi.KtClassOrObject
-import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.psi.KtPsiUtil
-import org.jetbrains.kotlin.resolve.*
-import org.jetbrains.kotlin.resolve.lazy.KotlinCodeAnalyzer
-import org.jetbrains.kotlin.resolve.lazy.ResolveSessionUtils
-import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
-import org.jetbrains.kotlin.resolve.scopes.MemberScope
-import org.jetbrains.kotlin.util.slicedMap.ReadOnlySlice
-import org.jetbrains.kotlin.util.slicedMap.WritableSlice
-import org.jetbrains.kotlin.utils.emptyOrSingletonList
-import kotlin.properties.Delegates
+import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.resolve.BindingContext
 
 /**
  * This class solves the problem of interdependency between analyzing Kotlin code and generating JetLightClasses
@@ -59,164 +38,35 @@ import kotlin.properties.Delegates
 
  * To mitigate this, CliLightClassGenerationSupport hold a trace that is shared between the analyzer and JetLightClasses
  */
-class CliLightClassGenerationSupport(project: Project) : LightClassGenerationSupport(), CodeAnalyzerInitializer {
-    private val psiManager = PsiManager.getInstance(project)
-    private var bindingContext: BindingContext by Delegates.notNull()
-    private var module: ModuleDescriptor by Delegates.notNull()
-
-
-    override fun initialize(trace: BindingTrace, module: ModuleDescriptor, codeAnalyzer: KotlinCodeAnalyzer) {
-        this.bindingContext = trace.bindingContext
-        this.module = module
-
-        if (trace !is CliBindingTrace) {
-            throw IllegalArgumentException("Shared trace is expected to be subclass of ${CliBindingTrace::class.java.simpleName} class")
-        }
-
-        trace.setKotlinCodeAnalyzer(codeAnalyzer)
-    }
-
-    override fun getContextForClassOrObject(classOrObject: KtClassOrObject): LightClassConstructionContext {
+class CliLightClassGenerationSupport(private val traceHolder: CliTraceHolder) : LightClassGenerationSupport() {
+    override fun createDataHolderForClass(classOrObject: KtClassOrObject, builder: LightClassBuilder): LightClassDataHolder.ForClass {
         //force resolve companion for light class generation
-        bindingContext.get(BindingContext.CLASS, classOrObject)?.companionObjectDescriptor
-        return LightClassConstructionContext(bindingContext, module)
+        traceHolder.bindingContext.get(BindingContext.CLASS, classOrObject)?.companionObjectDescriptor
+
+        val (stub, bindingContext, diagnostics) = builder(getContext())
+
+        bindingContext.get(BindingContext.CLASS, classOrObject) ?: return InvalidLightClassDataHolder
+
+        return LightClassDataHolderImpl(stub, diagnostics)
     }
 
-    private fun getContext(): LightClassConstructionContext {
-        return LightClassConstructionContext(bindingContext, module)
+    override fun createDataHolderForFacade(files: Collection<KtFile>, builder: LightClassBuilder): LightClassDataHolder.ForFacade {
+        val (stub, _, diagnostics) = builder(getContext())
+        return LightClassDataHolderImpl(stub, diagnostics)
     }
 
-    override fun findClassOrObjectDeclarations(fqName: FqName, searchScope: GlobalSearchScope): Collection<KtClassOrObject> {
-        return ResolveSessionUtils.getClassDescriptorsByFqName(module, fqName).mapNotNull {
-            val element = DescriptorToSourceUtils.getSourceFromDescriptor(it)
-            if (element is KtClassOrObject && PsiSearchScopeUtil.isInScope(searchScope, element)) {
-                element
-            }
-            else null
-        }
+    override fun createDataHolderForScript(script: KtScript, builder: LightClassBuilder): LightClassDataHolder.ForScript {
+        val (stub, _, diagnostics) = builder(getContext())
+        return LightClassDataHolderImpl(stub, diagnostics)
     }
 
-    override fun findFilesForPackage(fqName: FqName, searchScope: GlobalSearchScope): Collection<KtFile> {
-        return bindingContext.get(BindingContext.PACKAGE_TO_FILES, fqName)?.filter {
-            PsiSearchScopeUtil.isInScope(searchScope, it)
-        } ?: emptyList()
+    private fun getContext(): LightClassConstructionContext = LightClassConstructionContext(traceHolder.bindingContext, traceHolder.module)
+
+    override fun resolveToDescriptor(declaration: KtDeclaration): DeclarationDescriptor? {
+        return traceHolder.bindingContext.get(BindingContext.DECLARATION_TO_DESCRIPTOR, declaration)
     }
 
-    override fun findClassOrObjectDeclarationsInPackage(
-            packageFqName: FqName, searchScope: GlobalSearchScope): Collection<KtClassOrObject> {
-        val files = findFilesForPackage(packageFqName, searchScope)
-        val result = SmartList<KtClassOrObject>()
-        for (file in files) {
-            for (declaration in file.declarations) {
-                if (declaration is KtClassOrObject) {
-                    result.add(declaration)
-                }
-            }
-        }
-        return result
-    }
+    override fun analyze(element: KtElement) = traceHolder.bindingContext
 
-    override fun packageExists(fqName: FqName, scope: GlobalSearchScope): Boolean {
-        return !module.getPackage(fqName).isEmpty()
-    }
-
-    override fun getSubPackages(fqn: FqName, scope: GlobalSearchScope): Collection<FqName> {
-        val packageView = module.getPackage(fqn)
-        val members = packageView.memberScope.getContributedDescriptors(DescriptorKindFilter.PACKAGES, MemberScope.ALL_NAME_FILTER)
-        return ContainerUtil.mapNotNull(members, object : Function<DeclarationDescriptor, FqName> {
-            override fun `fun`(member: DeclarationDescriptor): FqName? {
-                if (member is PackageViewDescriptor) {
-                    return member.fqName
-                }
-                return null
-            }
-        })
-    }
-
-    override fun getLightClass(classOrObject: KtClassOrObject): KtLightClass? {
-        return KtLightClassForExplicitDeclaration.create(classOrObject)
-    }
-
-    override fun resolveClassToDescriptor(classOrObject: KtClassOrObject): ClassDescriptor? {
-        return bindingContext.get(BindingContext.CLASS, classOrObject)
-    }
-
-    override fun getFacadeClasses(facadeFqName: FqName, scope: GlobalSearchScope): Collection<PsiClass> {
-        val filesForFacade = findFilesForFacade(facadeFqName, scope)
-        if (filesForFacade.isEmpty()) return emptyList()
-
-        return emptyOrSingletonList<PsiClass>(
-                KtLightClassForFacade.createForFacade(psiManager, facadeFqName, scope, filesForFacade))
-    }
-
-    override fun findFilesForFacade(facadeFqName: FqName, scope: GlobalSearchScope): Collection<KtFile> {
-        if (facadeFqName.isRoot) return emptyList()
-
-        return PackagePartClassUtils.getFilesWithCallables(findFilesForPackage(facadeFqName.parent(), scope)).filter {
-            JvmFileClassUtil.getFileClassInfoNoResolve(it).facadeClassFqName == facadeFqName
-        }
-    }
-
-    override fun getContextForFacade(files: Collection<KtFile>): LightClassConstructionContext {
-        return getContext()
-    }
-
-    override fun createTrace(): BindingTraceContext {
-        return NoScopeRecordCliBindingTrace()
-    }
-
-    class NoScopeRecordCliBindingTrace : CliBindingTrace() {
-        override fun <K, V> record(slice: WritableSlice<K, V>, key: K, value: V) {
-            if (slice === BindingContext.LEXICAL_SCOPE) {
-                // In the compiler there's no need to keep scopes
-                return
-            }
-            super.record(slice, key, value)
-        }
-
-        override fun toString(): String {
-            return NoScopeRecordCliBindingTrace::class.java.name
-        }
-    }
-
-    open class CliBindingTrace @TestOnly constructor() : BindingTraceContext() {
-        private var kotlinCodeAnalyzer: KotlinCodeAnalyzer? = null
-
-        override fun toString(): String {
-            return CliBindingTrace::class.java.name
-        }
-
-        fun setKotlinCodeAnalyzer(kotlinCodeAnalyzer: KotlinCodeAnalyzer) {
-            this.kotlinCodeAnalyzer = kotlinCodeAnalyzer
-        }
-
-        override fun <K, V> get(slice: ReadOnlySlice<K, V>, key: K): V? {
-            val value = super.get(slice, key)
-
-            if (value == null) {
-                if (BindingContext.FUNCTION === slice || BindingContext.VARIABLE === slice) {
-                    if (key is KtDeclaration) {
-                        if (!KtPsiUtil.isLocal(key)) {
-                            kotlinCodeAnalyzer!!.resolveToDescriptor(key)
-                            return super.get<K, V>(slice, key)
-                        }
-                    }
-                }
-            }
-
-            return value
-        }
-    }
-
-    override fun getFacadeClassesInPackage(packageFqName: FqName, scope: GlobalSearchScope): Collection<PsiClass> {
-        return PackagePartClassUtils.getFilesWithCallables(findFilesForPackage(packageFqName, scope)).groupBy {
-            JvmFileClassUtil.getFileClassInfoNoResolve(it).facadeClassFqName
-        }.mapNotNull { KtLightClassForFacade.createForFacade(psiManager, it.key, scope, it.value) }
-    }
-
-    override fun getFacadeNames(packageFqName: FqName, scope: GlobalSearchScope): Collection<String> {
-        return PackagePartClassUtils.getFilesWithCallables(findFilesForPackage(packageFqName, scope)).map {
-            JvmFileClassUtil.getFileClassInfoNoResolve(it).facadeClassFqName.shortName().asString()
-        }
-    }
+    override fun analyzeWithContent(element: KtClassOrObject) = traceHolder.bindingContext
 }

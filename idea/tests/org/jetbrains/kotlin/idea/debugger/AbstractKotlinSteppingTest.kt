@@ -33,6 +33,10 @@ abstract class AbstractKotlinSteppingTest : KotlinDebuggerTestBase() {
         doTest(path, "STEP_OVER")
     }
 
+    protected fun doStepOverForceTest(path: String) {
+        doTest(path, "STEP_OVER_FORCE")
+    }
+
     protected fun doSmartStepIntoTest(path: String) {
         doTest(path, "SMART_STEP_INTO")
     }
@@ -52,7 +56,7 @@ abstract class AbstractKotlinSteppingTest : KotlinDebuggerTestBase() {
         val fileText = FileUtil.loadFile(File(path))
 
         configureSettings(fileText)
-
+        createAdditionalBreakpoints(fileText)
         createDebugProcess(path)
 
         val prefix = "// $command: "

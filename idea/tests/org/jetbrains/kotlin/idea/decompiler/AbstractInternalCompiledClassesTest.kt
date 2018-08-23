@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,23 +19,23 @@ package org.jetbrains.kotlin.idea.decompiler
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiManager
 import org.jetbrains.kotlin.idea.caches.IDEKotlinBinaryClassCache
-import org.jetbrains.kotlin.idea.decompiler.navigation.NavigateToDecompiledLibraryTest
+import org.jetbrains.kotlin.idea.decompiler.textBuilder.findTestLibraryRoot
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase
 import org.jetbrains.kotlin.load.kotlin.header.KotlinClassHeader
 import org.jetbrains.kotlin.name.ClassId
 import org.junit.Assert
 
 abstract class AbstractInternalCompiledClassesTest : KotlinLightCodeInsightFixtureTestCase() {
-    private fun isFileWithHeader(predicate: (KotlinClassHeader, ClassId) -> Boolean) : VirtualFile.() -> Boolean = {
+    private fun isFileWithHeader(predicate: (IDEKotlinBinaryClassCache.KotlinBinaryClassHeaderData, ClassId) -> Boolean) : VirtualFile.() -> Boolean = {
         val info = IDEKotlinBinaryClassCache.getKotlinBinaryClassHeaderData(this)
-        info != null && predicate(info.classHeader, info.classId)
+        info != null && predicate(info, info.classId)
     }
 
     protected fun isSyntheticClass(): VirtualFile.() -> Boolean =
-            isFileWithHeader { header, classId -> header.kind == KotlinClassHeader.Kind.SYNTHETIC_CLASS }
+            isFileWithHeader { header, _ -> header.kind == KotlinClassHeader.Kind.SYNTHETIC_CLASS }
 
     protected fun doTestNoPsiFilesAreBuiltForLocalClass(): Unit =
-            doTestNoPsiFilesAreBuiltFor("local", isFileWithHeader { header, classId -> classId.isLocal })
+            doTestNoPsiFilesAreBuiltFor("local", isFileWithHeader { _, classId -> classId.isLocal })
 
     protected fun doTestNoPsiFilesAreBuiltForSyntheticClasses(): Unit =
             doTestNoPsiFilesAreBuiltFor("synthetic", isSyntheticClass())
@@ -50,7 +50,7 @@ abstract class AbstractInternalCompiledClassesTest : KotlinLightCodeInsightFixtu
     }
 
     protected fun doTest(fileKind: String, acceptFile: VirtualFile.() -> Boolean, performTest: VirtualFile.() -> Unit) {
-        val root = NavigateToDecompiledLibraryTest.findTestLibraryRoot(myModule!!)!!
+        val root = findTestLibraryRoot(myModule!!)!!
         var foundAtLeastOneFile = false
         root.checkRecursively {
             if (acceptFile()) {

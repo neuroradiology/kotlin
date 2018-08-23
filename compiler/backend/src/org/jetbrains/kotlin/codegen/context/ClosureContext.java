@@ -19,24 +19,39 @@ package org.jetbrains.kotlin.codegen.context;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.codegen.OwnerKind;
-import org.jetbrains.kotlin.codegen.state.JetTypeMapper;
+import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper;
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor;
 
 import static org.jetbrains.kotlin.codegen.binding.CodegenBinding.anonymousClassForCallable;
 
 public class ClosureContext extends ClassContext {
     private final FunctionDescriptor functionDescriptor;
+    private final FunctionDescriptor originalSuspendLambdaDescriptor;
 
     public ClosureContext(
-            @NotNull JetTypeMapper typeMapper,
+            @NotNull KotlinTypeMapper typeMapper,
+            @NotNull FunctionDescriptor functionDescriptor,
+            @Nullable CodegenContext parentContext,
+            @NotNull LocalLookup localLookup,
+            // original suspend lambda descriptor
+            @Nullable FunctionDescriptor originalSuspendLambdaDescriptor
+    ) {
+        super(typeMapper,
+              anonymousClassForCallable(
+                      typeMapper.getBindingContext(), originalSuspendLambdaDescriptor != null ? originalSuspendLambdaDescriptor : functionDescriptor),
+              OwnerKind.IMPLEMENTATION, parentContext, localLookup);
+
+        this.functionDescriptor = functionDescriptor;
+        this.originalSuspendLambdaDescriptor = originalSuspendLambdaDescriptor;
+    }
+
+    public ClosureContext(
+            @NotNull KotlinTypeMapper typeMapper,
             @NotNull FunctionDescriptor functionDescriptor,
             @Nullable CodegenContext parentContext,
             @NotNull LocalLookup localLookup
     ) {
-        super(typeMapper, anonymousClassForCallable(typeMapper.getBindingContext(), functionDescriptor),
-              OwnerKind.IMPLEMENTATION, parentContext, localLookup);
-
-        this.functionDescriptor = functionDescriptor;
+        this(typeMapper, functionDescriptor, parentContext, localLookup, null);
     }
 
     @NotNull
@@ -47,5 +62,10 @@ public class ClosureContext extends ClassContext {
     @Override
     public String toString() {
         return "Closure: " + getContextDescriptor();
+    }
+
+    @Nullable
+    public FunctionDescriptor getOriginalSuspendLambdaDescriptor() {
+        return originalSuspendLambdaDescriptor;
     }
 }

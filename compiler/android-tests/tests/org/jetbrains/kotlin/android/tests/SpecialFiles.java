@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,60 +16,123 @@
 
 package org.jetbrains.kotlin.android.tests;
 
-import com.google.common.collect.Sets;
-
+import java.util.HashSet;
 import java.util.Set;
 
 public class SpecialFiles {
-    private static final Set<String> excludedFiles = Sets.newHashSet();
-    private static final Set<String> filesCompiledWithoutStdLib = Sets.newHashSet();
+    private static final Set<String> excludedFiles = new HashSet<>();
 
     static {
         fillExcludedFiles();
     }
-
 
     public static Set<String> getExcludedFiles() {
         return excludedFiles;
     }
 
     private static void fillExcludedFiles() {
-        excludedFiles.add("native"); // Reflection is used to check full class name
+        // Reflection
+        excludedFiles.add("enclosing");
+        excludedFiles.add("noReflectAtRuntime");
+        excludedFiles.add("methodsFromAny");
+        excludedFiles.add("genericProperty.kt");
+        excludedFiles.add("kt3238.kt");
+        excludedFiles.add("kt1482_2279.kt");
+        excludedFiles.add("extensionMethod.kt");
+        excludedFiles.add("functionNtoStringNoReflect.kt");
+        excludedFiles.add("innerGeneric.kt");
+        excludedFiles.add("simpleCreateType.kt");
+        excludedFiles.add("equalsHashCodeToString.kt");
+        excludedFiles.add("arrayOfKClasses.kt");
+        excludedFiles.add("enumKClassAnnotation.kt");
+        excludedFiles.add("primitivesAndArrays.kt");
+        excludedFiles.add("getDelegateWithoutReflection.kt");
+        excludedFiles.add("parameterAnnotationInDefaultImpls.kt");
+        excludedFiles.add("kt17091.kt");
+        excludedFiles.add("kt17091_2.kt");
+        excludedFiles.add("kt17091_3.kt");
+        excludedFiles.add("kt22906.kt");
 
-        excludedFiles.add("reflection");
-        excludedFiles.add("kt3238.kt"); // Reflection
-        excludedFiles.add("kt1482_2279.kt"); // Reflection
+        // Reflection is used to check full class name
+        excludedFiles.add("native");
 
-        excludedFiles.add("nestedInPackage.kt"); // Cannot change package name
-        excludedFiles.add("importNestedClass.kt"); // Cannot change package name
-        excludedFiles.add("packageQualifiedMethod.kt"); // Cannot change package name
-        excludedFiles.add("classObjectToString.kt"); // Cannot change package name
-        excludedFiles.add("invokeOnClassObjectOfNestedClass2.kt"); // Cannot change package name
-        excludedFiles.add("invokeOnImportedEnum1.kt"); // Cannot change package name
-        excludedFiles.add("invokeOnImportedEnum2.kt"); // Cannot change package name
-        excludedFiles.add("sortEnumEntries.kt"); // Cannot change package name
-        excludedFiles.add("assertionStackTrace.kt"); // Cannot change package name
-        excludedFiles.add("anonymousObjectReifiedSupertype.kt"); // Cannot change package name
-        excludedFiles.add("innerAnonymousObject.kt"); // Cannot change package name
-        excludedFiles.add("nestedReifiedSignature.kt"); // Cannot change package name
-        excludedFiles.add("recursiveInnerAnonymousObject.kt"); // Cannot change package name
+        // "IOOBE: Invalid index 4, size is 4" for java.lang.reflect.ParameterizedType on Android
+        excludedFiles.add("innerGenericTypeArgument.kt");
 
-        excludedFiles.add("kt684.kt"); // StackOverflow with StringBuilder (escape())
+        // Cannot change package name
+        excludedFiles.add("nestedInPackage.kt");
+        excludedFiles.add("packageQualifiedMethod.kt");
+        excludedFiles.add("classObjectToString.kt");
+        excludedFiles.add("assertionStackTrace.kt");
+        excludedFiles.add("anonymousObjectReifiedSupertype.kt");
+        excludedFiles.add("innerAnonymousObject.kt");
+        excludedFiles.add("nestedReifiedSignature.kt");
+        excludedFiles.add("recursiveInnerAnonymousObject.kt");
+        excludedFiles.add("approximateCapturedTypes.kt");
+        excludedFiles.add("classForEnumEntry.kt");
+        excludedFiles.add("kt10143.kt");
+        excludedFiles.add("internalTopLevelOtherPackage.kt");
+        excludedFiles.add("noPrivateDelegation.kt");
+        excludedFiles.add("platformTypeAssertionStackTrace.kt");
+        excludedFiles.add("packages.kt");
+        excludedFiles.add("kt10259.kt");
+        excludedFiles.add("kt11081.kt");
+        excludedFiles.add("kt6990.kt");
+        excludedFiles.add("mainInFiles.kt");
+        excludedFiles.add("noClassForSimpleEnum.kt");
+        excludedFiles.add("simpleClassLiteral.kt");
+        excludedFiles.add("jvmName.kt");
+        excludedFiles.add("qualifiedName.kt");
+        excludedFiles.add("topLevelProperty.kt");
+        excludedFiles.add("typeParameters.kt");
+        excludedFiles.add("kt13133.kt");
+        excludedFiles.add("genericOverriddenFunction.kt");
+        excludedFiles.add("genericOverriddenProperty.kt");
+        excludedFiles.add("genericProperty.kt");
 
-        excludedFiles.add("kt529.kt");  // Bug
-        excludedFiles.add("kt344.kt");  // Bug
+        // StackOverflow with StringBuilder (escape())
+        excludedFiles.add("kt684.kt");
 
-        excludedFiles.add("comparisonWithNullCallsFun.kt"); // java.lang.NoClassDefFoundError: kotlin.Nothing
-        excludedFiles.add("kt3574.kt"); // java.lang.NoClassDefFoundError: kotlin.Nothing
+        // Wrong enclosing info or signature after package renaming
+        excludedFiles.add("enclosingInfo");
+        excludedFiles.add("signature");
+        excludedFiles.add("genericBackingFieldSignature.kt");
+        excludedFiles.add("genericMethodSignature.kt");
+        excludedFiles.add("kt11121.kt");
+        excludedFiles.add("kt5112.kt");
 
-        excludedFiles.add("genericBackingFieldSignature.kt"); // Wrong signature after package renaming
-        excludedFiles.add("genericMethodSignature.kt"); // Wrong signature after package renaming
+        // Different format of inner signature on Android and JVM
+        excludedFiles.add("signatureOfDeepGenericInner.kt");
+        excludedFiles.add("signatureOfDeepInner.kt");
+        excludedFiles.add("signatureOfDeepInnerLastGeneric.kt");
+        excludedFiles.add("signatureOfGenericInnerGenericOuter.kt");
+        excludedFiles.add("signatureOfGenericInnerSimpleOuter.kt");
+        excludedFiles.add("signatureOfSimpleInnerSimpleOuter.kt");
 
-        excludedFiles.add("classpath.kt"); // Some classes are not visible on android
+        // Some classes are not visible on android
+        excludedFiles.add("classpath.kt");
 
-        excludedFiles.add("manyNumbers.kt"); // Out of memory
+        // Out of memory
+        excludedFiles.add("manyNumbers.kt");
 
-        excludedFiles.add("smap"); // Line numbers
+        // Native methods
+        excludedFiles.add("external");
+
+        // Additional nested class in 'Thread' class on Android
+        excludedFiles.add("nestedClasses.kt");
+        // No 'modifiers' field in 'java.lang.reflect.Field' class
+        excludedFiles.add("kt12200Const.kt");
+
+        // KT-8120
+        excludedFiles.add("closureOfInnerLocalClass.kt");
+        excludedFiles.add("closureWithSelfInstantiation.kt");
+        excludedFiles.add("quotedClassName.kt");
+
+        //wrong function resolution after package renaming
+        excludedFiles.add("apiVersionAtLeast1.kt");
+
+        //special symbols in names
+        excludedFiles.add("nameWithWhitespace.kt");
     }
 
     private SpecialFiles() {

@@ -1,7 +1,7 @@
-// "class org.jetbrains.kotlin.idea.quickfix.AutoImportFix" "false"
+// "class org.jetbrains.kotlin.idea.quickfix.ImportFix" "false"
 // ERROR: Unresolved reference: TTTTT
 // ERROR: Function declaration must have a name
 
 fun () {
-    val tttt : TTTTT = null
+    val tttt : <caret>TTTTT = null
 }

@@ -1,6 +1,7 @@
 ================ Step #1 =================
 
 Cleaning output files:
+  out/production/module/META-INF/module.kotlin_module
   out/production/module/foo/A.class
 End of files
 Compiling files:
@@ -52,10 +53,10 @@ Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
 This class does not have a constructor
-Unresolved reference: A
-Unresolved reference: A
-Unresolved reference: A
-Unresolved reference: A
+Interface A does not have constructors
+Interface A does not have constructors
+Interface A does not have constructors
+Interface A does not have constructors
 
 ================ Step #2 =================
 

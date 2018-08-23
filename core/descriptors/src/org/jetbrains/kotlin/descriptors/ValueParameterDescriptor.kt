@@ -18,6 +18,7 @@ package org.jetbrains.kotlin.descriptors
 
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.TypeSubstitutor
 
 interface ValueParameterDescriptor : VariableDescriptor, ParameterDescriptor {
     override fun getContainingDeclaration(): CallableDescriptor
@@ -39,7 +40,9 @@ interface ValueParameterDescriptor : VariableDescriptor, ParameterDescriptor {
 
     override fun getOriginal(): ValueParameterDescriptor
 
-    fun copy(newOwner: CallableDescriptor, newName: Name): ValueParameterDescriptor
+    override fun substitute(substitutor: TypeSubstitutor): ValueParameterDescriptor
+
+    fun copy(newOwner: CallableDescriptor, newName: Name, newIndex: Int): ValueParameterDescriptor
 
     /**
      * Parameter p1 overrides p2 iff
@@ -51,4 +54,6 @@ interface ValueParameterDescriptor : VariableDescriptor, ParameterDescriptor {
     val isCrossinline: Boolean
 
     val isNoinline: Boolean
+
+    override fun isLateInit(): Boolean = false
 }

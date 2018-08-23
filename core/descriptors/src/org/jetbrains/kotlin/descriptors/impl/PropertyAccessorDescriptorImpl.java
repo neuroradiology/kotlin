@@ -29,12 +29,11 @@ import java.util.Collections;
 import java.util.List;
 
 public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescriptorNonRootImpl implements PropertyAccessorDescriptor {
-
-    private final boolean hasBody;
-    private final boolean isDefault;
+    private boolean isDefault;
     private final boolean isExternal;
     private final Modality modality;
     private final PropertyDescriptor correspondingProperty;
+    private final boolean isInline;
     private final Kind kind;
     private Visibility visibility;
     @Nullable
@@ -46,9 +45,9 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
             @NotNull PropertyDescriptor correspondingProperty,
             @NotNull Annotations annotations,
             @NotNull Name name,
-            boolean hasBody,
             boolean isDefault,
             boolean isExternal,
+            boolean isInline,
             Kind kind,
             @NotNull SourceElement source
     ) {
@@ -56,20 +55,19 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
         this.modality = modality;
         this.visibility = visibility;
         this.correspondingProperty = correspondingProperty;
-        this.hasBody = hasBody;
         this.isDefault = isDefault;
         this.isExternal = isExternal;
+        this.isInline = isInline;
         this.kind = kind;
-    }
-
-    @Override
-    public boolean hasBody() {
-        return hasBody;
     }
 
     @Override
     public boolean isDefault() {
         return isDefault;
+    }
+
+    public void setDefault(boolean aDefault) {
+        isDefault = aDefault;
     }
 
     @NotNull
@@ -95,11 +93,26 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
 
     @Override
     public boolean isInline() {
-        return false;
+        return isInline;
     }
 
     @Override
     public boolean isTailrec() {
+        return false;
+    }
+
+    @Override
+    public boolean isSuspend() {
+        return false;
+    }
+
+    @Override
+    public boolean isExpect() {
+        return false;
+    }
+
+    @Override
+    public boolean isActual() {
         return false;
     }
 
@@ -141,6 +154,12 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
         this.visibility = visibility;
     }
 
+    @NotNull
+    @Override
+    public VariableDescriptorWithAccessors getCorrespondingVariable() {
+        return correspondingProperty;
+    }
+
     @Override
     @NotNull
     public PropertyDescriptor getCorrespondingProperty() {
@@ -157,6 +176,12 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
     @Override
     public ReceiverParameterDescriptor getDispatchReceiverParameter() {
         return getCorrespondingProperty().getDispatchReceiverParameter();
+    }
+
+    @NotNull
+    @Override
+    public CopyBuilder<? extends FunctionDescriptor> newCopyBuilder() {
+        throw new UnsupportedOperationException("Accessors must be copied by the corresponding property");
     }
 
     @NotNull
@@ -205,5 +230,16 @@ public abstract class PropertyAccessorDescriptorImpl extends DeclarationDescript
     @Override
     public boolean isHiddenToOvercomeSignatureClash() {
         return false;
+    }
+
+    @Override
+    public boolean isHiddenForResolutionEverywhereBesideSupercalls() {
+        return false;
+    }
+
+    @Nullable
+    @Override
+    public <V> V getUserData(UserDataKey<V> key) {
+        return null;
     }
 }

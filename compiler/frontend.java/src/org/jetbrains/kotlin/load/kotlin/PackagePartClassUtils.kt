@@ -19,14 +19,11 @@ package org.jetbrains.kotlin.load.kotlin
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.VirtualFile
 import org.jetbrains.annotations.TestOnly
-import org.jetbrains.kotlin.load.java.JvmAbi
+import org.jetbrains.kotlin.idea.KotlinFileType
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.name.NameUtils
 import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.psi.KtNamedFunction
-import org.jetbrains.kotlin.psi.KtProperty
-import org.jetbrains.kotlin.psi.KtScript
-import org.jetbrains.kotlin.resolve.jvm.JvmClassName
 import java.util.*
 
 object PackagePartClassUtils {
@@ -35,19 +32,14 @@ object PackagePartClassUtils {
 
     private val PART_CLASS_NAME_SUFFIX = "Kt"
 
-    @JvmStatic fun getPartClassName(str: String): String =
-            if (str.isEmpty())
-                "_$PART_CLASS_NAME_SUFFIX"
-            else
-                capitalizeAsJavaClassName(JvmAbi.sanitizeAsJavaIdentifier(str)) + PART_CLASS_NAME_SUFFIX
-
-    private @JvmStatic fun capitalizeAsJavaClassName(str: String): String =
+    private @JvmStatic fun decapitalizeAsJavaClassName(str: String): String =
             // NB use Locale.ENGLISH so that build is locale-independent.
             // See Javadoc on java.lang.String.toUpperCase() for more details.
-            if (Character.isJavaIdentifierStart(str[0]))
-                str.substring(0, 1).toUpperCase(Locale.ENGLISH) + str.substring(1)
-            else
-                "_$str"
+            when {
+                Character.isJavaIdentifierStart(str[0]) -> str.substring(0, 1).toLowerCase(Locale.ENGLISH) + str.substring(1)
+                str[0] == '_' -> str.substring(1)
+                else -> str
+            }
 
     @TestOnly
     @JvmStatic fun getDefaultPartFqName(facadeClassFqName: FqName, file: VirtualFile): FqName =
@@ -58,25 +50,16 @@ object PackagePartClassUtils {
         return packageFqName.child(Name.identifier(partClassName))
     }
 
-    @Deprecated("Migrate to JvmFileClassesProvider")
-    @JvmStatic fun getPackagePartInternalName(file: KtFile): String =
-            JvmClassName.byFqNameWithoutInnerClasses(getPackagePartFqName(file)).internalName
-
-    @Deprecated("Migrate to JvmFileClassesProvider")
-    @JvmStatic fun getPackagePartFqName(file: KtFile): FqName =
-            getPackagePartFqName(file.packageFqName, file.name)
-
     @JvmStatic fun getFilesWithCallables(files: Collection<KtFile>): List<KtFile> =
-            files.filter { fileHasTopLevelCallables(it) }
-
-    @JvmStatic fun fileHasTopLevelCallables(file: KtFile): Boolean =
-            file.declarations.any {
-                it is KtProperty ||
-                it is KtNamedFunction ||
-                it is KtScript
-            }
+            files.filter { it.hasTopLevelCallables() }
 
     @JvmStatic fun getFilePartShortName(fileName: String): String =
-            getPartClassName(FileUtil.getNameWithoutExtension(fileName))
+            NameUtils.getPackagePartClassNamePrefix(FileUtil.getNameWithoutExtension(fileName)) + PART_CLASS_NAME_SUFFIX
 
+    @JvmStatic fun getFileNameByFacadeName(facadeClassName: String): String? {
+        if (!facadeClassName.endsWith(PART_CLASS_NAME_SUFFIX)) return null
+        val baseName = facadeClassName.substring(0, facadeClassName.length - PART_CLASS_NAME_SUFFIX.length)
+        if (baseName == "_") return null
+        return "${decapitalizeAsJavaClassName(baseName)}.${KotlinFileType.EXTENSION}"
+    }
 }

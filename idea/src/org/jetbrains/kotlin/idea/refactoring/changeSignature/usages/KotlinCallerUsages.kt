@@ -34,15 +34,14 @@ class KotlinCallerUsage(element: KtNamedDeclaration): KotlinUsageInfo<KtNamedDec
             is KtClass -> element.createPrimaryConstructorParameterListIfAbsent()
             else -> null
         } ?: return true
-        val psiFactory = KtPsiFactory(project)
         changeInfo.getNonReceiverParameters()
-                .withIndex()
-                .filter { it.value.isNewParameter }
+            .asSequence()
+            .withIndex()
+            .filter { it.value.isNewParameter }
+            .toList()
                 .forEach {
-                    val parameterText = it.value.getDeclarationSignature(it.index, changeInfo.methodDescriptor.originalPrimaryCallable)
-                    parameterList
-                            .addParameter(psiFactory.createParameter(parameterText))
-                            .addToShorteningWaitSet()
+                    val newParameter = it.value.getDeclarationSignature(it.index, changeInfo.methodDescriptor.originalPrimaryCallable)
+                    parameterList.addParameter(newParameter).addToShorteningWaitSet()
                 }
 
         return true

@@ -17,24 +17,22 @@
 package org.jetbrains.kotlin.idea.quickfix
 
 import com.intellij.codeInsight.FileModificationService
-import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
-import org.jetbrains.kotlin.psi.KtCodeFragment
 import org.jetbrains.kotlin.psi.KtFile
 
-abstract class KotlinQuickFixAction<T : PsiElement>(protected val element: T) : IntentionAction {
+abstract class KotlinQuickFixAction<out T : PsiElement>(element: T) : QuickFixActionBase<T>(element) {
+    protected open fun isAvailable(project: Project, editor: Editor?, file: KtFile) = true
 
-    override fun isAvailable(project: Project, editor: Editor?, file: PsiFile): Boolean {
-        return element.isValid &&
-               !element.project.isDisposed &&
-               (file.manager.isInProject(file) || file is KtCodeFragment) &&
-               (file is KtFile)
+    override fun isAvailableImpl(project: Project, editor: Editor?, file: PsiFile): Boolean {
+        val ktFile = file as? KtFile ?: return false
+        return isAvailable(project, editor, ktFile)
     }
 
-    override final fun invoke(project: Project, editor: Editor?, file: PsiFile) {
+    final override fun invoke(project: Project, editor: Editor?, file: PsiFile) {
+        val element = element ?: return
         if (file is KtFile && FileModificationService.getInstance().prepareFileForWrite(element.containingFile)) {
             invoke(project, editor, file)
         }

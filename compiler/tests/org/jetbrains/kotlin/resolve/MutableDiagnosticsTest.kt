@@ -16,21 +16,24 @@
 
 package org.jetbrains.kotlin.resolve
 
-import org.junit.Assert
-import org.jetbrains.kotlin.diagnostics.Diagnostic
-import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.resolve.lazy.KotlinTestWithEnvironment
-import org.jetbrains.kotlin.config.CompilerConfiguration
-import org.jetbrains.kotlin.resolve.diagnostics.Diagnostics
-import org.jetbrains.kotlin.resolve.diagnostics.MutableDiagnosticsWithSuppression
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
+import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.diagnostics.DiagnosticFactory
 import org.jetbrains.kotlin.diagnostics.Severity
-import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.psi.KtPsiFactory
+import org.jetbrains.kotlin.psi.doNotAnalyze
+import org.jetbrains.kotlin.resolve.diagnostics.Diagnostics
+import org.jetbrains.kotlin.resolve.diagnostics.MutableDiagnosticsWithSuppression
+import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
+import org.junit.Assert
 
 class MutableDiagnosticsTest : KotlinTestWithEnvironment() {
     override fun createEnvironment(): KotlinCoreEnvironment? {
-        return KotlinCoreEnvironment.createForTests(testRootDisposable!!, CompilerConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES)
+        return KotlinCoreEnvironment.createForTests(
+                testRootDisposable, KotlinTestUtils.newConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES
+        )
     }
 
     private val BindingTrace.diagnostics: Diagnostics

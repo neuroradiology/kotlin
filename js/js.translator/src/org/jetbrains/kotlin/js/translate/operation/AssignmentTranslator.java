@@ -16,28 +16,26 @@
 
 package org.jetbrains.kotlin.js.translate.operation;
 
-import com.google.dart.compiler.backend.js.ast.JsBlock;
-import com.google.dart.compiler.backend.js.ast.JsExpression;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.descriptors.CallableDescriptor;
+import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor;
-import org.jetbrains.kotlin.lexer.KtToken;
-import org.jetbrains.kotlin.psi.KtBinaryExpression;
-import org.jetbrains.kotlin.psi.KtExpression;
-import org.jetbrains.kotlin.psi.KtSimpleNameExpression;
-import org.jetbrains.kotlin.types.expressions.OperatorConventions;
+import org.jetbrains.kotlin.js.backend.ast.JsExpression;
 import org.jetbrains.kotlin.js.translate.context.TranslationContext;
 import org.jetbrains.kotlin.js.translate.general.AbstractTranslator;
 import org.jetbrains.kotlin.js.translate.reference.AccessTranslationUtils;
 import org.jetbrains.kotlin.js.translate.reference.AccessTranslator;
 import org.jetbrains.kotlin.js.translate.reference.BackingFieldAccessTranslator;
+import org.jetbrains.kotlin.lexer.KtToken;
+import org.jetbrains.kotlin.psi.*;
+import org.jetbrains.kotlin.types.expressions.OperatorConventions;
 
-import static org.jetbrains.kotlin.js.translate.utils.BindingUtils.getDescriptorForReferenceExpression;
-import static org.jetbrains.kotlin.js.translate.utils.BindingUtils.isVariableReassignment;
+import static org.jetbrains.kotlin.js.translate.utils.BindingUtils.*;
 import static org.jetbrains.kotlin.js.translate.utils.PsiUtils.getSimpleName;
 import static org.jetbrains.kotlin.js.translate.utils.PsiUtils.isAssignment;
 import static org.jetbrains.kotlin.js.translate.utils.TranslationUtils.hasCorrespondingFunctionIntrinsic;
-import static org.jetbrains.kotlin.js.translate.utils.TranslationUtils.translateRightExpression;
 
 public abstract class AssignmentTranslator extends AbstractTranslator {
 
@@ -46,54 +44,76 @@ public abstract class AssignmentTranslator extends AbstractTranslator {
     }
 
     @NotNull
-    public static JsExpression translate(@NotNull KtBinaryExpression expression,
-                                         @NotNull TranslationContext context) {
+    public static JsExpression translate(@NotNull KtBinaryExpression expression, @NotNull TranslationContext context) {
         if (hasCorrespondingFunctionIntrinsic(context, expression)) {
-            return IntrinsicAssignmentTranslator.doTranslate(expression, context);
+            // This is a hack. This code is conceptually wrong, refactoring required here.
+            // The right implementation is: get assignment via OverloadedAssignmentTranslator and see at the result.
+            // If it's an expression like `a = a + b` then represent it as `a += b`
+            // Another right implementation is: enumerate explicitly which descriptors are OK to intrinsify like this.
+            CallableDescriptor operationDescriptor = getCallableDescriptorForOperationExpression(context.bindingContext(), expression);
+            if (operationDescriptor == null || operationDescriptor.getExtensionReceiverParameter() == null) {
+                return IntrinsicAssignmentTranslator.doTranslate(expression, context);
+            }
         }
         return OverloadedAssignmentTranslator.doTranslate(expression, context);
     }
 
     @NotNull
     protected final KtBinaryExpression expression;
-    protected final AccessTranslator accessTranslator;
     protected final boolean isVariableReassignment;
-    @NotNull
-    protected final JsExpression right;
 
-    protected AssignmentTranslator(@NotNull KtBinaryExpression expression,
-                                   @NotNull TranslationContext context) {
+    protected AssignmentTranslator(@NotNull KtBinaryExpression expression, @NotNull TranslationContext context) {
         super(context);
         this.expression = expression;
         this.isVariableReassignment = isVariableReassignment(context.bindingContext(), expression);
-        KtExpression left = expression.getLeft();
-        assert left != null : "No left-hand side: " + expression.getText();
-
-        JsBlock rightBlock = new JsBlock();
-        this.right = translateRightExpression(context, expression, rightBlock);
-
-        if (isValProperty(left, context)) {
-            KtSimpleNameExpression simpleName = getSimpleName(left);
-            assert simpleName != null;
-            this.accessTranslator = BackingFieldAccessTranslator.newInstance(simpleName, context);
-        } else {
-            this.accessTranslator = AccessTranslationUtils.getAccessTranslator(left, context(), !rightBlock.isEmpty());
-        }
-
-        context.addStatementsToCurrentBlockFrom(rightBlock);
+        assert expression.getLeft() != null : "No left-hand side: " + expression.getText();
     }
 
-    private static boolean isValProperty(
+    protected final AccessTranslator createAccessTranslator(@NotNull KtExpression left, boolean forceOrderOfEvaluation) {
+        if (isReferenceToBackingFieldFromConstructor(left, context())) {
+            KtSimpleNameExpression simpleName = getSimpleName(left);
+            assert simpleName != null;
+            return BackingFieldAccessTranslator.newInstance(simpleName, context());
+        }
+        else {
+            return AccessTranslationUtils.getAccessTranslator(left, context(), forceOrderOfEvaluation);
+        }
+    }
+
+    private static boolean isReferenceToBackingFieldFromConstructor(
             @NotNull KtExpression expression,
             @NotNull TranslationContext context
     ) {
-        KtSimpleNameExpression simpleNameExpression = getSimpleName(expression);
-
-        if (simpleNameExpression != null) {
-            DeclarationDescriptor descriptor = getDescriptorForReferenceExpression(context.bindingContext(), simpleNameExpression);
-            return descriptor instanceof PropertyDescriptor && !((PropertyDescriptor) descriptor).isVar();
+        if (expression instanceof KtSimpleNameExpression) {
+            KtSimpleNameExpression nameExpression = (KtSimpleNameExpression) expression;
+            DeclarationDescriptor descriptor = getDescriptorForReferenceExpression(context.bindingContext(), nameExpression);
+            return isReferenceToBackingFieldFromConstructor(descriptor, context);
         }
-
+        else if (expression instanceof KtDotQualifiedExpression) {
+            KtDotQualifiedExpression qualifiedExpression = (KtDotQualifiedExpression) expression;
+            if (qualifiedExpression.getReceiverExpression() instanceof KtThisExpression &&
+                qualifiedExpression.getSelectorExpression() instanceof KtSimpleNameExpression
+            ) {
+                KtSimpleNameExpression nameExpression = (KtSimpleNameExpression) qualifiedExpression.getSelectorExpression();
+                DeclarationDescriptor descriptor = getDescriptorForReferenceExpression(context.bindingContext(), nameExpression);
+                return isReferenceToBackingFieldFromConstructor(descriptor, context);
+            }
+        }
         return false;
+    }
+
+    private static boolean isReferenceToBackingFieldFromConstructor(
+            @Nullable DeclarationDescriptor descriptor,
+            @NotNull TranslationContext context
+    ) {
+        if (!(descriptor instanceof PropertyDescriptor)) return false;
+
+        PropertyDescriptor propertyDescriptor = (PropertyDescriptor) descriptor;
+        if (!(context.getDeclarationDescriptor() instanceof ClassDescriptor)) return false;
+
+        ClassDescriptor classDescriptor = (ClassDescriptor) context.getDeclarationDescriptor();
+        if (classDescriptor != propertyDescriptor.getContainingDeclaration()) return false;
+
+        return !propertyDescriptor.isVar();
     }
 }

@@ -15,15 +15,52 @@ internal class A {
     private var field9: String? = "a"
     private var field10: String? = foo()
 
+    private val anonymous: I = object : I {
+
+    }
+
+    var anonymous2: I = object : I {
+
+    }
+
+    private var anonymous3: I = object : I {
+
+    }
+
+    private var iimpl = anonymous
+
     fun foo(): String {
         return "x"
     }
 
     fun bar() {
-        field5 = ArrayList<String>()
+        field5 = ArrayList()
         field7++
         field8++
         field9 = null
         field10 = null
+    }
+
+    internal interface I
+
+    fun testAnonymousObject(i: Any) {
+        if (true) {
+            iimpl = i as I
+        } else if (true) {
+            anonymous3 = i as I
+        }
+
+        val anonymousLocal1: I = object : I {
+
+        }
+
+        var anonymousLocal2: I = object : I {
+
+        }
+
+        val iimpl = anonymousLocal1
+        if (true) {
+            anonymousLocal2 = i as I
+        }
     }
 }

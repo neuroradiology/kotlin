@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,54 +17,56 @@
 package org.jetbrains.kotlin.resolve.calls
 
 import com.google.common.collect.Lists
-import com.google.common.collect.Sets
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.builtins.ReflectionTypes
 import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptor
 import org.jetbrains.kotlin.diagnostics.Errors
-import org.jetbrains.kotlin.diagnostics.Errors.SUPER_CANT_BE_EXTENSION_RECEIVER
+import org.jetbrains.kotlin.diagnostics.Errors.*
 import org.jetbrains.kotlin.progress.ProgressIndicatorAndCompilationCanceledStatus
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.resolve.*
-import org.jetbrains.kotlin.resolve.callableReferences.getReflectionTypeForCandidateDescriptor
 import org.jetbrains.kotlin.resolve.calls.CallTransformer.CallForImplicitInvoke
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.ResolveArgumentsMode
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.ResolveArgumentsMode.SHAPE_FUNCTION_ARGUMENTS
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.getEffectiveExpectedType
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.getErasedReceiverType
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.isInvokeCallOnExpressionWithBothReceivers
-import org.jetbrains.kotlin.resolve.calls.callUtil.isExplicitSafeCall
 import org.jetbrains.kotlin.resolve.calls.callUtil.isSafeCall
 import org.jetbrains.kotlin.resolve.calls.checkers.AdditionalTypeChecker
 import org.jetbrains.kotlin.resolve.calls.context.*
 import org.jetbrains.kotlin.resolve.calls.inference.SubstitutionFilteringInternalResolveAnnotations
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatchStatus
 import org.jetbrains.kotlin.resolve.calls.model.MutableResolvedCall
-import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
 import org.jetbrains.kotlin.resolve.calls.results.ResolutionStatus
 import org.jetbrains.kotlin.resolve.calls.results.ResolutionStatus.*
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactory
 import org.jetbrains.kotlin.resolve.calls.smartcasts.SmartCastManager
+import org.jetbrains.kotlin.resolve.calls.smartcasts.getReceiverValueWithSmartCast
 import org.jetbrains.kotlin.resolve.calls.util.FakeCallableDescriptorForObject
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.Receiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.TypeUtils.noExpectedType
+import org.jetbrains.kotlin.types.checker.ErrorTypesAreEqualToAnything
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
+import org.jetbrains.kotlin.types.expressions.DoubleColonExpressionResolver
+import org.jetbrains.kotlin.types.typeUtil.containsTypeProjectionsInTopLevelArguments
+import org.jetbrains.kotlin.types.typeUtil.makeNotNullable
 import java.util.*
 
 class CandidateResolver(
-        private val argumentTypeResolver: ArgumentTypeResolver,
-        private val genericCandidateResolver: GenericCandidateResolver,
-        private val reflectionTypes: ReflectionTypes,
-        private val additionalTypeCheckers: Iterable<AdditionalTypeChecker>,
-        private val smartCastManager: SmartCastManager
+    private val argumentTypeResolver: ArgumentTypeResolver,
+    private val genericCandidateResolver: GenericCandidateResolver,
+    private val reflectionTypes: ReflectionTypes,
+    private val additionalTypeCheckers: Iterable<AdditionalTypeChecker>,
+    private val smartCastManager: SmartCastManager,
+    private val dataFlowValueFactory: DataFlowValueFactory
 ) {
-
-    fun <D : CallableDescriptor, F : D> performResolutionForCandidateCall(
-            context: CallCandidateResolutionContext<D>,
-            checkArguments: CheckArgumentTypesMode
+    fun <D : CallableDescriptor> performResolutionForCandidateCall(
+        context: CallCandidateResolutionContext<D>,
+        checkArguments: CheckArgumentTypesMode
     ): Unit = with(context) {
         ProgressIndicatorAndCompilationCanceledStatus.checkCanceled()
 
@@ -79,7 +81,7 @@ class CandidateResolver(
         }
 
         if (!context.isDebuggerContext) {
-            checkVisibility()
+            checkVisibilityWithoutReceiver()
         }
 
         when (checkArguments) {
@@ -97,132 +99,162 @@ class CandidateResolver(
         checkValueArguments()
 
         checkAbstractAndSuper()
-        checkNonExtensionCalledWithReceiver()
+        checkConstructedExpandedType()
     }
 
     private fun CallCandidateResolutionContext<*>.checkValueArguments() = checkAndReport {
-        if (call.getTypeArguments().isEmpty()
+        if (call.typeArguments.isEmpty()
             && !candidateDescriptor.typeParameters.isEmpty()
-            && candidateCall.getKnownTypeParametersSubstitutor() == null
+            && candidateCall.knownTypeParametersSubstitutor == null
         ) {
             genericCandidateResolver.inferTypeArguments(this)
-        }
-        else {
+        } else {
             checkAllValueArguments(this, SHAPE_FUNCTION_ARGUMENTS).status
         }
     }
 
     private fun CallCandidateResolutionContext<*>.processTypeArguments() = check {
-        val jetTypeArguments = call.getTypeArguments()
+        val ktTypeArguments = call.typeArguments
         if (candidateCall.knownTypeParametersSubstitutor != null) {
             candidateCall.setResultingSubstitutor(candidateCall.knownTypeParametersSubstitutor!!)
-        }
-        else if (!jetTypeArguments.isEmpty()) {
+        } else if (ktTypeArguments.isNotEmpty()) {
             // Explicit type arguments passed
 
             val typeArguments = ArrayList<KotlinType>()
-            for (projection in jetTypeArguments) {
+            for (projection in ktTypeArguments) {
                 val type = projection.typeReference?.let { trace.bindingContext.get(BindingContext.TYPE, it) }
                         ?: ErrorUtils.createErrorType("Star projection in a call")
                 typeArguments.add(type)
             }
 
             val expectedTypeArgumentCount = candidateDescriptor.typeParameters.size
-            for (index in jetTypeArguments.size..expectedTypeArgumentCount - 1) {
-                typeArguments.add(ErrorUtils.createErrorType(
-                        "Explicit type argument expected for " + candidateDescriptor.typeParameters.get(index).name))
+            for (index in ktTypeArguments.size..expectedTypeArgumentCount - 1) {
+                typeArguments.add(
+                    ErrorUtils.createErrorType(
+                        "Explicit type argument expected for " + candidateDescriptor.typeParameters[index].name
+                    )
+                )
             }
             val substitution = FunctionDescriptorUtil.createSubstitution(candidateDescriptor as FunctionDescriptor, typeArguments)
             val substitutor = TypeSubstitutor.create(SubstitutionFilteringInternalResolveAnnotations(substitution))
 
-            if (expectedTypeArgumentCount != jetTypeArguments.size) {
-                candidateCall.addStatus(OTHER_ERROR)
-                tracing.wrongNumberOfTypeArguments(trace, expectedTypeArgumentCount)
-            }
-            else {
-                checkGenericBoundsInAFunctionCall(jetTypeArguments, typeArguments, candidateDescriptor, substitutor, trace)
+            if (expectedTypeArgumentCount != ktTypeArguments.size) {
+                candidateCall.addStatus(WRONG_NUMBER_OF_TYPE_ARGUMENTS_ERROR)
+                tracing.wrongNumberOfTypeArguments(trace, expectedTypeArgumentCount, candidateDescriptor)
+            } else {
+                checkGenericBoundsInAFunctionCall(ktTypeArguments, typeArguments, candidateDescriptor, substitutor, trace)
             }
 
             candidateCall.setResultingSubstitutor(substitutor)
         }
     }
 
-    private fun <D : CallableDescriptor, F : D> CallCandidateResolutionContext<D>.mapArguments()
-            = check {
-                val argumentMappingStatus = ValueArgumentsToParametersMapper.mapValueArgumentsToParameters(
-                        call, tracing, candidateCall, Sets.newLinkedHashSet<ValueArgument>())
-                if (!argumentMappingStatus.isSuccess) {
-                    candidateCall.addStatus(ARGUMENTS_MAPPING_ERROR)
-                }
-            }
+    private fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.mapArguments() = check {
+        val argumentMappingStatus = ValueArgumentsToParametersMapper.mapValueArgumentsToParameters(
+            call, tracing, candidateCall
+        )
+        if (!argumentMappingStatus.isSuccess) {
+            candidateCall.addStatus(ARGUMENTS_MAPPING_ERROR)
+        }
+    }
 
-    private fun <D : CallableDescriptor, F : D> CallCandidateResolutionContext<D>.checkExpectedCallableType()
-            = check {
-                if (!noExpectedType(expectedType)) {
-                    val candidate = candidateCall.getCandidateDescriptor()
-                    val candidateReflectionType = getReflectionTypeForCandidateDescriptor(candidate, reflectionTypes);
-                    if (candidateReflectionType != null) {
-                        if (!KotlinTypeChecker.DEFAULT.isSubtypeOf(candidateReflectionType, expectedType)) {
-                            candidateCall.addStatus(OTHER_ERROR)
-                        }
-                    }
-                    else {
-                        candidateCall.addStatus(OTHER_ERROR)
-                    }
-                }
+    private fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.checkExpectedCallableType() = check {
+        if (!noExpectedType(expectedType)) {
+            val candidateKCallableType = DoubleColonExpressionResolver.createKCallableTypeForReference(
+                candidateCall.candidateDescriptor,
+                (call.callElement.parent as? KtCallableReferenceExpression)?.receiverExpression?.let {
+                    trace.bindingContext.get(BindingContext.DOUBLE_COLON_LHS, it)
+                },
+                reflectionTypes, scope.ownerDescriptor
+            )
+            if (candidateKCallableType == null ||
+                !canBeSubtype(candidateKCallableType, expectedType, candidateCall.candidateDescriptor.typeParameters)) {
+                candidateCall.addStatus(OTHER_ERROR)
             }
+        }
+    }
 
-    private fun CallCandidateResolutionContext<*>.checkVisibility() = checkAndReport {
-        val invisibleMember = Visibilities.findInvisibleMember(candidateCall.dispatchReceiver, candidateDescriptor, scope.ownerDescriptor)
-        if (invisibleMember != null) {
+    private fun canBeSubtype(subType: KotlinType, superType: KotlinType, candidateTypeParameters: List<TypeParameterDescriptor>): Boolean {
+        // Here we need to check that there exists a substitution from type parameters (used in types in candidate signature)
+        // to arguments such that substituted candidateKCallableType would be a subtype of expectedType.
+        // It looks like in general this can only be decided by constructing a constraint system and checking
+        // if it has a contradiction. Currently we use a heuristic that may not work ideally in all cases.
+        // TODO: use constraint system to check if candidateKCallableType can be a subtype of expectedType
+        val substituteDontCare = makeConstantSubstitutor(candidateTypeParameters, TypeUtils.DONT_CARE)
+        val subTypeSubstituted = substituteDontCare.substitute(subType, Variance.INVARIANT) ?: return true
+        return ErrorTypesAreEqualToAnything.isSubtypeOf(subTypeSubstituted, superType)
+    }
+
+    private fun CallCandidateResolutionContext<*>.checkVisibilityWithoutReceiver() = checkAndReport {
+        checkVisibilityWithDispatchReceiver(Visibilities.ALWAYS_SUITABLE_RECEIVER, null)
+    }
+
+    private fun CallCandidateResolutionContext<*>.checkVisibilityWithDispatchReceiver(
+        receiverArgument: ReceiverValue?,
+        smartCastType: KotlinType?
+    ): ResolutionStatus {
+        val invisibleMember = Visibilities.findInvisibleMember(
+            getReceiverValueWithSmartCast(receiverArgument, smartCastType), candidateDescriptor, scope.ownerDescriptor
+        )
+        return if (invisibleMember != null) {
             tracing.invisibleMember(trace, invisibleMember)
-            OTHER_ERROR
+            INVISIBLE_MEMBER_ERROR
         } else {
             SUCCESS
         }
     }
 
+    private fun CallCandidateResolutionContext<*>.isCandidateVisibleOrExtensionReceiver(
+        receiverArgument: ReceiverValue?,
+        smartCastType: KotlinType?,
+        isDispatchReceiver: Boolean
+    ) = !isDispatchReceiver || isCandidateVisible(receiverArgument, smartCastType)
+
+    private fun CallCandidateResolutionContext<*>.isCandidateVisible(
+        receiverArgument: ReceiverValue?,
+        smartCastType: KotlinType?
+    ) = Visibilities.findInvisibleMember(
+        getReceiverValueWithSmartCast(receiverArgument, smartCastType),
+        candidateDescriptor, scope.ownerDescriptor
+    ) == null
+
     private fun CallCandidateResolutionContext<*>.checkExtensionReceiver() = checkAndReport {
-        val receiverParameter = candidateCall.getCandidateDescriptor().extensionReceiverParameter
-        val receiverArgument = candidateCall.getExtensionReceiver()
+        val receiverParameter = candidateCall.candidateDescriptor.extensionReceiverParameter
+        val receiverArgument = candidateCall.extensionReceiver
         if (receiverParameter != null && receiverArgument == null) {
-            tracing.missingReceiver(candidateCall.getTrace(), receiverParameter)
+            tracing.missingReceiver(candidateCall.trace, receiverParameter)
             OTHER_ERROR
-        }
-        else if (receiverParameter == null && receiverArgument != null) {
-            tracing.noReceiverAllowed(candidateCall.getTrace())
-            if (call.getCalleeExpression() is KtSimpleNameExpression) {
+        } else if (receiverParameter == null && receiverArgument != null) {
+            tracing.noReceiverAllowed(candidateCall.trace)
+            if (call.calleeExpression is KtSimpleNameExpression) {
                 RECEIVER_PRESENCE_ERROR
-            }
-            else {
+            } else {
                 OTHER_ERROR
             }
-        }
-        else {
+        } else {
             SUCCESS
         }
     }
 
     private fun CallCandidateResolutionContext<*>.checkDispatchReceiver() = checkAndReport {
         val candidateDescriptor = candidateDescriptor
-        val dispatchReceiver = candidateCall.getDispatchReceiver()
+        val dispatchReceiver = candidateCall.dispatchReceiver
         if (dispatchReceiver != null) {
             var nestedClass: ClassDescriptor? = null
-            if (candidateDescriptor is ConstructorDescriptor
+            if (candidateDescriptor is ClassConstructorDescriptor
                 && DescriptorUtils.isStaticNestedClass(candidateDescriptor.containingDeclaration)
             ) {
                 nestedClass = candidateDescriptor.containingDeclaration
-            }
-            else if (candidateDescriptor is FakeCallableDescriptorForObject) {
-                nestedClass = candidateDescriptor.getReferencedDescriptor()
+            } else if (candidateDescriptor is FakeCallableDescriptorForObject) {
+                nestedClass = candidateDescriptor.getReferencedObject()
             }
             if (nestedClass != null) {
-                tracing.nestedClassAccessViaInstanceReference(trace, nestedClass, candidateCall.getExplicitReceiverKind())
+                tracing.nestedClassAccessViaInstanceReference(trace, nestedClass, candidateCall.explicitReceiverKind)
                 return@checkAndReport OTHER_ERROR
             }
         }
 
-        assert((dispatchReceiver != null) == (candidateCall.getResultingDescriptor().dispatchReceiverParameter != null)) {
+        assert((dispatchReceiver != null) == (candidateCall.resultingDescriptor.dispatchReceiverParameter != null)) {
             "Shouldn't happen because of TaskPrioritizer: $candidateDescriptor"
         }
 
@@ -230,30 +262,37 @@ class CandidateResolver(
     }
 
     private fun checkOuterClassMemberIsAccessible(context: CallCandidateResolutionContext<*>): Boolean {
-        // In "this@Outer.foo()" the error will be reported on "this@Outer" instead
-        if (context.call.getExplicitReceiver() != null || context.call.getDispatchReceiver() != null) return true
 
-        val candidateThis = getDeclaringClass(context.candidateCall.getCandidateDescriptor())
+        fun KtElement.insideScript() = (containingFile as? KtFile)?.isScript() ?: false
+
+        // context.scope doesn't contains outer class implicit receiver if we inside nested class
+        // Outer scope for some class in script file is scopeForInitializerResolution see: DeclarationScopeProviderImpl.getResolutionScopeForDeclaration
+        if (!context.call.callElement.insideScript()) return true
+
+        // In "this@Outer.foo()" the error will be reported on "this@Outer" instead
+        if (context.call.explicitReceiver != null || context.call.dispatchReceiver != null) return true
+
+        val candidateThis = getDeclaringClass(context.candidateCall.candidateDescriptor)
         if (candidateThis == null || candidateThis.kind.isSingleton) return true
 
-        return DescriptorResolver.checkHasOuterClassInstance(context.scope, context.trace, context.call.getCallElement(), candidateThis)
+        return DescriptorResolver.checkHasOuterClassInstance(context.scope, context.trace, context.call.callElement, candidateThis)
     }
 
     private fun CallCandidateResolutionContext<*>.checkAbstractAndSuper() = check {
         val descriptor = candidateDescriptor
-        val expression = candidateCall.getCall().getCalleeExpression()
+        val expression = candidateCall.call.calleeExpression
 
         if (expression is KtSimpleNameExpression) {
             // 'B' in 'class A: B()' is JetConstructorCalleeExpression
             if (descriptor is ConstructorDescriptor) {
-                val modality = descriptor.containingDeclaration.modality
+                val modality = descriptor.constructedClass.modality
                 if (modality == Modality.ABSTRACT) {
                     tracing.instantiationOfAbstractClass(trace)
                 }
             }
         }
 
-        val superDispatchReceiver = getReceiverSuper(candidateCall.getDispatchReceiver())
+        val superDispatchReceiver = getReceiverSuper(candidateCall.dispatchReceiver)
         if (superDispatchReceiver != null) {
             if (descriptor is MemberDescriptor && descriptor.modality == Modality.ABSTRACT) {
                 tracing.abstractSuperCall(trace)
@@ -263,26 +302,22 @@ class CandidateResolver(
 
         // 'super' cannot be passed as an argument, for receiver arguments expression typer does not track this
         // See TaskPrioritizer for more
-        val superExtensionReceiver = getReceiverSuper(candidateCall.getExtensionReceiver())
+        val superExtensionReceiver = getReceiverSuper(candidateCall.extensionReceiver)
         if (superExtensionReceiver != null) {
-            trace.report(SUPER_CANT_BE_EXTENSION_RECEIVER.on(superExtensionReceiver, superExtensionReceiver.getText()))
+            trace.report(SUPER_CANT_BE_EXTENSION_RECEIVER.on(superExtensionReceiver, superExtensionReceiver.text))
             candidateCall.addStatus(OTHER_ERROR)
         }
     }
 
-    private fun CallCandidateResolutionContext<*>.checkNonExtensionCalledWithReceiver() = checkAndReport {
-        val call = candidateCall.call
-        if (call is CallTransformer.CallForImplicitInvoke && candidateCall.extensionReceiver != null
-                && candidateCall.dispatchReceiver != null
-        ) {
-            if (call.dispatchReceiver == candidateCall.dispatchReceiver
-                    && !KotlinBuiltIns.isExactExtensionFunctionType(call.dispatchReceiver.type)
-            ) {
-                tracing.nonExtensionFunctionCalledAsExtension(trace)
-                return@checkAndReport OTHER_ERROR
+    private fun CallCandidateResolutionContext<*>.checkConstructedExpandedType() = check {
+        val descriptor = candidateDescriptor
+
+        if (descriptor is TypeAliasConstructorDescriptor) {
+            if (descriptor.returnType.containsTypeProjectionsInTopLevelArguments()) {
+                trace.report(EXPANDED_TYPE_CANNOT_BE_CONSTRUCTED.on(call.callElement, descriptor.returnType))
+                candidateCall.addStatus(OTHER_ERROR)
             }
         }
-        SUCCESS
     }
 
     private fun getReceiverSuper(receiver: Receiver?): KtSuperExpression? {
@@ -302,8 +337,9 @@ class CandidateResolver(
     }
 
     fun <D : CallableDescriptor> checkAllValueArguments(
-            context: CallCandidateResolutionContext<D>,
-            resolveFunctionArgumentBodies: ResolveArgumentsMode): ValueArgumentsCheckingResult {
+        context: CallCandidateResolutionContext<D>,
+        resolveFunctionArgumentBodies: ResolveArgumentsMode
+    ): ValueArgumentsCheckingResult {
         val checkingResult = checkValueArgumentTypes(context, context.candidateCall, resolveFunctionArgumentBodies)
         var resultStatus = checkingResult.status
         resultStatus = resultStatus.combine(checkReceivers(context))
@@ -312,25 +348,21 @@ class CandidateResolver(
     }
 
     private fun <D : CallableDescriptor, C : CallResolutionContext<C>> checkValueArgumentTypes(
-            context: CallResolutionContext<C>,
-            candidateCall: MutableResolvedCall<D>,
-            resolveFunctionArgumentBodies: ResolveArgumentsMode): ValueArgumentsCheckingResult {
+        context: CallResolutionContext<C>,
+        candidateCall: MutableResolvedCall<D>,
+        resolveFunctionArgumentBodies: ResolveArgumentsMode
+    ): ValueArgumentsCheckingResult {
         var resultStatus = SUCCESS
         val argumentTypes = Lists.newArrayList<KotlinType>()
-        val infoForArguments = candidateCall.getDataFlowInfoForArguments()
-        for (entry in candidateCall.getValueArguments().entries) {
-            val parameterDescriptor = entry.key
-            val resolvedArgument = entry.value
-
-
+        val infoForArguments = candidateCall.dataFlowInfoForArguments
+        for ((parameterDescriptor, resolvedArgument) in candidateCall.valueArguments) {
             for (argument in resolvedArgument.arguments) {
                 val expression = argument.getArgumentExpression() ?: continue
 
-                val expectedType = getEffectiveExpectedType(parameterDescriptor, argument)
+                val expectedType = getEffectiveExpectedType(parameterDescriptor, argument, context)
 
                 val newContext = context.replaceDataFlowInfo(infoForArguments.getInfo(argument)).replaceExpectedType(expectedType)
-                val typeInfoForCall = argumentTypeResolver.getArgumentTypeInfo(
-                        expression, newContext, resolveFunctionArgumentBodies)
+                val typeInfoForCall = argumentTypeResolver.getArgumentTypeInfo(expression, newContext, resolveFunctionArgumentBodies)
                 val type = typeInfoForCall.type
                 infoForArguments.updateInfo(argument, typeInfoForCall.dataFlowInfo)
 
@@ -338,28 +370,28 @@ class CandidateResolver(
                 var resultingType: KotlinType? = type
                 if (type == null || (type.isError && !type.isFunctionPlaceholder)) {
                     matchStatus = ArgumentMatchStatus.ARGUMENT_HAS_NO_TYPE
-                }
-                else if (!noExpectedType(expectedType)) {
+                } else if (!noExpectedType(expectedType)) {
                     if (!ArgumentTypeResolver.isSubtypeOfForArgumentType(type, expectedType)) {
                         val smartCast = smartCastValueArgumentTypeIfPossible(expression, newContext.expectedType, type, newContext)
                         if (smartCast == null) {
-                            resultStatus = OTHER_ERROR
+                            resultStatus = tryNotNullableArgument(type, expectedType) ?: OTHER_ERROR
                             matchStatus = ArgumentMatchStatus.TYPE_MISMATCH
-                        }
-                        else {
+                        } else {
                             resultingType = smartCast
                         }
-                    }
-                    else if (ErrorUtils.containsUninferredParameter(expectedType)) {
+                    } else if (ErrorUtils.containsUninferredParameter(expectedType)) {
                         matchStatus = ArgumentMatchStatus.MATCH_MODULO_UNINFERRED_TYPES
                     }
 
                     val spreadElement = argument.getSpreadElement()
                     if (spreadElement != null && !type.isFlexible() && type.isMarkedNullable) {
-                        val dataFlowValue = DataFlowValueFactory.createDataFlowValue(expression, type, context)
-                        val smartCastResult = SmartCastManager.checkAndRecordPossibleCast(dataFlowValue, expectedType, expression, context, null, false)
+                        val dataFlowValue = dataFlowValueFactory.createDataFlowValue(expression, type, context)
+                        val smartCastResult = SmartCastManager.checkAndRecordPossibleCast(
+                            dataFlowValue, expectedType, expression, context,
+                            call = null, recordExpressionType = false
+                        )
                         if (smartCastResult == null || !smartCastResult.isCorrect) {
-                            context.trace.report(Errors.SPREAD_OF_NULLABLE.on(spreadElement));
+                            context.trace.report(Errors.SPREAD_OF_NULLABLE.on(spreadElement))
                         }
                     }
                 }
@@ -371,18 +403,24 @@ class CandidateResolver(
     }
 
     private fun smartCastValueArgumentTypeIfPossible(
-            expression: KtExpression,
-            expectedType: KotlinType,
-            actualType: KotlinType,
-            context: ResolutionContext<*>): KotlinType? {
+        expression: KtExpression,
+        expectedType: KotlinType,
+        actualType: KotlinType,
+        context: ResolutionContext<*>
+    ): KotlinType? {
         val receiverToCast = ExpressionReceiver.create(KtPsiUtil.safeDeparenthesize(expression), actualType, context.trace.bindingContext)
         val variants = smartCastManager.getSmartCastVariantsExcludingReceiver(context, receiverToCast)
-        for (possibleType in variants) {
-            if (KotlinTypeChecker.DEFAULT.isSubtypeOf(possibleType, expectedType)) {
-                return possibleType
-            }
+        return variants.firstOrNull { possibleType ->
+            KotlinTypeChecker.DEFAULT.isSubtypeOf(possibleType, expectedType)
         }
-        return null
+    }
+
+    private fun tryNotNullableArgument(argumentType: KotlinType, parameterType: KotlinType): ResolutionStatus? {
+        if (!argumentType.isMarkedNullable || parameterType.isMarkedNullable) return null
+
+        val notNullableArgumentType = argumentType.makeNotNullable()
+        val isApplicable = ArgumentTypeResolver.isSubtypeOfForArgumentType(notNullableArgumentType, parameterType)
+        return if (isApplicable) NULLABLE_ARGUMENT_TYPE_MISMATCH else null
     }
 
     private fun CallCandidateResolutionContext<*>.checkReceiverTypeError(): Unit = check {
@@ -392,22 +430,20 @@ class CandidateResolver(
         // For the expressions like '42.(f)()' where f: String.() -> Unit we'd like to generate a type mismatch error on '1',
         // not to throw away the candidate, so the following check is skipped.
         if (!isInvokeCallOnExpressionWithBothReceivers(call)) {
-            val callExtensionReceiver = candidateCall.extensionReceiver
-            assert(callExtensionReceiver is ReceiverValue?) { "Expected ReceiverValue, got $callExtensionReceiver" }
-            checkReceiverTypeError(extensionReceiver, callExtensionReceiver as ReceiverValue?)
+            checkReceiverTypeError(extensionReceiver, candidateCall.extensionReceiver)
         }
-        checkReceiverTypeError(dispatchReceiver, candidateCall.getDispatchReceiver())
+        checkReceiverTypeError(dispatchReceiver, candidateCall.dispatchReceiver)
     }
 
     private fun CallCandidateResolutionContext<*>.checkReceiverTypeError(
-            receiverParameterDescriptor: ReceiverParameterDescriptor?,
-            receiverArgument: ReceiverValue?
+        receiverParameterDescriptor: ReceiverParameterDescriptor?,
+        receiverArgument: ReceiverValue?
     ) = checkAndReport {
         if (receiverParameterDescriptor == null || receiverArgument == null) return@checkAndReport SUCCESS
 
         val erasedReceiverType = getErasedReceiverType(receiverParameterDescriptor, candidateDescriptor)
 
-        if (!smartCastManager.isSubTypeBySmartCastIgnoringNullability(receiverArgument, erasedReceiverType, this)) {
+        if (smartCastManager.getSmartCastReceiverResult(receiverArgument, erasedReceiverType, this) == null) {
             RECEIVER_TYPE_ERROR
         } else {
             SUCCESS
@@ -423,63 +459,89 @@ class CandidateResolver(
         // both 'b' (receiver) and 'foo' (this object) might be nullable. In the first case we mark dot, in the second 'foo'.
         // Class 'CallForImplicitInvoke' helps up to recognise this case, and parameter 'implicitInvokeCheck' helps us to distinguish whether we check receiver or this object.
 
-        resultStatus = resultStatus.combine(context.checkReceiver(
+        resultStatus = resultStatus.combine(
+            context.checkReceiver(
                 candidateCall,
-                candidateCall.getResultingDescriptor().extensionReceiverParameter,
-                candidateCall.extensionReceiver as ReceiverValue?,
-                candidateCall.getExplicitReceiverKind().isExtensionReceiver, false))
+                candidateCall.resultingDescriptor.extensionReceiverParameter,
+                candidateCall.extensionReceiver,
+                candidateCall.explicitReceiverKind.isExtensionReceiver,
+                implicitInvokeCheck = false, isDispatchReceiver = false
+            )
+        )
 
-        resultStatus = resultStatus.combine(context.checkReceiver(candidateCall,
-                                                                  candidateCall.getResultingDescriptor().dispatchReceiverParameter, candidateCall.getDispatchReceiver(),
-                                                                  candidateCall.getExplicitReceiverKind().isDispatchReceiver,
+        resultStatus = resultStatus.combine(
+            context.checkReceiver(
+                candidateCall,
+                candidateCall.resultingDescriptor.dispatchReceiverParameter, candidateCall.dispatchReceiver,
+                candidateCall.explicitReceiverKind.isDispatchReceiver,
                 // for the invocation 'foo(1)' where foo is a variable of function type we should mark 'foo' if there is unsafe call error
-                                                                  context.call is CallForImplicitInvoke))
+                implicitInvokeCheck = context.call is CallForImplicitInvoke,
+                isDispatchReceiver = true
+            )
+        )
+
+        if (!context.isDebuggerContext
+            && candidateCall.dispatchReceiver != null
+            // Do not report error if it's already reported when checked without receiver
+            && context.isCandidateVisible(receiverArgument = Visibilities.ALWAYS_SUITABLE_RECEIVER, smartCastType = null)) {
+            resultStatus = resultStatus.combine(
+                context.checkVisibilityWithDispatchReceiver(
+                    candidateCall.dispatchReceiver, candidateCall.smartCastDispatchReceiverType
+                )
+            )
+        }
+
         return resultStatus
     }
 
     private fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.checkReceiver(
-            candidateCall: MutableResolvedCall<D>,
-            receiverParameter: ReceiverParameterDescriptor?,
-            receiverArgument: ReceiverValue?,
-            isExplicitReceiver: Boolean,
-            implicitInvokeCheck: Boolean): ResolutionStatus {
+        candidateCall: MutableResolvedCall<D>,
+        receiverParameter: ReceiverParameterDescriptor?,
+        receiverArgument: ReceiverValue?,
+        isExplicitReceiver: Boolean,
+        implicitInvokeCheck: Boolean,
+        isDispatchReceiver: Boolean
+    ): ResolutionStatus {
         if (receiverParameter == null || receiverArgument == null) return SUCCESS
         val candidateDescriptor = candidateCall.candidateDescriptor
         if (TypeUtils.dependsOnTypeParameters(receiverParameter.type, candidateDescriptor.typeParameters)) return SUCCESS
 
-        val isSubtypeBySmartCastIgnoringNullability = smartCastManager.isSubTypeBySmartCastIgnoringNullability(
-                receiverArgument, receiverParameter.type, this)
-
-        if (!isSubtypeBySmartCastIgnoringNullability) {
-            tracing.wrongReceiverType(
-                    trace, receiverParameter, receiverArgument,
-                    this.replaceCallPosition(CallPosition.ExtensionReceiverPosition(candidateCall)))
-            return OTHER_ERROR
-        }
-
         // Here we know that receiver is OK ignoring nullability and check that nullability is OK too
         // Doing it simply as full subtyping check (receiverValueType <: receiverParameterType)
         val call = candidateCall.call
-        val safeAccess = isExplicitReceiver && !implicitInvokeCheck && call.isExplicitSafeCall()
+        val safeAccess = isExplicitReceiver && !implicitInvokeCheck && call.isSemanticallyEquivalentToSafeCall
         val expectedReceiverParameterType = if (safeAccess) TypeUtils.makeNullable(receiverParameter.type) else receiverParameter.type
-        val smartCastNeeded = !ArgumentTypeResolver.isSubtypeOfForArgumentType(receiverArgument.type, expectedReceiverParameterType)
+
+        val smartCastSubtypingResult = smartCastManager.getSmartCastReceiverResult(receiverArgument, expectedReceiverParameterType, this)
+        if (smartCastSubtypingResult == null) {
+            tracing.wrongReceiverType(
+                trace, receiverParameter, receiverArgument,
+                this.replaceCallPosition(CallPosition.ExtensionReceiverPosition(candidateCall))
+            )
+            return OTHER_ERROR
+        }
+
+        val notNullReceiverExpected = smartCastSubtypingResult != SmartCastManager.ReceiverSmartCastResult.OK
+        val smartCastNeeded =
+            notNullReceiverExpected || !isCandidateVisibleOrExtensionReceiver(receiverArgument, null, isDispatchReceiver)
         var reportUnsafeCall = false
 
-        val dataFlowValue = DataFlowValueFactory.createDataFlowValue(receiverArgument, this)
-        val nullability = dataFlowInfo.getPredictableNullability(dataFlowValue)
         var nullableImplicitInvokeReceiver = false
         var receiverArgumentType = receiverArgument.type
         if (implicitInvokeCheck && call is CallForImplicitInvoke && call.isSafeCall()) {
             val outerCallReceiver = call.outerCall.explicitReceiver
             if (outerCallReceiver != call.explicitReceiver && outerCallReceiver is ReceiverValue) {
-                val outerReceiverDataFlowValue = DataFlowValueFactory.createDataFlowValue(outerCallReceiver, this)
-                val outerReceiverNullability = dataFlowInfo.getPredictableNullability(outerReceiverDataFlowValue)
+                val outerReceiverDataFlowValue = dataFlowValueFactory.createDataFlowValue(outerCallReceiver, this)
+                val outerReceiverNullability = dataFlowInfo.getStableNullability(outerReceiverDataFlowValue)
                 if (outerReceiverNullability.canBeNull() && !TypeUtils.isNullableType(expectedReceiverParameterType)) {
                     nullableImplicitInvokeReceiver = true
                     receiverArgumentType = TypeUtils.makeNullable(receiverArgumentType)
                 }
             }
         }
+
+        val dataFlowValue = dataFlowValueFactory.createDataFlowValue(receiverArgument, this)
+        val nullability = dataFlowInfo.getStableNullability(dataFlowValue)
         val expression = (receiverArgument as? ExpressionReceiver)?.expression
         if (nullability.canBeNull() && !nullability.canBeNonNull()) {
             if (!TypeUtils.isNullableType(expectedReceiverParameterType)) {
@@ -488,22 +550,28 @@ class CandidateResolver(
             if (dataFlowValue.immanentNullability.canBeNonNull()) {
                 expression?.let { trace.record(BindingContext.SMARTCAST_NULL, it) }
             }
-        }
-        else if (!nullableImplicitInvokeReceiver && smartCastNeeded) {
+        } else if (!nullableImplicitInvokeReceiver && smartCastNeeded) {
             // Look if smart cast has some useful nullability info
 
             val smartCastResult = SmartCastManager.checkAndRecordPossibleCast(
-                    dataFlowValue, expectedReceiverParameterType, expression, this, candidateCall.call.calleeExpression, /*recordType =*/true
+                dataFlowValue, expectedReceiverParameterType,
+                { possibleSmartCast -> isCandidateVisibleOrExtensionReceiver(receiverArgument, possibleSmartCast, isDispatchReceiver) },
+                expression, this, candidateCall.call, recordExpressionType = true
             )
 
             if (smartCastResult == null) {
-                reportUnsafeCall = true
-            }
-            else {
-                candidateCall.setSmartCastDispatchReceiverType(smartCastResult.resultType)
+                if (notNullReceiverExpected) {
+                    reportUnsafeCall = true
+                }
+            } else {
+                if (isDispatchReceiver) {
+                    candidateCall.setSmartCastDispatchReceiverType(smartCastResult.resultType)
+                } else {
+                    candidateCall.updateExtensionReceiverWithSmartCastIfNeeded(smartCastResult.resultType)
+                }
                 if (!smartCastResult.isCorrect) {
                     // Error about unstable smart cast reported within checkAndRecordPossibleCast
-                    return OTHER_ERROR
+                    return UNSTABLE_SMARTCAST_FOR_RECEIVER_ERROR
                 }
             }
         }
@@ -520,39 +588,155 @@ class CandidateResolver(
 
     inner class ValueArgumentsCheckingResult(val status: ResolutionStatus, val argumentTypes: List<KotlinType>)
 
-    private fun checkGenericBoundsInAFunctionCall(
-            jetTypeArguments: List<KtTypeProjection>,
-            typeArguments: List<KotlinType>,
-            functionDescriptor: CallableDescriptor,
-            substitutor: TypeSubstitutor,
-            trace: BindingTrace) {
+    private fun CallCandidateResolutionContext<*>.checkGenericBoundsInAFunctionCall(
+        ktTypeArguments: List<KtTypeProjection>,
+        typeArguments: List<KotlinType>,
+        functionDescriptor: CallableDescriptor,
+        substitutor: TypeSubstitutor,
+        trace: BindingTrace
+    ) {
+        if (functionDescriptor is TypeAliasConstructorDescriptor) {
+            checkGenericBoundsInTypeAliasConstructorCall(ktTypeArguments, functionDescriptor, substitutor, trace)
+            return
+        }
+
         val typeParameters = functionDescriptor.typeParameters
-        for (i in 0..Math.min(typeParameters.size, jetTypeArguments.size) - 1) {
-            val typeParameterDescriptor = typeParameters.get(i)
-            val typeArgument = typeArguments.get(i)
-            val typeReference = jetTypeArguments.get(i).getTypeReference()
+        for (i in 0..Math.min(typeParameters.size, ktTypeArguments.size) - 1) {
+            val typeParameterDescriptor = typeParameters[i]
+            val typeArgument = typeArguments[i]
+            val typeReference = ktTypeArguments[i].typeReference
             if (typeReference != null) {
                 DescriptorResolver.checkBounds(typeReference, typeArgument, typeParameterDescriptor, substitutor, trace)
             }
         }
     }
 
-    private fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.shouldContinue() =
-            candidateResolveMode == CandidateResolveMode.FULLY || candidateCall.getStatus().possibleTransformToSuccess()
+    private class TypeAliasSingleStepExpansionReportStrategy(
+        private val callElement: KtElement,
+        typeAlias: TypeAliasDescriptor,
+        ktTypeArguments: List<KtTypeProjection>,
+        private val trace: BindingTrace
+    ) : TypeAliasExpansionReportStrategy {
+        init {
+            assert(!typeAlias.expandedType.isError) { "Incorrect type alias: $typeAlias" }
+        }
 
-    private inline fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.check(
-            checker: CallCandidateResolutionContext<D>.() -> Unit
-    ) {
-        if (shouldContinue()) checker()
+        private val argumentsMapping = typeAlias.declaredTypeParameters.zip(ktTypeArguments).toMap()
+
+        override fun wrongNumberOfTypeArguments(typeAlias: TypeAliasDescriptor, numberOfParameters: Int) {
+            // can't happen in single-step expansion
+        }
+
+        override fun conflictingProjection(
+            typeAlias: TypeAliasDescriptor,
+            typeParameter: TypeParameterDescriptor?,
+            substitutedArgument: KotlinType
+        ) {
+            // can't happen in single-step expansion
+        }
+
+        override fun recursiveTypeAlias(typeAlias: TypeAliasDescriptor) {
+            // can't happen in single-step expansion
+        }
+
+        override fun repeatedAnnotation(annotation: AnnotationDescriptor) {
+            // can't happen in single-step expansion
+        }
+
+        override fun boundsViolationInSubstitution(
+            bound: KotlinType,
+            unsubstitutedArgument: KotlinType,
+            argument: KotlinType,
+            typeParameter: TypeParameterDescriptor
+        ) {
+            val descriptorForUnsubstitutedArgument = unsubstitutedArgument.constructor.declarationDescriptor
+            val argumentElement = argumentsMapping[descriptorForUnsubstitutedArgument]
+            val argumentTypeReferenceElement = argumentElement?.typeReference
+            if (argumentTypeReferenceElement != null) {
+                trace.report(UPPER_BOUND_VIOLATED.on(argumentTypeReferenceElement, bound, argument))
+            } else {
+                trace.report(UPPER_BOUND_VIOLATED_IN_TYPEALIAS_EXPANSION.on(callElement, bound, argument, typeParameter))
+            }
+        }
     }
 
-    private inline fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.
-            checkAndReport(checker: CallCandidateResolutionContext<D>.() -> ResolutionStatus) {
-        if (shouldContinue()) {
+    private fun CallCandidateResolutionContext<*>.checkGenericBoundsInTypeAliasConstructorCall(
+        ktTypeArguments: List<KtTypeProjection>,
+        typeAliasConstructorDescriptor: TypeAliasConstructorDescriptor,
+        typeAliasParametersSubstitutor: TypeSubstitutor,
+        trace: BindingTrace
+    ) {
+        val substitutedType = typeAliasParametersSubstitutor.substitute(typeAliasConstructorDescriptor.returnType, Variance.INVARIANT)!!
+        val boundsSubstitutor = TypeSubstitutor.create(substitutedType)
+
+        val typeAliasDescriptor = typeAliasConstructorDescriptor.containingDeclaration
+
+        val unsubstitutedType = typeAliasDescriptor.expandedType
+        if (unsubstitutedType.isError) return
+
+        val reportStrategy = TypeAliasSingleStepExpansionReportStrategy(call.callElement, typeAliasDescriptor, ktTypeArguments, trace)
+
+        // TODO refactor TypeResolver
+        //  - perform full type alias expansion
+        //  - provide type alias expansion stack in diagnostics
+
+        checkTypeInTypeAliasSubstitutionRec(reportStrategy, unsubstitutedType, typeAliasParametersSubstitutor, boundsSubstitutor)
+    }
+
+
+    private fun checkTypeInTypeAliasSubstitutionRec(
+        reportStrategy: TypeAliasExpansionReportStrategy,
+        unsubstitutedType: KotlinType,
+        typeAliasParametersSubstitutor: TypeSubstitutor,
+        boundsSubstitutor: TypeSubstitutor
+    ) {
+        // TODO refactor TypeResolver
+        val typeParameters = unsubstitutedType.constructor.parameters
+
+        // TODO do not perform substitution for type arguments multiple times
+        val substitutedTypeArguments = typeAliasParametersSubstitutor.safeSubstitute(unsubstitutedType, Variance.INVARIANT).arguments
+
+        for (i in 0..Math.min(typeParameters.size, substitutedTypeArguments.size) - 1) {
+            val substitutedTypeProjection = substitutedTypeArguments[i]
+            if (substitutedTypeProjection.isStarProjection) continue
+
+            val typeParameter = typeParameters[i]
+            val substitutedTypeArgument = substitutedTypeProjection.type
+            val unsubstitutedTypeArgument = unsubstitutedType.arguments[i].type
+            DescriptorResolver.checkBoundsInTypeAlias(
+                reportStrategy,
+                unsubstitutedTypeArgument,
+                substitutedTypeArgument,
+                typeParameter,
+                boundsSubstitutor
+            )
+
+            checkTypeInTypeAliasSubstitutionRec(
+                reportStrategy,
+                unsubstitutedTypeArgument,
+                typeAliasParametersSubstitutor,
+                boundsSubstitutor
+            )
+        }
+    }
+
+    private fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.shouldContinue() =
+        candidateResolveMode == CandidateResolveMode.FULLY || candidateCall.status.possibleTransformToSuccess()
+
+    private inline fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.check(
+        crossinline checker: CallCandidateResolutionContext<D>.() -> Unit
+    ) {
+        if (shouldContinue()) checker() else candidateCall.addRemainingTasks { checker() }
+    }
+
+    private inline fun <D : CallableDescriptor> CallCandidateResolutionContext<D>.checkAndReport(
+        crossinline checker: CallCandidateResolutionContext<D>.() -> ResolutionStatus
+    ) {
+        check {
             candidateCall.addStatus(checker())
         }
     }
 
-    private val CallCandidateResolutionContext<*>.candidateDescriptor: CallableDescriptor get() = candidateCall.getCandidateDescriptor()
-
+    private val CallCandidateResolutionContext<*>.candidateDescriptor: CallableDescriptor
+        get() = candidateCall.candidateDescriptor
 }

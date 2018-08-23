@@ -18,10 +18,12 @@ package org.jetbrains.kotlin.idea.core
 
 import com.intellij.openapi.util.text.StringUtil
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.lexer.KotlinLexer
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getOutermostParenthesizerOrThis
+import org.jetbrains.kotlin.psi.psiUtil.isIdentifier
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.callUtil.getParentResolvedCall
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatch
@@ -104,6 +106,7 @@ object KotlinNameSuggester {
     }
 
     private val COMMON_TYPE_PARAMETER_NAMES = listOf("T", "U", "V", "W", "X", "Y", "Z")
+    private val MAX_NUMBER_OF_SUGGESTED_NAME_CHECKS = 1000
 
     fun suggestNamesForTypeParameters(count: Int, validator: (String) -> Boolean): List<String> {
         val result = ArrayList<String>()
@@ -111,6 +114,27 @@ object KotlinNameSuggester {
             result.add(suggestNameByMultipleNames(COMMON_TYPE_PARAMETER_NAMES, validator))
         }
         return result
+    }
+
+    fun suggestTypeAliasNameByPsi(typeElement: KtTypeElement, validator: (String) -> Boolean): String {
+        fun KtTypeElement.render(): String {
+            return when (this) {
+                is KtNullableType -> "Nullable${innerType?.render() ?: ""}"
+                is KtFunctionType -> {
+                    val arguments = listOf(receiverTypeReference).filterNotNull() + parameters.mapNotNull { it.typeReference }
+                    val argText = arguments.joinToString(separator = "") { it.typeElement?.render() ?: "" }
+                    val returnText = returnTypeReference?.typeElement?.render() ?: "Unit"
+                    "${argText}To$returnText"
+                }
+                is KtUserType -> {
+                    val argText = typeArguments.joinToString(separator = "") { it.typeReference?.typeElement?.render() ?: "" }
+                    "$argText${referenceExpression?.text ?: ""}"
+                }
+                else -> text.capitalize()
+            }
+        }
+
+        return suggestNameByName(typeElement.render(), validator)
     }
 
     /**
@@ -121,7 +145,7 @@ object KotlinNameSuggester {
     fun suggestNameByName(name: String, validator: (String) -> Boolean): String {
         if (validator(name)) return name
         var i = 1
-        while (!validator(name + i)) {
+        while (i <= MAX_NUMBER_OF_SUGGESTED_NAME_CHECKS && !validator(name + i)) {
             ++i
         }
 
@@ -151,79 +175,45 @@ object KotlinNameSuggester {
         val typeChecker = KotlinTypeChecker.DEFAULT
         if (ErrorUtils.containsErrorType(type)) return
 
-        if (typeChecker.equalTypes(builtIns.booleanType, type)) {
-            addName("b", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.intType, type)) {
-            addName("i", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.byteType, type)) {
-            addName("byte", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.longType, type)) {
-            addName("l", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.floatType, type)) {
-            addName("fl", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.doubleType, type)) {
-            addName("d", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.shortType, type)) {
-            addName("sh", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.charType, type)) {
-            addName("c", validator)
-        }
-        else if (typeChecker.equalTypes(builtIns.stringType, type)) {
-            addName("s", validator)
-        }
-        else if (KotlinBuiltIns.isArray(type) || KotlinBuiltIns.isPrimitiveArray(type)) {
-            val elementType = builtIns.getArrayElementType(type)
-            if (typeChecker.equalTypes(builtIns.booleanType, elementType)) {
-                addName("booleans", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.intType, elementType)) {
-                addName("ints", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.byteType, elementType)) {
-                addName("bytes", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.longType, elementType)) {
-                addName("longs", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.floatType, elementType)) {
-                addName("floats", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.doubleType, elementType)) {
-                addName("doubles", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.shortType, elementType)) {
-                addName("shorts", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.charType, elementType)) {
-                addName("chars", validator)
-            }
-            else if (typeChecker.equalTypes(builtIns.stringType, elementType)) {
-                addName("strings", validator)
-            }
-            else {
-                val classDescriptor = TypeUtils.getClassDescriptor(elementType)
-                if (classDescriptor != null) {
-                    val className = classDescriptor.name
-                    addName("arrayOf" + StringUtil.capitalize(className.asString()) + "s", validator)
+        when {
+            typeChecker.equalTypes(builtIns.booleanType, type) -> addName("b", validator)
+            typeChecker.equalTypes(builtIns.intType, type) -> addName("i", validator)
+            typeChecker.equalTypes(builtIns.byteType, type) -> addName("byte", validator)
+            typeChecker.equalTypes(builtIns.longType, type) -> addName("l", validator)
+            typeChecker.equalTypes(builtIns.floatType, type) -> addName("fl", validator)
+            typeChecker.equalTypes(builtIns.doubleType, type) -> addName("d", validator)
+            typeChecker.equalTypes(builtIns.shortType, type) -> addName("sh", validator)
+            typeChecker.equalTypes(builtIns.charType, type) -> addName("c", validator)
+            typeChecker.equalTypes(builtIns.stringType, type) -> addName("s", validator)
+            KotlinBuiltIns.isArray(type) || KotlinBuiltIns.isPrimitiveArray(type) -> {
+                val elementType = builtIns.getArrayElementType(type)
+                when {
+                    typeChecker.equalTypes(builtIns.booleanType, elementType) -> addName("booleans", validator)
+                    typeChecker.equalTypes(builtIns.intType, elementType) -> addName("ints", validator)
+                    typeChecker.equalTypes(builtIns.byteType, elementType) -> addName("bytes", validator)
+                    typeChecker.equalTypes(builtIns.longType, elementType) -> addName("longs", validator)
+                    typeChecker.equalTypes(builtIns.floatType, elementType) -> addName("floats", validator)
+                    typeChecker.equalTypes(builtIns.doubleType, elementType) -> addName("doubles", validator)
+                    typeChecker.equalTypes(builtIns.shortType, elementType) -> addName("shorts", validator)
+                    typeChecker.equalTypes(builtIns.charType, elementType) -> addName("chars", validator)
+                    typeChecker.equalTypes(builtIns.stringType, elementType) -> addName("strings", validator)
+                    else -> {
+                        val classDescriptor = TypeUtils.getClassDescriptor(elementType)
+                        if (classDescriptor != null) {
+                            val className = classDescriptor.name
+                            addName("arrayOf" + StringUtil.capitalize(className.asString()) + "s", validator)
+                        }
+                    }
                 }
             }
-        }
-        else if (KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(type)) {
-            addName("function", validator)
-        }
-        else {
-            val descriptor = type.constructor.declarationDescriptor
-            if (descriptor != null) {
-                val className = descriptor.name
-                if (!className.isSpecial) {
-                    addCamelNames(className.asString(), validator)
+            type.isFunctionType -> addName("function", validator)
+            else -> {
+                val descriptor = type.constructor.declarationDescriptor
+                if (descriptor != null) {
+                    val className = descriptor.name
+                    if (!className.isSpecial) {
+                        addCamelNames(className.asString(), validator)
+                    }
                 }
             }
         }
@@ -238,7 +228,7 @@ object KotlinNameSuggester {
     }
 
     private fun MutableCollection<String>.addCamelNames(name: String, validator: (String) -> Boolean, startLowerCase: Boolean = true) {
-        if (name === "") return
+        if (name === "" || !name.unquote().isIdentifier()) return
         var s = extractIdentifiers(name)
 
         for (prefix in ACCESSOR_PREFIXES) {
@@ -324,20 +314,10 @@ object KotlinNameSuggester {
     private fun MutableCollection<String>.addName(name: String?, validator: (String) -> Boolean) {
         if (name == null) return
         val correctedName = when {
-            isIdentifier(name) -> name
+            name.isIdentifier() -> name
             name == "class" -> "clazz"
             else -> return
         }
         add(suggestNameByName(correctedName, validator))
-    }
-
-    fun isIdentifier(name: String?): Boolean {
-        if (name == null || name.isEmpty()) return false
-
-        val lexer = KotlinLexer()
-        lexer.start(name, 0, name.length)
-        if (lexer.tokenType !== KtTokens.IDENTIFIER) return false
-        lexer.advance()
-        return lexer.tokenType == null
     }
 }

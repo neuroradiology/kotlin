@@ -76,13 +76,13 @@ fun KtElement.renderTrimmed(): String {
         }
 
         override fun visitPrefixExpression(expression: KtPrefixExpression) {
-            builder.append("${expression.operationReference.getReferencedName()}")
+            builder.append(expression.operationReference.getReferencedName())
             expression.baseExpression?.accept(this)
         }
 
         override fun visitPostfixExpression(expression: KtPostfixExpression) {
             expression.baseExpression?.accept(this)
-            builder.append("${expression.operationReference.getReferencedName()}")
+            builder.append(expression.operationReference.getReferencedName())
         }
 
         override fun visitBinaryExpression(expression: KtBinaryExpression) {
@@ -122,17 +122,6 @@ fun KtElement.renderTrimmed(): String {
             expression.receiverExpression.accept(this)
             builder.append(expression.operationTokenNode.text)
             expression.selectorExpression?.accept(this)
-        }
-
-        override fun visitClassLiteralExpression(expression: KtClassLiteralExpression) {
-            expression.typeReference?.accept(this)
-            builder.append("::class")
-        }
-
-        override fun visitCallableReferenceExpression(expression: KtCallableReferenceExpression) {
-            expression.typeReference?.accept(this)
-            builder.append("::")
-            builder.append(expression.callableReference.getReferencedName())
         }
 
         override fun visitThisExpression(expression: KtThisExpression) {
@@ -209,7 +198,7 @@ fun KtElement.renderTrimmed(): String {
 
         override fun visitForExpression(expression: KtForExpression) {
             builder.append("for (")
-            (expression.loopParameter ?: expression.destructuringParameter)?.accept(this)
+            (expression.loopParameter ?: expression.destructuringDeclaration)?.accept(this)
             builder.append(" in ")
             expression.loopRange?.accept(this)
             builder.append(")")
@@ -253,7 +242,7 @@ fun KtElement.renderTrimmed(): String {
                 it.accept(this)
             }
             function.name?.let { builder.append(" $it") }
-            function.valueParameters.mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
+            function.valueParameters.asSequence().mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
             function.equalsToken?.let { builder.append(" = ") }
             function.bodyExpression?.accept(this)
         }
@@ -266,12 +255,12 @@ fun KtElement.renderTrimmed(): String {
         }
 
         override fun visitPrimaryConstructor(constructor: KtPrimaryConstructor) {
-            constructor.valueParameters.mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
+            constructor.valueParameters.asSequence().mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
         }
 
         override fun visitSecondaryConstructor(constructor: KtSecondaryConstructor) {
             builder.append("constructor")
-            constructor.valueParameters.mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
+            constructor.valueParameters.asSequence().mapNotNull { it.typeReference }.joinTo(builder, prefix = "(", postfix = ")")
             constructor.bodyExpression?.accept(this)
         }
 

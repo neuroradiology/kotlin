@@ -18,13 +18,57 @@ package org.jetbrains.kotlin.gradle.plugin
 
 import org.gradle.api.Project
 import org.gradle.api.tasks.compile.AbstractCompile
+import java.io.File
 
-public class SubpluginOption(val key: String, val value: String)
+open class SubpluginOption(val key: String, val value: String)
 
-public interface KotlinGradleSubplugin {
-    public fun isApplicable(project: Project, task: AbstractCompile): Boolean
-    public fun getExtraArguments(project: Project, task: AbstractCompile): List<SubpluginOption>
-    public fun getPluginName(): String
-    public fun getGroupName(): String
-    public fun getArtifactName(): String
+class FilesSubpluginOption(
+        key: String,
+        val files: List<File>,
+        val kind: FilesOptionKind = FilesOptionKind.INTERNAL,
+        value: String = files.joinToString(File.pathSeparator) { it.canonicalPath })
+    : SubpluginOption(key, value)
+
+class CompositeSubpluginOption(
+        key: String,
+        value: String,
+        val originalOptions: List<SubpluginOption>)
+    : SubpluginOption(key, value)
+
+/** Defines how the files option should be handled with regard to Gradle model */
+enum class FilesOptionKind {
+    /** The files option is an implementation detail and should not be treated as an input or an output.  */
+    INTERNAL
+
+    // More options might be added when use cases appear for them,
+    // such as output directories, inputs or classpath options.
 }
+
+/** Defines a subplugin option that should be excluded from Gradle input/output checks */
+open class InternalSubpluginOption(key: String, value: String) : SubpluginOption(key, value)
+
+interface KotlinGradleSubplugin<in KotlinCompile : AbstractCompile> {
+    fun isApplicable(project: Project, task: AbstractCompile): Boolean
+
+    fun apply(
+        project: Project,
+        kotlinCompile: KotlinCompile,
+        javaCompile: AbstractCompile?,
+        variantData: Any?,
+        androidProjectHandler: Any?,
+        kotlinCompilation: KotlinCompilation?
+    ): List<SubpluginOption>
+
+    fun getSubpluginKotlinTasks(
+            project: Project,
+            kotlinCompile: KotlinCompile
+    ): List<AbstractCompile> = emptyList()
+
+    fun getCompilerPluginId(): String
+
+    fun getPluginArtifact(): SubpluginArtifact
+}
+
+open class SubpluginArtifact(val groupId: String, val artifactId: String, val version: String? = null)
+
+class JetBrainsSubpluginArtifact(artifactId: String) : SubpluginArtifact(groupId = "org.jetbrains.kotlin", artifactId = artifactId)

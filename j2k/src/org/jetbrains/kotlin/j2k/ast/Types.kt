@@ -52,12 +52,12 @@ abstract class MayBeNullableType(nullability: Nullability, val settings: Convert
         get() = if (isNullable) "?" else ""
 }
 
-abstract class NotNullType() : Type() {
+abstract class NotNullType : Type() {
     override val isNullable: Boolean
         get() = false
 }
 
-abstract class Type() : Element() {
+abstract class Type : Element() {
     abstract val isNullable: Boolean
 
     open fun toNotNullType(): Type = this
@@ -100,6 +100,8 @@ class ClassType(val referenceElement: ReferenceElement, nullability: Nullability
 
     override fun toNotNullType(): Type = ClassType(referenceElement, Nullability.NotNull, settings).assignPrototypesFrom(this)
     override fun toNullableType(): Type = ClassType(referenceElement, Nullability.Nullable, settings).assignPrototypesFrom(this)
+
+    fun isAnonymous() = referenceElement.name.isEmpty
 }
 
 class ArrayType(val elementType: Type, nullability: Nullability, settings: ConverterSettings)
@@ -130,7 +132,7 @@ class OutProjectionType(val bound: Type) : NotNullType() {
     }
 }
 
-class StarProjectionType() : NotNullType() {
+class StarProjectionType : NotNullType() {
     override fun generateCode(builder: CodeBuilder) {
         builder.append("*")
     }

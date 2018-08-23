@@ -3,19 +3,22 @@
 */
 
 modifiers
-  : modifier*
+  : (modifier | annotations)*
+  ;
+
+typeModifiers
+  : (suspendModifier | annotations)*
   ;
 
 modifier
-  : modifierKeyword
-  ;
-
-modifierKeyword
   : classModifier
   : accessModifier
   : varianceAnnotation
   : memberModifier
-  : annotations
+  : parameterModifier
+  : typeParameterModifier
+  : functionModifier
+  : propertyModifier
   ;
 
 classModifier
@@ -24,6 +27,8 @@ classModifier
   : "enum"
   : "open"
   : "annotation"
+  : "sealed"
+  : "data"
   ;
 
 memberModifier
@@ -31,6 +36,7 @@ memberModifier
   : "open"
   : "final"
   : "abstract"
+  : "lateinit"
   ;
 
 accessModifier
@@ -43,4 +49,31 @@ accessModifier
 varianceAnnotation
   : "in"
   : "out"
+  ;
+
+parameterModifier
+  : "noinline"
+  : "crossinline"
+  : "vararg"
+  ;
+
+typeParameterModifier
+  : "reified"
+  ;
+
+functionModifier
+  : "tailrec"
+  : "operator"
+  : "infix"
+  : "inline"
+  : "external"
+  : suspendModifier
+  ;
+
+propertyModifier
+  : "const"
+  ;
+
+suspendModifier
+  : "suspend"
   ;

@@ -16,29 +16,33 @@
 
 package org.jetbrains.kotlin.idea.refactoring.introduce.extractionEngine
 
+import com.intellij.codeHighlighting.HighlightDisplayLevel
 import com.intellij.openapi.util.Key
+import com.intellij.profile.codeInspection.ProjectInspectionProfileManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.codeStyle.CodeStyleManager
 import com.intellij.psi.search.LocalSearchScope
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.refactoring.BaseRefactoringProcessor
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.Visibilities
 import org.jetbrains.kotlin.idea.core.*
-import org.jetbrains.kotlin.idea.refactoring.isMultiLine
-import org.jetbrains.kotlin.idea.refactoring.removeTemplateEntryBracesIfPossible
-import org.jetbrains.kotlin.idea.intentions.ConvertToExpressionBodyIntention
+import org.jetbrains.kotlin.idea.inspections.PublicApiImplicitTypeInspection
+import org.jetbrains.kotlin.idea.inspections.UseExpressionBodyInspection
 import org.jetbrains.kotlin.idea.intentions.InfixCallToOrdinaryIntention
 import org.jetbrains.kotlin.idea.intentions.OperatorToFunctionIntention
 import org.jetbrains.kotlin.idea.intentions.RemoveExplicitTypeArgumentsIntention
 import org.jetbrains.kotlin.idea.refactoring.introduce.*
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractionEngine.OutputValue.*
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractionEngine.OutputValueBoxer.AsTuple
+import org.jetbrains.kotlin.idea.refactoring.isMultiLine
+import org.jetbrains.kotlin.idea.refactoring.removeTemplateEntryBracesIfPossible
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
-import org.jetbrains.kotlin.idea.util.ShortenReferences
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.*
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.UnificationResult.StronglyMatched
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.UnificationResult.WeaklyMatched
+import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.KtPsiFactory.CallableBuilder
 import org.jetbrains.kotlin.psi.codeFragmentUtil.DEBUG_TYPE_REFERENCE_STRING
@@ -49,6 +53,7 @@ import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.calls.callUtil.getCalleeExpressionIfAny
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.isError
 import org.jetbrains.kotlin.types.isFlexible
 import org.jetbrains.kotlin.types.typeUtil.builtIns
 import java.util.*
@@ -65,13 +70,32 @@ private fun buildSignature(config: ExtractionGeneratorConfiguration, renderer: D
         else -> CallableBuilder.Target.READ_ONLY_PROPERTY
     }
     return CallableBuilder(builderTarget).apply {
-        modifier(config.descriptor.visibility)
+        val visibility = config.descriptor.visibility?.value ?: ""
+
+        fun TypeParameter.isReified() = originalDeclaration.hasModifier(KtTokens.REIFIED_KEYWORD)
+        val shouldBeInline = config.descriptor.typeParameters.any { it.isReified() }
+
+        val extraModifiers = config.descriptor.modifiers.map { it.value } +
+                listOfNotNull(if (shouldBeInline) KtTokens.INLINE_KEYWORD.value else null)
+        val modifiers = if (visibility.isNotEmpty()) listOf(visibility) + extraModifiers else extraModifiers
+        modifier(modifiers.joinToString(separator = " "))
 
         typeParams(
                 config.descriptor.typeParameters.map {
                     val typeParameter = it.originalDeclaration
                     val bound = typeParameter.extendsBound
-                    typeParameter.name + (bound?.let { " : " + it.text } ?: "")
+
+                    buildString {
+                        if (it.isReified()) {
+                            append(KtTokens.REIFIED_KEYWORD.value)
+                            append(' ')
+                        }
+                        append(typeParameter.name)
+                        if (bound != null) {
+                            append(" : ")
+                            append(bound.text)
+                        }
+                    }
                 }
         )
 
@@ -86,15 +110,14 @@ private fun buildSignature(config: ExtractionGeneratorConfiguration, renderer: D
         config.descriptor.receiverParameter?.let {
             val receiverType = it.getParameterType(config.descriptor.extractionData.options.allowSpecialClassNames)
             val receiverTypeAsString = receiverType.typeAsString()
-            val isFunctionType = KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(receiverType)
-            receiver(if (isFunctionType) "($receiverTypeAsString)" else receiverTypeAsString)
+            receiver(if (receiverType.isFunctionType) "($receiverTypeAsString)" else receiverTypeAsString)
         }
 
         name(config.generatorOptions.dummyName ?: config.descriptor.name)
 
         config.descriptor.parameters.forEach { parameter ->
             param(parameter.name,
-                       parameter.getParameterType(config.descriptor.extractionData.options.allowSpecialClassNames).typeAsString())
+                  parameter.getParameterType(config.descriptor.extractionData.options.allowSpecialClassNames).typeAsString())
         }
 
         with(config.descriptor.returnType) {
@@ -112,9 +135,7 @@ private fun buildSignature(config: ExtractionGeneratorConfiguration, renderer: D
 fun ExtractionGeneratorConfiguration.getSignaturePreview(renderer: DescriptorRenderer) = buildSignature(this, renderer).asString()
 
 fun ExtractionGeneratorConfiguration.getDeclarationPattern(
-        descriptorRenderer: DescriptorRenderer = if (generatorOptions.flexibleTypesAllowed)
-                                                    DescriptorRenderer.FLEXIBLE_TYPES_FOR_CODE
-                                                 else IdeDescriptorRenderers.SOURCE_CODE
+        descriptorRenderer: DescriptorRenderer = IdeDescriptorRenderers.SOURCE_CODE
 ): String {
     val extractionTarget = generatorOptions.target
     if (!extractionTarget.isAvailable(descriptor)) {
@@ -269,11 +290,11 @@ private fun makeCall(
     anchor.nextSibling?.let { from ->
         val to = rangeToReplace.endElement
         if (to != anchor) {
-            anchorParent.deleteChildRange(from, to);
+            anchorParent.deleteChildRange(from, to)
         }
     }
 
-    val calleeName = declaration.name
+    val calleeName = declaration.name?.quoteIfNeeded()
     val callText = when (declaration) {
         is KtNamedFunction -> {
             val argumentsText = arguments.joinToString(separator = ", ", prefix = "(", postfix = ")")
@@ -303,7 +324,7 @@ private fun makeCall(
 
             val entries = declarationsToMerge.map { p -> p.name + (p.typeReference?.let { ": ${it.text}" } ?: "") }
             anchorInBlock?.replace(
-                    psiFactory.createDeclaration("${if (isVar) "var" else "val"} (${entries.joinToString()}) = $callText")
+                    psiFactory.createDestructuringDeclaration("${if (isVar) "var" else "val"} (${entries.joinToString()}) = $callText")
             )
 
             return
@@ -339,7 +360,7 @@ private fun makeCall(
         return when (outputValue) {
             is OutputValue.ExpressionValue -> {
                 val exprText = if (outputValue.callSiteReturn) {
-                    val firstReturn = outputValue.originalExpressions.filterIsInstance<KtReturnExpression>().firstOrNull()
+                    val firstReturn = outputValue.originalExpressions.asSequence().filterIsInstance<KtReturnExpression>().firstOrNull()
                     val label = firstReturn?.getTargetLabel()?.text ?: ""
                     "return$label $callText"
                 }
@@ -355,16 +376,12 @@ private fun makeCall(
                 )
 
             is Jump -> {
-                if (outputValue.elementToInsertAfterCall == null) {
-                    Collections.singletonList(psiFactory.createExpression(callText))
-                }
-                else if (outputValue.conditional) {
-                    Collections.singletonList(
+                when {
+                    outputValue.elementToInsertAfterCall == null -> Collections.singletonList(psiFactory.createExpression(callText))
+                    outputValue.conditional -> Collections.singletonList(
                             psiFactory.createExpression("if ($callText) ${outputValue.elementToInsertAfterCall.text}")
                     )
-                }
-                else {
-                    listOf(
+                    else -> listOf(
                             psiFactory.createExpression(callText),
                             newLine,
                             psiFactory.createExpression(outputValue.elementToInsertAfterCall.text!!)
@@ -374,7 +391,7 @@ private fun makeCall(
 
             is Initializer -> {
                 val newProperty = copiedDeclarations[outputValue.initializedDeclaration] as KtProperty
-                newProperty.setInitializer(psiFactory.createExpression(callText))
+                newProperty.initializer = psiFactory.createExpression(callText)
                 Collections.emptyList()
             }
 
@@ -410,10 +427,10 @@ private fun makeCall(
 }
 
 private var KtExpression.isJumpElementToReplace: Boolean
-        by NotNullableCopyableUserDataProperty(Key.create("IS_JUMP_ELEMENT_TO_REPLACE"), false)
+        by NotNullablePsiCopyableUserDataProperty(Key.create("IS_JUMP_ELEMENT_TO_REPLACE"), false)
 
 private var KtReturnExpression.isReturnForLabelRemoval: Boolean
-        by NotNullableCopyableUserDataProperty(Key.create("IS_RETURN_FOR_LABEL_REMOVAL"), false)
+        by NotNullablePsiCopyableUserDataProperty(Key.create("IS_RETURN_FOR_LABEL_REMOVAL"), false)
 
 fun ExtractionGeneratorConfiguration.generateDeclaration(
         declarationToReplace: KtNamedDeclaration? = null
@@ -457,6 +474,29 @@ fun ExtractionGeneratorConfiguration.generateDeclaration(
         descriptor.controlFlow.defaultOutputValue?.let {
             val boxedExpression = replaced(replacingExpression).returnedExpression!!
             descriptor.controlFlow.outputValueBoxer.extractExpressionByValue(boxedExpression, it)
+        }
+    }
+
+    fun getPublicApiInspectionIfEnabled(): PublicApiImplicitTypeInspection? {
+        val project = descriptor.extractionData.project
+        val inspectionProfileManager = ProjectInspectionProfileManager.getInstance(project)
+        val inspectionProfile = inspectionProfileManager.currentProfile
+        val state = inspectionProfile.getToolsOrNull("PublicApiImplicitType", project)?.defaultState ?: return null
+        if (!state.isEnabled || state.level == HighlightDisplayLevel.DO_NOT_SHOW) return null
+        return state.tool.tool as? PublicApiImplicitTypeInspection
+    }
+
+    fun useExplicitReturnType(): Boolean {
+        if (descriptor.returnType.isFlexible()) return true
+        val inspection = getPublicApiInspectionIfEnabled() ?: return false
+        val targetClass = (descriptor.extractionData.targetSibling.parent as? KtClassBody)?.parent as? KtClassOrObject
+        if ((targetClass != null && targetClass.isLocal) || descriptor.extractionData.isLocal()) return false
+        val visibility = (descriptor.visibility ?: KtTokens.DEFAULT_VISIBILITY_KEYWORD).toVisibility()
+        return when {
+            visibility.isPublicAPI -> true
+            inspection.reportInternal && visibility == Visibilities.INTERNAL -> true
+            inspection.reportPrivate && visibility == Visibilities.PRIVATE -> true
+            else -> false
         }
     }
 
@@ -554,11 +594,11 @@ fun ExtractionGeneratorConfiguration.generateDeclaration(
         }
 
         if (generatorOptions.allowExpressionBody) {
-            val convertToExpressionBody = ConvertToExpressionBodyIntention()
             val bodyExpression = body.statements.singleOrNull()
             val bodyOwner = body.parent as KtDeclarationWithBody
-            if (bodyExpression != null && !bodyExpression.isMultiLine() && convertToExpressionBody.isApplicableTo(bodyOwner)) {
-                convertToExpressionBody.applyTo(bodyOwner, !descriptor.returnType.isFlexible())
+            val useExpressionBodyInspection = UseExpressionBodyInspection()
+            if (bodyExpression != null && !bodyExpression.isMultiLine() && useExpressionBodyInspection.isActiveFor(bodyOwner)) {
+                useExpressionBodyInspection.simplify(bodyOwner, !useExplicitReturnType())
             }
         }
     }

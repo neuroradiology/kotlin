@@ -21,19 +21,13 @@ import org.jetbrains.org.objectweb.asm.commons.RemappingSignatureAdapter
 import org.jetbrains.org.objectweb.asm.signature.SignatureReader
 import org.jetbrains.org.objectweb.asm.signature.SignatureVisitor
 
-class AsmTypeRemapper(val typeRemapper: TypeRemapper, val isDefaultGeneration: Boolean, val result: InlineResult) : Remapper() {
-
+class AsmTypeRemapper(val typeRemapper: TypeRemapper, val result: InlineResult) : Remapper() {
     override fun map(type: String): String {
         return typeRemapper.map(type)
     }
 
     override fun createRemappingSignatureAdapter(v: SignatureVisitor?): SignatureVisitor {
-        if (isDefaultGeneration) {
-            return super.createRemappingSignatureAdapter(v);
-        }
-
         return object : RemappingSignatureAdapter(v, this) {
-
             override fun visitTypeVariable(name: String) {
                 /*TODO try to erase absent type variable*/
                 val mapping = typeRemapper.mapTypeParameter(name) ?: return super.visitTypeVariable(name)

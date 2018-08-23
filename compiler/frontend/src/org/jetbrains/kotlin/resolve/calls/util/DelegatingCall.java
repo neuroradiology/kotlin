@@ -17,9 +17,9 @@
 package org.jetbrains.kotlin.resolve.calls.util;
 
 import com.intellij.lang.ASTNode;
+import kotlin.annotations.jvm.ReadOnly;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.annotations.ReadOnly;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.resolve.scopes.receivers.Receiver;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue;
@@ -99,5 +99,10 @@ public class DelegatingCall implements Call {
     @Override
     public CallType getCallType() {
         return delegate.getCallType();
+    }
+
+    @Override
+    public String toString() {
+        return "*" + delegate.toString();
     }
 }

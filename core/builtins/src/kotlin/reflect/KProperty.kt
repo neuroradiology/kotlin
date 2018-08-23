@@ -14,17 +14,35 @@
  * limitations under the License.
  */
 
+@file:Suppress("IMPLEMENTING_FUNCTION_INTERFACE")
 package kotlin.reflect
 
 /**
  * Represents a property, such as a named `val` or `var` declaration.
  * Instances of this class are obtainable by the `::` operator.
+ * 
  * See the [Kotlin language documentation](http://kotlinlang.org/docs/reference/reflection.html)
  * for more information.
  *
  * @param R the type of the property.
  */
 public interface KProperty<out R> : KCallable<R> {
+    /**
+     * `true` if this property is `lateinit`.
+     * See the [Kotlin language documentation](https://kotlinlang.org/docs/reference/properties.html#late-initialized-properties)
+     * for more information.
+     */
+    @SinceKotlin("1.1")
+    public val isLateinit: Boolean
+
+    /**
+     * `true` if this property is `const`.
+     * See the [Kotlin language documentation](https://kotlinlang.org/docs/reference/properties.html#compile-time-constants)
+     * for more information.
+     */
+    @SinceKotlin("1.1")
+    public val isConst: Boolean
+
     /** The getter of this property, used to obtain the value of the property. */
     public val getter: Getter<R>
 
@@ -71,8 +89,21 @@ public interface KProperty0<out R> : KProperty<R>, () -> R {
      */
     public fun get(): R
 
+    /**
+     * Returns the value of the delegate if this is a delegated property, or `null` if this property is not delegated.
+     * See the [Kotlin language documentation](https://kotlinlang.org/docs/reference/delegated-properties.html)
+     * for more information.
+     */
+    @SinceKotlin("1.1")
+    public fun getDelegate(): Any?
+
     override val getter: Getter<R>
 
+    /**
+     * Getter of the property is a `get` method declared alongside the property.
+     *
+     * Can be used as a function that takes 0 arguments and returns the value of the property type [R].
+     */
     public interface Getter<out R> : KProperty.Getter<R>, () -> R
 }
 
@@ -89,6 +120,11 @@ public interface KMutableProperty0<R> : KProperty0<R>, KMutableProperty<R> {
 
     override val setter: Setter<R>
 
+    /**
+     * Setter of the property is a `set` method declared alongside the property.
+     *
+     * Can be used as a function that takes new property value as an argument and returns [Unit].
+     */
     public interface Setter<R> : KMutableProperty.Setter<R>, (R) -> Unit
 }
 
@@ -109,8 +145,30 @@ public interface KProperty1<T, out R> : KProperty<R>, (T) -> R {
      */
     public fun get(receiver: T): R
 
+    /**
+     * Returns the value of the delegate if this is a delegated property, or `null` if this property is not delegated.
+     * See the [Kotlin language documentation](https://kotlinlang.org/docs/reference/delegated-properties.html)
+     * for more information.
+     *
+     * Note that for a top level **extension** property, the delegate is the same for all extension receivers,
+     * so the actual [receiver] instance passed in is not going to make any difference, it must only be a value of [T].
+     *
+     * @param receiver the receiver which is used to obtain the value of the property delegate.
+     *                 For example, it should be a class instance if this is a member property of that class,
+     *                 or an extension receiver if this is a top level extension property.
+     *
+     * @see [kotlin.reflect.full.getExtensionDelegate] // [KProperty1.getExtensionDelegate]
+     */
+    @SinceKotlin("1.1")
+    public fun getDelegate(receiver: T): Any?
+
     override val getter: Getter<T, R>
 
+    /**
+     * Getter of the property is a `get` method declared alongside the property.
+     *
+     * Can be used as a function that takes an argument of type [T] (the receiver) and returns the value of the property type [R].
+     */
     public interface Getter<T, out R> : KProperty.Getter<R>, (T) -> R
 }
 
@@ -130,6 +188,11 @@ public interface KMutableProperty1<T, R> : KProperty1<T, R>, KMutableProperty<R>
 
     override val setter: Setter<T, R>
 
+    /**
+     * Setter of the property is a `set` method declared alongside the property.
+     *
+     * Can be used as a function that takes the receiver and the new property value as arguments and returns [Unit].
+     */
     public interface Setter<T, R> : KMutableProperty.Setter<R>, (T, R) -> Unit
 }
 
@@ -154,8 +217,30 @@ public interface KProperty2<D, E, out R> : KProperty<R>, (D, E) -> R {
      */
     public fun get(receiver1: D, receiver2: E): R
 
+    /**
+     * Returns the value of the delegate if this is a delegated property, or `null` if this property is not delegated.
+     * See the [Kotlin language documentation](https://kotlinlang.org/docs/reference/delegated-properties.html)
+     * for more information.
+     *
+     * In case of the extension property in a class, the instance of the class should be passed first
+     * and the instance of the extension receiver second.
+     *
+     * @param receiver1 the instance of the first receiver.
+     * @param receiver2 the instance of the second receiver.
+     *
+     * @see [kotlin.reflect.full.getExtensionDelegate] // [KProperty2.getExtensionDelegate]
+     */
+    @SinceKotlin("1.1")
+    public fun getDelegate(receiver1: D, receiver2: E): Any?
+
     override val getter: Getter<D, E, R>
 
+    /**
+     * Getter of the property is a `get` method declared alongside the property.
+     *
+     * Can be used as a function that takes an argument of type [D] (the first receiver), an argument of type [E] (the second receiver)
+     * and returns the value of the property type [R].
+     */
     public interface Getter<D, E, out R> : KProperty.Getter<R>, (D, E) -> R
 }
 
@@ -174,5 +259,11 @@ public interface KMutableProperty2<D, E, R> : KProperty2<D, E, R>, KMutablePrope
 
     override val setter: Setter<D, E, R>
 
+    /**
+     * Setter of the property is a `set` method declared alongside the property.
+     *
+     * Can be used as a function that takes an argument of type [D] (the first receiver), an argument of type [E] (the second receiver),
+     * and the new property value and returns [Unit].
+     */
     public interface Setter<D, E, R> : KMutableProperty.Setter<R>, (D, E, R) -> Unit
 }

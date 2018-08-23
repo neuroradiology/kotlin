@@ -34,10 +34,9 @@ internal fun <T : Any> getOrCreateKotlinClass(jClass: Class<T>): KClassImpl<T> {
         @Suppress("UNCHECKED_CAST")
         val kClass = cached.get() as KClassImpl<T>?
         if (kClass?.jClass == jClass) {
-            return kClass!!
+            return kClass
         }
-    }
-    else if (cached != null) {
+    } else if (cached != null) {
         // If the cached value is not a weak reference, it's an array of weak references
         @Suppress("UNCHECKED_CAST")
         (cached as Array<WeakReference<KClassImpl<T>>>)
@@ -51,7 +50,6 @@ internal fun <T : Any> getOrCreateKotlinClass(jClass: Class<T>): KClassImpl<T> {
         // This is the most unlikely case: we found a cached array of references of length at least 2 (can't be 1 because
         // the single element would be cached instead), and none of those classes is the one we're looking for
         val size = cached.size
-        // Don't use Array constructor because it creates a lambda
         val newArray = arrayOfNulls<WeakReference<KClassImpl<*>>>(size + 1)
         // Don't use Arrays.copyOf because it works reflectively
         System.arraycopy(cached, 0, newArray, 0, size)
@@ -64,4 +62,8 @@ internal fun <T : Any> getOrCreateKotlinClass(jClass: Class<T>): KClassImpl<T> {
     val newKClass = KClassImpl(jClass)
     K_CLASS_CACHE = K_CLASS_CACHE.plus(name, WeakReference(newKClass))
     return newKClass
+}
+
+internal fun clearKClassCache() {
+    K_CLASS_CACHE = HashPMap.empty()
 }

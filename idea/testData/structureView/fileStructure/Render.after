@@ -2,11 +2,14 @@
  A1
  -A2
   a: Int
-  b: [ERROR : Annotation is absent]
+  b: String
+  constructor A2(Int, String = ...)
  -A3
   a: Int
   b: String
+  constructor A3(Int)
  -A4
+  constructor A4(T?)
   t: T?
  -A5
   Inner1
@@ -19,7 +22,8 @@
   a: Int
  a: Int
  a: String on Comparable<T>
- b: Any
+ -b: Any
+  object
  -Enum1
   FIRST
   SECOND
@@ -38,3 +42,4 @@
  withDefaulArgs(Int = ..., String = ...): Unit
  -WithDefaultArgs
   a: Int
+  constructor WithDefaultArgs(Int = ..., String = ...)

@@ -1,3 +1,4 @@
+// IGNORE_BACKEND: JS_IR
 class C(val i: Int) {
 }
 
@@ -5,7 +6,7 @@ class M {
   operator fun C.component1() = i + 1
   operator fun C.component2() = i + 2
 
-  fun doTest(l : java.util.ArrayList<C>): String {
+  fun doTest(l : ArrayList<C>): String {
       var s = ""
       for ((a, b) in l) {
         s += "$a:$b;"
@@ -15,7 +16,7 @@ class M {
 }
 
 fun box(): String {
-  val l = java.util.ArrayList<C>()
+  val l = ArrayList<C>()
   l.add(C(0))
   l.add(C(1))
   l.add(C(2))

@@ -1,4 +1,5 @@
-public package util
+// ALLOW_AST_ACCESS
+package util
 
 interface T {
     fun f()
@@ -45,5 +46,10 @@ fun funWithVararg(vararg i: Int): IntArray {
 }
 
 fun <T, G> funWithWhere(a: G, b: T) where T: Collection<G> {
+
+}
+
+annotation class TempAnnotation
+fun funWithAnnotatedParameter(@TempAnnotation param: String) {
 
 }

@@ -16,43 +16,42 @@
 
 package org.jetbrains.kotlin.idea.highlighter.markers
 
-import com.intellij.psi.search.PsiElementProcessor
-import com.intellij.psi.PsiClass
-import org.jetbrains.kotlin.idea.KotlinBundle
-import com.intellij.psi.search.searches.OverridingMethodsSearch
-import org.jetbrains.kotlin.asJava.LightClassUtil
-import com.intellij.psi.PsiMethod
-import com.intellij.util.AdapterProcessor
-import com.intellij.util.CommonProcessors
-import com.intellij.psi.search.PsiElementProcessorAdapter
 import com.intellij.codeInsight.daemon.impl.GutterIconTooltipHelper
-import com.intellij.psi.PsiElement
-import java.awt.event.MouseEvent
-import com.intellij.openapi.project.DumbService
-import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinDefinitionsSearcher
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.codeInsight.daemon.impl.MarkerType
 import com.intellij.ide.util.DefaultPsiElementCellRenderer
 import com.intellij.ide.util.PsiClassListCellRenderer
-import javax.swing.JComponent
-import com.intellij.codeInsight.daemon.impl.PsiElementListNavigator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.psi.NavigatablePsiElement
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiMethod
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiElementProcessor
+import com.intellij.psi.search.PsiElementProcessorAdapter
+import com.intellij.util.AdapterProcessor
+import com.intellij.util.CommonProcessors
 import com.intellij.util.Function
+import org.jetbrains.kotlin.idea.KotlinBundle
+import org.jetbrains.kotlin.idea.search.declarationsSearch.forEachOverridingMethod
+import org.jetbrains.kotlin.idea.search.declarationsSearch.toPossiblyFakeLightMethods
+import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinDefinitionsSearcher
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
+import java.awt.event.MouseEvent
+import javax.swing.JComponent
 
-fun getOverriddenPropertyTooltip(property: KtProperty): String? {
+fun getOverriddenPropertyTooltip(property: KtNamedDeclaration): String? {
     val overriddenInClassesProcessor = PsiElementProcessor.CollectElementsWithLimit<PsiClass>(5)
 
     val consumer = AdapterProcessor<PsiMethod, PsiClass>(
-            CommonProcessors.UniqueProcessor<PsiClass>(PsiElementProcessorAdapter(overriddenInClassesProcessor)),
-            Function { method: PsiMethod? -> method?.containingClass }
+        CommonProcessors.UniqueProcessor<PsiClass>(PsiElementProcessorAdapter(overriddenInClassesProcessor)),
+        Function { method: PsiMethod? -> method?.containingClass }
     )
 
-    for (method in LightClassUtil.getLightClassPropertyMethods(property)) {
+    for (method in property.toPossiblyFakeLightMethods()) {
         if (!overriddenInClassesProcessor.isOverflow) {
-            OverridingMethodsSearch.search(method, true).forEach(consumer)
+            method.forEachOverridingMethod(processor = consumer::process)
         }
     }
 
@@ -76,42 +75,46 @@ fun getOverriddenPropertyTooltip(property: KtProperty): String? {
     return GutterIconTooltipHelper.composeText(collectedClasses.sortedWith(PsiClassListCellRenderer().comparator), start, pattern)
 }
 
-fun navigateToPropertyOverriddenDeclarations(e: MouseEvent?, property: KtProperty) {
-    val project = property.project
+fun buildNavigateToPropertyOverriddenDeclarationsPopup(e: MouseEvent?, element: PsiElement?): NavigationPopupDescriptor? {
+    val propertyOrParameter = element?.parent as? KtNamedDeclaration ?: return null
+    val project = propertyOrParameter.project
 
     if (DumbService.isDumb(project)) {
         DumbService.getInstance(project)?.showDumbModeNotification("Navigation to overriding classes is not possible during index update")
-        return
+        return null
     }
 
-    val psiPropertyMethods = LightClassUtil.getLightClassPropertyMethods(property)
-
+    val psiPropertyMethods = propertyOrParameter.toPossiblyFakeLightMethods()
     val elementProcessor = CommonProcessors.CollectUniquesProcessor<PsiElement>()
-    val jetPsiMethodProcessor = Runnable {
+    val ktPsiMethodProcessor = Runnable {
         KotlinDefinitionsSearcher.processPropertyImplementationsMethods(
-                psiPropertyMethods,
-                GlobalSearchScope.allScope(project),
-                elementProcessor)
+            psiPropertyMethods,
+            GlobalSearchScope.allScope(project),
+            elementProcessor
+        )
     }
 
     if (!ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            /* runnable */ jetPsiMethodProcessor,
-            MarkerType.SEARCHING_FOR_OVERRIDING_METHODS,
+            /* runnable */ ktPsiMethodProcessor,
+                           MarkerType.SEARCHING_FOR_OVERRIDING_METHODS,
             /* can be canceled */ true,
-            project,
-            e?.component as JComponent?)) {
-        return
+                           project,
+                           e?.component as JComponent?
+        )
+    ) {
+        return null
     }
 
     val renderer = DefaultPsiElementCellRenderer()
     val navigatingOverrides = elementProcessor.results
-            .sortedWith(renderer.comparator)
-            .filterIsInstance<NavigatablePsiElement>()
+        .sortedWith(renderer.comparator)
+        .filterIsInstance<NavigatablePsiElement>()
 
-    PsiElementListNavigator.openTargets(e,
-                                        navigatingOverrides.toTypedArray(),
-                                        KotlinBundle.message("navigation.title.overriding.property", property.name),
-                                        KotlinBundle.message("navigation.findUsages.title.overriding.property", property.name), renderer)
+    return NavigationPopupDescriptor(
+        navigatingOverrides,
+        KotlinBundle.message("navigation.title.overriding.property", propertyOrParameter.name),
+        KotlinBundle.message("navigation.findUsages.title.overriding.property", propertyOrParameter.name), renderer
+    )
 }
 
 
@@ -123,6 +126,6 @@ fun isImplemented(declaration: KtNamedDeclaration): Boolean {
 
     if (parent !is KtClass) return false
 
-    return parent.isInterface() && (declaration !is KtDeclarationWithBody || !declaration.hasBody()) && (declaration !is KtWithExpressionInitializer || !declaration.hasInitializer())
+    return parent.isInterface() && (declaration !is KtDeclarationWithBody || !declaration.hasBody()) && (declaration !is KtDeclarationWithInitializer || !declaration.hasInitializer())
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.psi.search.GlobalSearchScope;
 import junit.framework.ComparisonFailure;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.kotlin.asJava.classes.KtLightClass;
 import org.jetbrains.kotlin.name.SpecialNames;
 
 import java.io.File;
@@ -77,7 +78,7 @@ public class KotlinLightClassCoherenceTest extends KotlinAsJavaTestBase {
         }
 
         public void assertModifiersCoherent(KtLightClass lightClass) {
-            PsiClass delegate = lightClass.getDelegate();
+            PsiClass delegate = lightClass.getClsDelegate();
             for (String modifier : PsiModifier.MODIFIERS) {
                 assertEquals("Incoherent modifier: " + modifier,
                              delegate.hasModifierProperty(modifier),
@@ -86,20 +87,13 @@ public class KotlinLightClassCoherenceTest extends KotlinAsJavaTestBase {
         }
 
         public void assertPropertyCoherent(KtLightClass lightClass, String methodName) {
-            Class<?> reflect = PsiClass.class;
             try {
-                Method method = reflect.getMethod(methodName);
+                Method method = PsiClass.class.getMethod(methodName);
                 Object lightResult = method.invoke(lightClass);
-                Object delegateResult = method.invoke(lightClass.getDelegate());
+                Object delegateResult = method.invoke(lightClass.getClsDelegate());
                 assertEquals("Result of method " + methodName + "() differs in light class and its delegate", delegateResult, lightResult);
             }
-            catch (NoSuchMethodException e) {
-                throw new AssertionError(e);
-            }
-            catch (InvocationTargetException e) {
-                throw new AssertionError(e);
-            }
-            catch (IllegalAccessException e) {
+            catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
                 throw new AssertionError(e);
             }
         }

@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2000-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
  */
 
 package org.jetbrains.kotlin.idea.codeInsight.smartEnter
@@ -596,12 +585,12 @@ class SmartEnterTest : KotlinLightCodeInsightFixtureTestCase() {
     // Check that no addition {} inserted
     fun testWhenBadParsed() = doFunTest(
             """
-            when ( {<caret>
+            when ({<caret>
             }
             """
             ,
             """
-            when ( {
+            when ({
                 <caret>
             }
             """
@@ -960,6 +949,16 @@ class SmartEnterTest : KotlinLightCodeInsightFixtureTestCase() {
             """
     )
 
+    fun testFunBody9() = doFileTest(
+            """
+            fun test(){<caret>}
+            """,
+            """
+            fun test() {}
+            <caret>
+            """
+    )
+
     fun testInLambda1() = doFunTest(
             """
             some {
@@ -976,13 +975,11 @@ class SmartEnterTest : KotlinLightCodeInsightFixtureTestCase() {
 
     fun testInLambda2() = doFunTest(
             """
-            some {
-                p<caret> ->
+            some { p<caret> ->
             }
             """,
             """
-            some {
-                p ->
+            some { p ->
                 <caret>
             }
             """
@@ -990,13 +987,11 @@ class SmartEnterTest : KotlinLightCodeInsightFixtureTestCase() {
 
     fun testInLambda3() = doFunTest(
             """
-            some {
-                (<caret>p: Int) : Int ->
+            some { (<caret>p: Int) : Int ->
             }
             """,
             """
-            some {
-                (p: Int) : Int ->
+            some { (p: Int) : Int ->
                 <caret>
             }
             """
@@ -1016,12 +1011,481 @@ class SmartEnterTest : KotlinLightCodeInsightFixtureTestCase() {
             """
     )
 
+    fun testSetter1() = doFileTest(
+            """
+            var a : Int = 0
+                set<caret>
+            """
+            ,
+            """
+            var a : Int = 0
+                set
+            <caret>
+            """
+    )
+
+    fun testSetter2() = doFileTest(
+            """
+            var a : Int = 0
+                set(<caret>
+            """
+            ,
+            """
+            var a : Int = 0
+                set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetter3() = doFileTest(
+            """
+            var a : Int = 0
+                set(<caret>)
+            """
+            ,
+            """
+            var a : Int = 0
+                set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetter4() = doFileTest(
+            """
+            var a : Int = 0
+                set(v<caret>)
+            """
+            ,
+            """
+            var a : Int = 0
+                set(v) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetter5() = doFileTest(
+            """
+            var a : Int = 0
+                set(<caret>) {
+                }
+            """
+            ,
+            """
+            var a : Int = 0
+                set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetter6() = doFileTest(
+            """
+            var a : Int = 0
+                set(v<caret>) {
+                }
+            """
+            ,
+            """
+            var a : Int = 0
+                set(v) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetter7() = doFileTest(
+            """
+            var a : Int = 0
+                set(value){<caret>}
+            """
+            ,
+            """
+            var a : Int = 0
+                set(value) {}
+            <caret>
+            """
+    )
+
+    fun testSetterPrivate1() = doFileTest(
+            """
+            var a : Int = 0
+                private set<caret>
+            """
+            ,
+            """
+            var a : Int = 0
+                private set
+            <caret>
+            """
+    )
+
+    fun testSetterPrivate2() = doFileTest(
+            """
+            var a : Int = 0
+                private set(<caret>
+            """
+            ,
+            """
+            var a : Int = 0
+                private set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetterPrivate3() = doFileTest(
+            """
+            var a : Int = 0
+                private set(<caret>)
+            """
+            ,
+            """
+            var a : Int = 0
+                private set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetterPrivate4() = doFileTest(
+            """
+            var a : Int = 0
+                private set(v<caret>)
+            """
+            ,
+            """
+            var a : Int = 0
+                private set(v) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetterPrivate5() = doFileTest(
+            """
+            var a : Int = 0
+                private set(<caret>) {
+                }
+            """
+            ,
+            """
+            var a : Int = 0
+                private set(value) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testSetterPrivate6() = doFileTest(
+            """
+            var a : Int = 0
+                private set(v<caret>) {
+                }
+            """
+            ,
+            """
+            var a : Int = 0
+                private set(v) {
+                    <caret>
+                }
+            """
+    )
+
+    fun testTryBody() = doFunTest(
+            """
+            try<caret>
+            """
+            ,
+            """
+            try {
+                <caret>
+            }
+            """
+    )
+
+    fun testCatchBody() = doFunTest(
+            """
+            try {
+            } catch(e: Exception) <caret>
+            """
+            ,
+            """
+            try {
+            } catch (e: Exception) {
+                <caret>
+            }${" "}
+            """
+    )
+
+    fun testCatchParameter1() = doFunTest(
+            """
+            try {
+            } catch<caret>
+            """
+            ,
+            """
+            try {
+            } catch (<caret>) {
+            }
+            """
+    )
+
+    fun testCatchParameter2() = doFunTest(
+            """
+            try {
+            } catch(<caret>
+            """
+            ,
+            """
+            try {
+            } catch (<caret>) {
+            }
+            """
+    )
+
+    fun testCatchParameter3() = doFunTest(
+            """
+            try {
+            } catch(<caret> {}
+            """
+            ,
+            """
+            try {
+            } catch (<caret>) {
+            }
+            """
+    )
+
+    fun testCatchParameter4() = doFunTest(
+            """
+            try {
+            } catch(e: Exception<caret>
+            """
+            ,
+            """
+            try {
+            } catch (e: Exception) {
+                <caret>
+            }
+            """
+    )
+
+    fun testFinallyBody() = doFunTest(
+            """
+            try {
+            } catch(e: Exception) {
+            } finally<caret>
+            """
+            ,
+            """
+            try {
+            } catch (e: Exception) {
+            } finally {
+                <caret>
+            }
+            """
+    )
+
+    fun testLambdaParam() = doFileTest(
+            """
+            fun foo(a: Any, block: () -> Unit) {
+            }
+            fun test() {
+                foo(Any()<caret>)
+            }
+            """
+            ,
+            """
+            fun foo(a: Any, block: () -> Unit) {
+            }
+            fun test() {
+                foo(Any()) { <caret>}
+            }
+            """
+    )
+
+    fun testExtensionLambdaParam() = doFileTest(
+            """
+            fun foo(a: Any, block: Any.() -> Unit) {
+            }
+            fun test() {
+                foo(Any()<caret>)
+            }
+            """
+            ,
+            """
+            fun foo(a: Any, block: Any.() -> Unit) {
+            }
+            fun test() {
+                foo(Any()) { <caret>}
+            }
+            """
+    )
+
+    fun testClassInit() = doFileTest(
+            """
+            class Foo {
+                init<caret>
+            }
+            """
+            ,
+            """
+            class Foo {
+                init {
+                    <caret>
+                }
+            }
+            """
+    )
+
+    fun testClassBody1() = doFileTest(
+            """
+            class Foo<caret>
+            """
+            ,
+            """
+            class Foo {
+                <caret>
+            }
+            """
+    )
+
+    fun testClassBody2() = doFileTest(
+            """
+            class <caret>Foo
+            """
+            ,
+            """
+            class Foo {
+                <caret>
+            }
+            """
+    )
+
+    fun testObjectExpressionBody1() = doFileTest(
+            """
+            interface I
+            val a = object : I<caret>
+            """
+            ,
+            """
+            interface I
+            val a = object : I {
+                <caret>
+            }
+            """
+    )
+
+    fun testObjectExpressionBody2() = doFileTest(
+            """
+            interface I
+            val a = object : I<caret>
+
+            val b = ""
+            """
+            ,
+            """
+            interface I
+            val a = object : I {
+                <caret>
+            }
+
+            val b = ""
+            """
+    )
+
+    fun testEmptyLine() = doFileTest(
+        """fun foo() {}
+<caret>""",
+        """fun foo() {}
+
+<caret>"""
+    )
+
+    fun testValueArgumentList1() = doFileTest(
+        """
+        fun foo(i: Int) = 1
+        fun test1() {
+            foo(1<caret>
+        }
+        """,
+        """
+        fun foo(i: Int) = 1
+        fun test1() {
+            foo(1)<caret>
+        }
+        """
+    )
+
+    fun testValueArgumentList2() = doFileTest(
+        """
+        fun foo(i: Int) = 1
+        fun test2() {
+            foo(foo(1<caret>
+        }
+        """,
+        """
+        fun foo(i: Int) = 1
+        fun test2() {
+            foo(foo(1))<caret>
+        }
+        """
+    )
+
+    fun testValueArgumentList3() = doFileTest(
+        """
+        fun foo(i: Int) = 1
+        fun test3() {
+            foo(<caret>
+        }
+        """,
+        """
+        fun foo(i: Int) = 1
+        fun test3() {
+            foo(<caret>)
+        }
+        """
+    )
+
+    fun testValueArgumentList4() = doFileTest(
+        """
+        fun foo(i: Int) = 1
+        fun test4() {
+            foo(1,<caret>
+        }
+        """,
+        """
+        fun foo(i: Int) = 1
+        fun test4() {
+            foo(1, <caret>)
+        }
+        """
+    )
+
+    fun testValueArgumentList5() = doFileTest(
+        """
+        class Foo(i: Int)
+        fun test5() {
+            Foo(1<caret>
+        }
+        """,
+        """
+        class Foo(i: Int)
+        fun test5() {
+            Foo(1)<caret>
+        }
+        """
+    )
+
     fun doFunTest(before: String, after: String) {
         fun String.withFunContext(): String {
             val bodyText = "//----\n${this.trimIndent()}\n//----"
             val withIndent = bodyText.prependIndent("    ")
 
-            return "fun method() {\n${withIndent}\n}"
+            return "fun method() {\n$withIndent\n}"
         }
 
         doTest(before.withFunContext(), after.withFunContext())

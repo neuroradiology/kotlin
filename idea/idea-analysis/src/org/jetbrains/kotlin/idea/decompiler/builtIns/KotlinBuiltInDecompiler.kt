@@ -17,102 +17,73 @@
 package org.jetbrains.kotlin.idea.decompiler.builtIns
 
 import com.intellij.ide.highlighter.JavaClassFileType
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.FileViewProvider
-import com.intellij.psi.PsiManager
-import com.intellij.psi.compiled.ClassFileDecompilers
-import org.jetbrains.kotlin.builtins.BuiltInsSerializedResourcePaths
-import org.jetbrains.kotlin.idea.decompiler.KotlinDecompiledFileViewProvider
-import org.jetbrains.kotlin.idea.decompiler.KtDecompiledFile
-import org.jetbrains.kotlin.idea.decompiler.common.toClassProto
-import org.jetbrains.kotlin.idea.decompiler.common.toPackageProto
-import org.jetbrains.kotlin.idea.decompiler.textBuilder.DecompiledText
-import org.jetbrains.kotlin.idea.decompiler.textBuilder.buildDecompiledText
-import org.jetbrains.kotlin.idea.decompiler.textBuilder.defaultDecompilerRendererOptions
-import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
-import org.jetbrains.kotlin.serialization.ProtoBuf
-import org.jetbrains.kotlin.serialization.builtins.BuiltInsProtoBuf
-import org.jetbrains.kotlin.serialization.deserialization.NameResolverImpl
+import org.jetbrains.annotations.TestOnly
+import org.jetbrains.kotlin.idea.decompiler.common.FileWithMetadata
+import org.jetbrains.kotlin.idea.decompiler.common.KotlinMetadataDecompiler
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.builtins.BuiltInsBinaryVersion
+import org.jetbrains.kotlin.name.ClassId
+import org.jetbrains.kotlin.psi.stubs.KotlinStubVersions
+import org.jetbrains.kotlin.resolve.TargetPlatform
+import org.jetbrains.kotlin.serialization.deserialization.FlexibleTypeDeserializer
+import org.jetbrains.kotlin.serialization.deserialization.MetadataPackageFragment
+import org.jetbrains.kotlin.serialization.deserialization.builtins.BuiltInSerializerProtocol
+import org.jetbrains.kotlin.serialization.deserialization.getClassId
+import java.io.ByteArrayInputStream
 
-class KotlinBuiltInDecompiler : ClassFileDecompilers.Full() {
-    private val stubBuilder = KotlinBuiltInStubBuilder()
-
-    override fun accepts(file: VirtualFile): Boolean {
-        return file.fileType == KotlinBuiltInClassFileType || file.fileType == KotlinBuiltInPackageFileType
+class KotlinBuiltInDecompiler : KotlinMetadataDecompiler<BuiltInsBinaryVersion>(
+        KotlinBuiltInFileType, TargetPlatform.Common, BuiltInSerializerProtocol,
+        FlexibleTypeDeserializer.ThrowException, BuiltInsBinaryVersion.INSTANCE, BuiltInsBinaryVersion.INVALID_VERSION,
+        KotlinStubVersions.BUILTIN_STUB_VERSION
+) {
+    override fun readFile(bytes: ByteArray, file: VirtualFile): FileWithMetadata? {
+        return BuiltInDefinitionFile.read(bytes, file)
     }
+}
 
-    override fun getStubBuilder() = stubBuilder
-
-    override fun createFileViewProvider(file: VirtualFile, manager: PsiManager, physical: Boolean): FileViewProvider {
-        return KotlinDecompiledFileViewProvider(manager, file, physical) { provider ->
-            if (isInternalBuiltInFile(provider.virtualFile)) {
-                null
-            }
-            else {
-                KtDecompiledFile(provider) { file ->
-                    buildDecompiledTextForBuiltIns(file)
-                }
+class BuiltInDefinitionFile(
+        proto: ProtoBuf.PackageFragment,
+        version: BuiltInsBinaryVersion,
+        val packageDirectory: VirtualFile,
+        val isMetadata: Boolean
+) : FileWithMetadata.Compatible(proto, version, BuiltInSerializerProtocol) {
+    override val classesToDecompile: List<ProtoBuf.Class>
+        get() = super.classesToDecompile.let { classes ->
+            if (isMetadata || !FILTER_OUT_CLASSES_EXISTING_AS_JVM_CLASS_FILES) classes
+            else classes.filter { classProto ->
+                shouldDecompileBuiltInClass(nameResolver.getClassId(classProto.fqName))
             }
         }
+
+    private fun shouldDecompileBuiltInClass(classId: ClassId): Boolean {
+        val realJvmClassFileName = classId.shortClassName.asString() + "." + JavaClassFileType.INSTANCE.defaultExtension
+        return packageDirectory.findChild(realJvmClassFileName) == null
     }
 
     companion object {
-        val LOG = Logger.getInstance(KotlinBuiltInDecompiler::class.java)
-    }
-}
+        var FILTER_OUT_CLASSES_EXISTING_AS_JVM_CLASS_FILES = true
+            @TestOnly set
 
-private val decompilerRendererForBuiltIns = DescriptorRenderer.withOptions { defaultDecompilerRendererOptions() }
+        fun read(contents: ByteArray, file: VirtualFile): FileWithMetadata? {
+            val stream = ByteArrayInputStream(contents)
 
-fun buildDecompiledTextForBuiltIns(
-        builtInFile: VirtualFile
-): DecompiledText {
-    val directory = builtInFile.parent!!
-    val nameResolver = readStringTable(directory, KotlinBuiltInDecompiler.LOG)!!
-    val content = builtInFile.contentsToByteArray()
-    return when (builtInFile.fileType) {
-        KotlinBuiltInPackageFileType -> {
-            val packageFqName = content.toPackageProto(BuiltInsSerializedResourcePaths.extensionRegistry).packageFqName(nameResolver)
-            val resolver = KotlinBuiltInDeserializerForDecompiler(directory, packageFqName, nameResolver)
-            buildDecompiledText(packageFqName, resolver.resolveDeclarationsInFacade(packageFqName), decompilerRendererForBuiltIns)
-        }
-        KotlinBuiltInClassFileType -> {
-            val classProto = content.toClassProto(BuiltInsSerializedResourcePaths.extensionRegistry)
-            val classId = nameResolver.getClassId(classProto.fqName)
-            val packageFqName = classId.packageFqName
-            val resolver = KotlinBuiltInDeserializerForDecompiler(directory, packageFqName, nameResolver)
-            buildDecompiledText(
-                    packageFqName,
-                    listOfNotNull(resolver.resolveTopLevelClass(classId)),
-                    decompilerRendererForBuiltIns
-            )
-        }
-        else -> error("Unexpected filetype ${builtInFile.fileType}")
-    }
-}
-
-fun ProtoBuf.Package.packageFqName(nameResolver: NameResolverImpl): FqName {
-    return nameResolver.getPackageFqName(getExtension(BuiltInsProtoBuf.packageFqName))
-}
-
-fun isInternalBuiltInFile(virtualFile: VirtualFile): Boolean {
-    when (virtualFile.fileType) {
-        KotlinBuiltInPackageFileType -> {
-            // do not accept kotlin_package files without packageFqName extension to avoid failing on older runtimes
-            // this check may be costly but there are few kotlin_package files
-            val packageProto = virtualFile.contentsToByteArray().toPackageProto(BuiltInsSerializedResourcePaths.extensionRegistry)
-            return !packageProto.hasExtension(BuiltInsProtoBuf.packageFqName)
-        }
-        KotlinBuiltInClassFileType -> {
-            val correspondsToInnerClass = virtualFile.nameWithoutExtension.contains('.')
-            if (correspondsToInnerClass) {
-                return true
+            val version = BuiltInsBinaryVersion.readFrom(stream)
+            if (!version.isCompatible()) {
+                return FileWithMetadata.Incompatible(version)
             }
-            val classFileName = virtualFile.nameWithoutExtension + "." + JavaClassFileType.INSTANCE.defaultExtension
-            val classFileForTheSameClassIsPresent = virtualFile.parent!!.findChild(classFileName) != null
-            return classFileForTheSameClassIsPresent
+
+            val proto = ProtoBuf.PackageFragment.parseFrom(stream, BuiltInSerializerProtocol.extensionRegistry)
+            val result =
+                BuiltInDefinitionFile(proto, version, file.parent, file.extension == MetadataPackageFragment.METADATA_FILE_EXTENSION)
+            val packageProto = result.proto.`package`
+            if (result.classesToDecompile.isEmpty() &&
+                packageProto.typeAliasCount == 0 && packageProto.functionCount == 0 && packageProto.propertyCount == 0) {
+                // No declarations to decompile: should skip this file
+                return null
+            }
+
+            return result
         }
-        else -> error("Unexpected filetype ${virtualFile.fileType}")
     }
 }

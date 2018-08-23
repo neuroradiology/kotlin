@@ -19,9 +19,7 @@ package org.jetbrains.kotlin.resolve;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.*;
-import org.jetbrains.kotlin.descriptors.annotations.AnnotationUtilKt;
 import org.jetbrains.kotlin.descriptors.annotations.Annotations;
-import org.jetbrains.kotlin.descriptors.annotations.AnnotationsImpl;
 import org.jetbrains.kotlin.descriptors.impl.*;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExtensionReceiver;
@@ -34,8 +32,8 @@ import static org.jetbrains.kotlin.resolve.DescriptorUtils.getDefaultConstructor
 import static org.jetbrains.kotlin.resolve.descriptorUtil.DescriptorUtilsKt.getBuiltIns;
 
 public class DescriptorFactory {
-    private static class DefaultConstructorDescriptor extends ConstructorDescriptorImpl {
-        public DefaultConstructorDescriptor(@NotNull ClassDescriptor containingClass, @NotNull SourceElement source) {
+    private static class DefaultClassConstructorDescriptor extends ClassConstructorDescriptorImpl {
+        public DefaultClassConstructorDescriptor(@NotNull ClassDescriptor containingClass, @NotNull SourceElement source) {
             super(containingClass, null, Annotations.Companion.getEMPTY(), true, Kind.DECLARATION, source);
             initialize(Collections.<ValueParameterDescriptor>emptyList(),
                        getDefaultConstructorVisibility(containingClass));
@@ -50,7 +48,7 @@ public class DescriptorFactory {
             @NotNull PropertyDescriptor propertyDescriptor,
             @NotNull Annotations annotations
     ) {
-        return createSetter(propertyDescriptor, annotations, true, false, propertyDescriptor.getSource());
+        return createSetter(propertyDescriptor, annotations, true, false, false, propertyDescriptor.getSource());
     }
 
     @NotNull
@@ -59,9 +57,10 @@ public class DescriptorFactory {
             @NotNull Annotations annotations,
             boolean isDefault,
             boolean isExternal,
+            boolean isInline,
             @NotNull SourceElement sourceElement
     ) {
-        return createSetter(propertyDescriptor, annotations, isDefault, isExternal, propertyDescriptor.getVisibility(), sourceElement);
+        return createSetter(propertyDescriptor, annotations, isDefault, isExternal, isInline, propertyDescriptor.getVisibility(), sourceElement);
     }
 
     @NotNull
@@ -70,13 +69,14 @@ public class DescriptorFactory {
             @NotNull Annotations annotations,
             boolean isDefault,
             boolean isExternal,
+            boolean isInline,
             @NotNull Visibility visibility,
             @NotNull SourceElement sourceElement
     ) {
-        PropertySetterDescriptorImpl setterDescriptor =
-                new PropertySetterDescriptorImpl(propertyDescriptor, annotations, propertyDescriptor.getModality(),
-                                                 visibility, !isDefault, isDefault, isExternal,
-                                                 CallableMemberDescriptor.Kind.DECLARATION, null, sourceElement);
+        PropertySetterDescriptorImpl setterDescriptor = new PropertySetterDescriptorImpl(
+                propertyDescriptor, annotations, propertyDescriptor.getModality(), visibility, isDefault, isExternal,
+                isInline, CallableMemberDescriptor.Kind.DECLARATION, null, sourceElement
+        );
         setterDescriptor.initializeDefault();
         return setterDescriptor;
     }
@@ -86,17 +86,7 @@ public class DescriptorFactory {
             @NotNull PropertyDescriptor propertyDescriptor,
             @NotNull Annotations annotations
     ) {
-        return createGetter(propertyDescriptor, annotations, true, false);
-    }
-
-    @NotNull
-    public static PropertyGetterDescriptorImpl createGetter(
-            @NotNull PropertyDescriptor propertyDescriptor,
-            @NotNull Annotations annotations,
-            boolean isDefault,
-            boolean isExternal
-    ) {
-        return createGetter(propertyDescriptor, annotations, isDefault, isExternal, propertyDescriptor.getSource());
+        return createGetter(propertyDescriptor, annotations, true, false, false);
     }
 
     @NotNull
@@ -105,18 +95,32 @@ public class DescriptorFactory {
             @NotNull Annotations annotations,
             boolean isDefault,
             boolean isExternal,
-            @NotNull SourceElement sourceElement) {
-        return new PropertyGetterDescriptorImpl(propertyDescriptor, annotations, propertyDescriptor.getModality(),
-                                                propertyDescriptor.getVisibility(), !isDefault, isDefault, isExternal,
-                                                CallableMemberDescriptor.Kind.DECLARATION, null, sourceElement);
+            boolean isInline
+    ) {
+        return createGetter(propertyDescriptor, annotations, isDefault, isExternal, isInline, propertyDescriptor.getSource());
     }
 
     @NotNull
-    public static ConstructorDescriptorImpl createPrimaryConstructorForObject(
+    public static PropertyGetterDescriptorImpl createGetter(
+            @NotNull PropertyDescriptor propertyDescriptor,
+            @NotNull Annotations annotations,
+            boolean isDefault,
+            boolean isExternal,
+            boolean isInline,
+            @NotNull SourceElement sourceElement
+    ) {
+        return new PropertyGetterDescriptorImpl(
+                propertyDescriptor, annotations, propertyDescriptor.getModality(), propertyDescriptor.getVisibility(),
+                isDefault, isExternal, isInline, CallableMemberDescriptor.Kind.DECLARATION, null, sourceElement
+        );
+    }
+
+    @NotNull
+    public static ClassConstructorDescriptorImpl createPrimaryConstructorForObject(
             @NotNull ClassDescriptor containingClass,
             @NotNull SourceElement source
     ) {
-        return new DefaultConstructorDescriptor(containingClass, source);
+        return new DefaultClassConstructorDescriptor(containingClass, source);
     }
 
     @NotNull
@@ -128,31 +132,6 @@ public class DescriptorFactory {
                                  Collections.<ValueParameterDescriptor>emptyList(),
                                  getBuiltIns(enumClass).getArrayType(Variance.INVARIANT, enumClass.getDefaultType()),
                                  Modality.FINAL, Visibilities.PUBLIC);
-    }
-
-    @NotNull
-    public static PropertyDescriptor createEnumValuesProperty(@NotNull ClassDescriptor enumClass) {
-        AnnotationsImpl annotations = AnnotationsImpl.createWithNoTarget(AnnotationUtilKt.createDeprecatedAnnotation(
-                getBuiltIns(enumClass), "Use 'values()' function instead", "this.values()", "ERROR"
-        ));
-
-        PropertyDescriptorImpl values =
-                PropertyDescriptorImpl.create(
-                        enumClass, annotations, Modality.FINAL, Visibilities.PUBLIC, /* isVar */ false,
-                        DescriptorUtils.ENUM_VALUES, CallableMemberDescriptor.Kind.SYNTHESIZED, enumClass.getSource(),
-                        /* lateInit = */ false, /* isConst = */ false
-                );
-
-        KotlinType type = getBuiltIns(enumClass).getArrayType(Variance.INVARIANT, enumClass.getDefaultType());
-
-        PropertyGetterDescriptorImpl getter = createGetter(
-                values, Annotations.Companion.getEMPTY(), /* isDefault = */ false, /* isExternal = */ false);
-
-        values.initialize(getter, null);
-        getter.initialize(type);
-        values.setType(type, Collections.<TypeParameterDescriptor>emptyList(), null, (KotlinType) null);
-
-        return values;
     }
 
     @NotNull
@@ -173,6 +152,19 @@ public class DescriptorFactory {
                                   Modality.FINAL, Visibilities.PUBLIC);
     }
 
+    public static boolean isEnumValuesMethod(@NotNull FunctionDescriptor descriptor) {
+        return descriptor.getName().equals(DescriptorUtils.ENUM_VALUES) && isEnumSpecialMethod(descriptor);
+    }
+
+    public static boolean isEnumValueOfMethod(@NotNull FunctionDescriptor descriptor) {
+        return descriptor.getName().equals(DescriptorUtils.ENUM_VALUE_OF) && isEnumSpecialMethod(descriptor);
+    }
+
+    private static boolean isEnumSpecialMethod(@NotNull FunctionDescriptor descriptor) {
+        return descriptor.getKind() == CallableMemberDescriptor.Kind.SYNTHESIZED &&
+               DescriptorUtils.isEnumClass(descriptor.getContainingDeclaration());
+    }
+
     @Nullable
     public static ReceiverParameterDescriptor createExtensionReceiverParameterForCallable(
             @NotNull CallableDescriptor owner,
@@ -180,6 +172,6 @@ public class DescriptorFactory {
     ) {
         return receiverParameterType == null
                ? null
-               : new ReceiverParameterDescriptorImpl(owner, new ExtensionReceiver(owner, receiverParameterType));
+               : new ReceiverParameterDescriptorImpl(owner, new ExtensionReceiver(owner, receiverParameterType, null));
     }
 }

@@ -18,13 +18,16 @@ package org.jetbrains.kotlin.psi;
 
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.psi.util.PsiTreeUtil;
+import kotlin.jvm.functions.Function1;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
-import org.jetbrains.kotlin.config.CompilerConfiguration;
 import org.jetbrains.kotlin.name.FqName;
 import org.jetbrains.kotlin.name.Name;
+import org.jetbrains.kotlin.psi.psiUtil.KtPsiUtilKt;
 import org.jetbrains.kotlin.resolve.ImportPath;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
+import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 import org.junit.Assert;
 
 import java.io.File;
@@ -33,7 +36,18 @@ import java.util.Collection;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class KtPsiUtilTest extends KotlinLiteFixture {
+public class KtPsiUtilTest extends KotlinTestWithEnvironment {
+    @NotNull
+    private KtFile loadPsiFile(@NotNull String name) {
+        try {
+            String text = KotlinTestUtils.doLoadFile(KotlinTestUtils.getTestDataPathBase(), name);
+            return KotlinTestUtils.createFile(name + ".kt", text, getProject());
+        }
+        catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public void testUnquotedIdentifier() {
         Assert.assertEquals("", KtPsiUtil.unquoteIdentifier(""));
         Assert.assertEquals("a2", KtPsiUtil.unquoteIdentifier("a2"));
@@ -70,7 +84,7 @@ public class KtPsiUtilTest extends KotlinLiteFixture {
     }
 
     public void testIsLocalClass() throws IOException {
-        String text = FileUtil.loadFile(new File(getTestDataPath() + "/psiUtil/isLocalClass.kt"), true);
+        String text = FileUtil.loadFile(new File(KotlinTestUtils.getTestDataPathBase() + "/psiUtil/isLocalClass.kt"), true);
         KtClass aClass = KtPsiFactoryKt.KtPsiFactory(getProject()).createClass(text);
 
         @SuppressWarnings("unchecked")
@@ -79,10 +93,10 @@ public class KtPsiUtilTest extends KotlinLiteFixture {
         for (KtClassOrObject classOrObject : classOrObjects) {
             String classOrObjectName = classOrObject.getName();
             if (classOrObjectName != null && classOrObjectName.contains("Local")) {
-                assertTrue("JetPsiUtil.isLocalClass should return true for " + classOrObjectName, KtPsiUtil.isLocal(classOrObject));
+                assertTrue("KtPsiUtil.isLocal should return true for " + classOrObjectName, KtPsiUtil.isLocal(classOrObject));
             }
             else {
-                assertFalse("JetPsiUtil.isLocalClass should return false for " + classOrObjectName, KtPsiUtil.isLocal(classOrObject));
+                assertFalse("KtPsiUtil.isLocal should return false for " + classOrObjectName, KtPsiUtil.isLocal(classOrObject));
             }
         }
     }
@@ -95,9 +109,15 @@ public class KtPsiUtilTest extends KotlinLiteFixture {
         checkIsSelectorInQualified();
     }
 
+    public void testIsCallee() {
+        checkExpression(KtPsiUtilKt::isCallee);
+    }
+
     @Override
     protected KotlinCoreEnvironment createEnvironment() {
-        return KotlinCoreEnvironment.createForTests(getTestRootDisposable(), new CompilerConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES);
+        return KotlinCoreEnvironment.createForTests(
+                getTestRootDisposable(), KotlinTestUtils.newConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES
+        );
     }
 
     private ImportPath getImportPathFromParsed(String text) {
@@ -110,6 +130,10 @@ public class KtPsiUtilTest extends KotlinLiteFixture {
     }
 
     private void checkIsSelectorInQualified() {
+        checkExpression(KtPsiUtil::isSelectorInQualified);
+    }
+
+    private void checkExpression(Function1<KtSimpleNameExpression, Boolean> checkedFunction) {
         String trueResultString = "/*true*/";
         String falseResultString = "/*false*/";
 
@@ -130,7 +154,7 @@ public class KtPsiUtilTest extends KotlinLiteFixture {
 
             Assert.assertNotNull("Can't find expression in text:\n" + modifiedWithOffset, expression);
             Assert.assertSame(expected + " result was expected at\n" + modifiedWithOffset,
-                              expected, KtPsiUtil.isSelectorInQualified(expression));
+                              expected, checkedFunction.invoke(expression));
         }
     }
 }

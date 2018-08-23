@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 package org.jetbrains.kotlin.types
 
-import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
 
@@ -30,6 +29,9 @@ abstract class TypeSubstitution {
     }
 
     abstract operator fun get(key: KotlinType): TypeProjection?
+
+    // This can be used to perform preliminary manipulations with top-level types
+    open fun prepareTopLevelType(topLevelType: KotlinType, position: Variance): KotlinType = topLevelType
 
     open fun isEmpty(): Boolean = false
 
@@ -47,10 +49,16 @@ abstract class TypeConstructorSubstitution : TypeSubstitution() {
     abstract fun get(key: TypeConstructor): TypeProjection?
 
     companion object {
-        @JvmStatic fun createByConstructorsMap(map: Map<TypeConstructor, TypeProjection>): TypeConstructorSubstitution =
+        @JvmStatic
+        @JvmOverloads
+        fun createByConstructorsMap(
+                map: Map<TypeConstructor, TypeProjection>,
+                approximateCapturedTypes: Boolean = false
+        ): TypeConstructorSubstitution =
             object : TypeConstructorSubstitution() {
                 override fun get(key: TypeConstructor) = map[key]
                 override fun isEmpty() = map.isEmpty()
+                override fun approximateCapturedTypes() = approximateCapturedTypes
             }
 
         @JvmStatic fun createByParametersMap(map: Map<TypeParameterDescriptor, TypeProjection>): TypeConstructorSubstitution =
@@ -104,78 +112,43 @@ class IndexedParametersSubstitution(
     }
 }
 
-fun KotlinType.computeNewSubstitution(
-        typeConstructor: TypeConstructor,
-        newArguments: List<TypeProjection>
-): TypeSubstitution {
-    val newSubstitution = TypeConstructorSubstitution.create(typeConstructor, newArguments)
-
-    // If previous substitution was trivial just replace it with indexed one
-    val substitutionToComposeWith = getCapability<CustomSubstitutionCapability>()?.substitutionToComposeWith ?: return newSubstitution
-    val composedSubstitution = CompositeTypeSubstitution(newSubstitution, substitutionToComposeWith)
-
-    return composedSubstitution
-}
-
 @JvmOverloads
 fun KotlinType.replace(
         newArguments: List<TypeProjection> = arguments,
-        newAnnotations: Annotations = annotations,
-        newCapabilities: TypeCapabilities = capabilities
+        newAnnotations: Annotations = annotations
 ): KotlinType {
-    if (newArguments.isEmpty() && newAnnotations === annotations && newCapabilities === capabilities) return this
+    if ((newArguments.isEmpty() || newArguments === arguments) && newAnnotations === annotations) return this
+
+    val unwrapped = unwrap()
+    return when(unwrapped) {
+        is FlexibleType -> KotlinTypeFactory.flexibleType(unwrapped.lowerBound.replace(newArguments, newAnnotations),
+                                                          unwrapped.upperBound.replace(newArguments, newAnnotations))
+        is SimpleType -> unwrapped.replace(newArguments, newAnnotations)
+    }
+}
+
+@JvmOverloads
+fun SimpleType.replace(
+        newArguments: List<TypeProjection> = arguments,
+        newAnnotations: Annotations = annotations
+): SimpleType {
+    if (newArguments.isEmpty() && newAnnotations === annotations) return this
 
     if (newArguments.isEmpty()) {
-        return KotlinTypeImpl.create(
-                newAnnotations,
-                constructor,
-                isMarkedNullable,
-                arguments,
-                substitution,
-                memberScope,
-                newCapabilities
-        )
+        return replaceAnnotations(newAnnotations)
     }
 
-    val newSubstitution = computeNewSubstitution(constructor, newArguments)
-
-    val declarationDescriptor = constructor.declarationDescriptor
-    val newScope =
-            if (declarationDescriptor is ClassDescriptor)
-                declarationDescriptor.getMemberScope(newSubstitution)
-            else ErrorUtils.createErrorScope("Unexpected declaration descriptor for type constructor: $constructor")
-
-    return KotlinTypeImpl.create(
+    return KotlinTypeFactory.simpleType(
             newAnnotations,
             constructor,
-            isMarkedNullable,
             newArguments,
-            newSubstitution,
-            newScope,
-            newCapabilities
+            isMarkedNullable
     )
 }
 
-private class CompositeTypeSubstitution(
-    private val first: TypeSubstitution,
-    private val second: TypeSubstitution
-) : TypeSubstitution() {
-
-    override fun get(key: KotlinType): TypeProjection? {
-        val firstResult = first[key] ?: return second[key]
-        return second.buildSubstitutor().substitute(firstResult)
-    }
-
-    override fun isEmpty() = first.isEmpty() && second.isEmpty()
-
-    override fun approximateCapturedTypes() = first.approximateCapturedTypes() || second.approximateCapturedTypes()
-    override fun approximateContravariantCapturedTypes() = first.approximateContravariantCapturedTypes() || second.approximateContravariantCapturedTypes()
-
-    override fun filterAnnotations(annotations: Annotations): Annotations = second.filterAnnotations(first.filterAnnotations(annotations))
-}
-
 open class DelegatedTypeSubstitution(val substitution: TypeSubstitution): TypeSubstitution() {
-    override fun get(key: KotlinType) = substitution.get(key)
+    override fun get(key: KotlinType) = substitution[key]
+    override fun prepareTopLevelType(topLevelType: KotlinType, position: Variance) = substitution.prepareTopLevelType(topLevelType, position)
 
     override fun isEmpty() = substitution.isEmpty()
 
@@ -183,4 +156,9 @@ open class DelegatedTypeSubstitution(val substitution: TypeSubstitution): TypeSu
     override fun approximateContravariantCapturedTypes() = substitution.approximateContravariantCapturedTypes()
 
     override fun filterAnnotations(annotations: Annotations) = substitution.filterAnnotations(annotations)
+}
+
+// This method used for transform type to simple type afler substitution
+fun KotlinType.asSimpleType(): SimpleType {
+    return unwrap() as? SimpleType ?: error("This is should be simple type: $this")
 }

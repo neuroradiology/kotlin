@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,10 +28,7 @@ import org.jetbrains.kotlin.resolve.lazy.descriptors.LazyScriptDescriptor;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope;
 
 import java.io.PrintStream;
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 public class TopDownAnalysisContext implements BodiesResolveContext {
 
@@ -39,12 +36,14 @@ public class TopDownAnalysisContext implements BodiesResolveContext {
 
     private final Map<KtClassOrObject, ClassDescriptorWithResolutionScopes> classes = Maps.newLinkedHashMap();
     private final Map<KtAnonymousInitializer, ClassDescriptorWithResolutionScopes> anonymousInitializers = Maps.newLinkedHashMap();
-    private final Set<KtFile> files = new LinkedHashSet<KtFile>();
-    private final Map<KtSecondaryConstructor, ConstructorDescriptor> secondaryConstructors = Maps.newLinkedHashMap();
+    private final Set<KtFile> files = new LinkedHashSet<>();
+    private final Map<KtSecondaryConstructor, ClassConstructorDescriptor> secondaryConstructors = Maps.newLinkedHashMap();
 
     private final Map<KtNamedFunction, SimpleFunctionDescriptor> functions = Maps.newLinkedHashMap();
     private final Map<KtProperty, PropertyDescriptor> properties = Maps.newLinkedHashMap();
-    private final Map<KtParameter, PropertyDescriptor> primaryConstructorParameterProperties = Maps.newHashMap();
+    private final Map<KtParameter, PropertyDescriptor> primaryConstructorParameterProperties = new HashMap<>();
+    private final Map<KtTypeAlias, TypeAliasDescriptor> typeAliases = Maps.newLinkedHashMap();
+    private final Map<KtDestructuringDeclarationEntry, PropertyDescriptor> destructuringDeclarationEntries = Maps.newLinkedHashMap();
     private Map<KtCallableDeclaration, CallableMemberDescriptor> members = null;
 
     private final Map<KtScript, LazyScriptDescriptor> scripts = Maps.newLinkedHashMap();
@@ -100,7 +99,7 @@ public class TopDownAnalysisContext implements BodiesResolveContext {
     }
 
     @Override
-    public Map<KtSecondaryConstructor, ConstructorDescriptor> getSecondaryConstructors() {
+    public Map<KtSecondaryConstructor, ClassConstructorDescriptor> getSecondaryConstructors() {
         return secondaryConstructors;
     }
 
@@ -137,6 +136,16 @@ public class TopDownAnalysisContext implements BodiesResolveContext {
     @Override
     public Map<KtNamedFunction, SimpleFunctionDescriptor> getFunctions() {
         return functions;
+    }
+
+    @Override
+    public Map<KtTypeAlias, TypeAliasDescriptor> getTypeAliases() {
+        return typeAliases;
+    }
+
+    @Override
+    public Map<KtDestructuringDeclarationEntry, PropertyDescriptor> getDestructuringDeclarationEntries() {
+        return destructuringDeclarationEntries;
     }
 
     @NotNull

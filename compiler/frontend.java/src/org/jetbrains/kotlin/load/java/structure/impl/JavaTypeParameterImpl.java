@@ -16,11 +16,14 @@
 
 package org.jetbrains.kotlin.load.java.structure.impl;
 
-import com.intellij.psi.*;
+import com.intellij.psi.PsiAnnotationOwner;
+import com.intellij.psi.PsiTypeParameter;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.load.java.structure.*;
+import org.jetbrains.kotlin.load.java.structure.JavaClassifierType;
+import org.jetbrains.kotlin.load.java.structure.JavaTypeParameter;
 import org.jetbrains.kotlin.name.Name;
+import org.jetbrains.kotlin.name.SpecialNames;
 
 import java.util.Collection;
 
@@ -34,7 +37,7 @@ public class JavaTypeParameterImpl extends JavaClassifierImpl<PsiTypeParameter> 
     @NotNull
     @Override
     public Name getName() {
-        return Name.identifier(getPsi().getName());
+        return SpecialNames.safeIdentifier(getPsi().getName());
     }
 
     @Override
@@ -43,34 +46,9 @@ public class JavaTypeParameterImpl extends JavaClassifierImpl<PsiTypeParameter> 
         return classifierTypes(getPsi().getExtendsList().getReferencedTypes());
     }
 
-    @Override
     @Nullable
-    public JavaTypeParameterListOwner getOwner() {
-        PsiTypeParameterListOwner owner = getPsi().getOwner();
-        // TODO: a separate factory for such things
-        if (owner instanceof PsiMethod) {
-            PsiMethod psiMethod = (PsiMethod) owner;
-            return psiMethod.isConstructor() ? new JavaConstructorImpl(psiMethod) : new JavaMethodImpl(psiMethod);
-        }
-        else if (owner instanceof PsiClass) {
-            return new JavaClassImpl((PsiClass) owner);
-        }
-        else if (owner != null) {
-            throw new UnsupportedOperationException("Unsupported type parameter list owner: " + owner);
-        }
-
-        return null;
-    }
-
-    @NotNull
     @Override
-    public JavaType getType() {
-        return JavaTypeImpl.create(JavaPsiFacade.getInstance(getPsi().getProject()).getElementFactory().createType(getPsi()));
-    }
-
-    @Override
-    @NotNull
-    public JavaTypeProvider getTypeProvider() {
-        return new JavaTypeProviderImpl(getPsi().getManager());
+    public PsiAnnotationOwner getAnnotationOwnerPsi() {
+        return getPsi();
     }
 }

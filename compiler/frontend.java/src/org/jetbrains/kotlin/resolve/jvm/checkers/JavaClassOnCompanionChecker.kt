@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,20 +16,20 @@
 
 package org.jetbrains.kotlin.resolve.jvm.checkers
 
-import org.jetbrains.kotlin.descriptors.CallableDescriptor
+import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
 import org.jetbrains.kotlin.resolve.calls.checkers.CallChecker
-import org.jetbrains.kotlin.resolve.calls.context.BasicCallResolutionContext
+import org.jetbrains.kotlin.resolve.calls.checkers.CallCheckerContext
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
 import org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm
-import org.jetbrains.kotlin.types.KotlinTypeImpl
+import org.jetbrains.kotlin.types.KotlinTypeFactory
 import org.jetbrains.kotlin.types.TypeProjectionImpl
 
 class JavaClassOnCompanionChecker : CallChecker {
-    override fun <F : CallableDescriptor> check(resolvedCall: ResolvedCall<F>, context: BasicCallResolutionContext) {
+    override fun check(resolvedCall: ResolvedCall<*>, reportOn: PsiElement, context: CallCheckerContext) {
         val descriptor = resolvedCall.resultingDescriptor
         if (descriptor !is PropertyDescriptor || descriptor.name.asString() != "javaClass") return
 
@@ -42,11 +42,11 @@ class JavaClassOnCompanionChecker : CallChecker {
         if (companionObject.isCompanionObject) {
             val containingClass = companionObject.containingDeclaration as ClassDescriptor
             val javaLangClass = actualType.constructor.declarationDescriptor as? ClassDescriptor ?: return
-            val expectedType = KotlinTypeImpl.create(
-                    Annotations.EMPTY, javaLangClass, actualType.isMarkedNullable,
-                    listOf(TypeProjectionImpl(containingClass.defaultType))
-            )
-            context.trace.report(ErrorsJvm.JAVA_CLASS_ON_COMPANION.on(resolvedCall.call.callElement, actualType, expectedType))
+
+            val arguments = listOf(TypeProjectionImpl(containingClass.defaultType))
+            val expectedType = KotlinTypeFactory.simpleType(Annotations.EMPTY, javaLangClass.typeConstructor, arguments,
+                                                            actualType.isMarkedNullable)
+            context.trace.report(ErrorsJvm.JAVA_CLASS_ON_COMPANION.on(reportOn, actualType, expectedType))
         }
     }
 }

@@ -1,6 +1,6 @@
-// "class org.jetbrains.kotlin.idea.quickfix.AutoImportFix" "false"
+// "class org.jetbrains.kotlin.idea.quickfix.ImportFix" "false"
 // ERROR: Unresolved reference: TTT
 
 class {
-  val t: TTT = null
+  val t: <caret>TTT = null
 }

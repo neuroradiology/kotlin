@@ -30,13 +30,15 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.StateRestoringCheckBox;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.asJava.LightClassUtilsKt;
 import org.jetbrains.kotlin.idea.KotlinBundle;
+import org.jetbrains.kotlin.idea.core.PsiModificationUtilsKt;
 import org.jetbrains.kotlin.idea.findUsages.KotlinClassFindUsagesOptions;
-import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringUtil;
+import org.jetbrains.kotlin.idea.refactoring.RenderingUtilsKt;
 import org.jetbrains.kotlin.psi.KtClass;
 import org.jetbrains.kotlin.psi.KtClassOrObject;
-import org.jetbrains.kotlin.psi.psiUtil.KtPsiUtilKt;
+import org.jetbrains.kotlin.psi.psiUtil.PsiUtilsKt;
 
 import javax.swing.*;
 
@@ -46,6 +48,7 @@ public class KotlinFindClassUsagesDialog extends FindClassUsagesDialog {
     private StateRestoringCheckBox constructorUsages;
     private StateRestoringCheckBox derivedClasses;
     private StateRestoringCheckBox derivedTraits;
+    private StateRestoringCheckBox expectedUsages;
 
     public KotlinFindClassUsagesDialog(
             KtClassOrObject classOrObject,
@@ -91,7 +94,7 @@ public class KotlinFindClassUsagesDialog extends FindClassUsagesDialog {
         //noinspection ConstantConditions
         javaClass.getModifierList().setModifierProperty(
                 PsiModifier.FINAL,
-                !(classOrObject instanceof KtClass && KtPsiUtilKt.isInheritable((KtClass) classOrObject))
+                !(classOrObject instanceof KtClass && PsiModificationUtilsKt.isInheritable((KtClass) classOrObject))
         );
 
         javaClass.putUserData(ORIGINAL_CLASS, classOrObject);
@@ -145,16 +148,38 @@ public class KotlinFindClassUsagesDialog extends FindClassUsagesDialog {
         return (KotlinClassFindUsagesOptions) super.getFindUsagesOptions();
     }
 
-    @Override
-    public void configureLabelComponent(@NotNull SimpleColoredComponent coloredComponent) {
+    @Nullable
+    private KtClassOrObject getOriginalClass() {
         PsiElement klass = LightClassUtilsKt.getUnwrapped(getPsiElement());
         //noinspection ConstantConditions
-        KtClassOrObject originalClass = klass instanceof KtClassOrObject
-                                         ? (KtClassOrObject) klass
-                                         : klass.getUserData(ORIGINAL_CLASS);
+        return klass instanceof KtClassOrObject
+               ? (KtClassOrObject) klass
+               : klass.getUserData(ORIGINAL_CLASS);
+    }
 
+    @Override
+    protected void addUsagesOptions(JPanel optionsPanel) {
+        super.addUsagesOptions(optionsPanel);
+
+        KtClassOrObject klass = getOriginalClass();
+        boolean isActual = klass != null && PsiUtilsKt.hasActualModifier(klass);
+        KotlinClassFindUsagesOptions options = getFindUsagesOptions();
+        if (isActual) {
+            expectedUsages = addCheckboxToPanel(
+                    "Expected classes",
+                    options.getSearchExpected(),
+                    optionsPanel,
+                    false
+            );
+        }
+
+    }
+
+    @Override
+    public void configureLabelComponent(@NotNull SimpleColoredComponent coloredComponent) {
+        KtClassOrObject originalClass = getOriginalClass();
         if (originalClass != null) {
-            coloredComponent.append(KotlinRefactoringUtil.formatClass(originalClass));
+            coloredComponent.append(RenderingUtilsKt.formatClass(originalClass));
         }
     }
 
@@ -174,5 +199,8 @@ public class KotlinFindClassUsagesDialog extends FindClassUsagesDialog {
         kotlinOptions.setSearchConstructorUsages(constructorUsages.isSelected());
         kotlinOptions.isDerivedClasses = derivedClasses.isSelected();
         kotlinOptions.isDerivedInterfaces = derivedTraits.isSelected();
+        if (expectedUsages != null) {
+            kotlinOptions.setSearchExpected(expectedUsages.isSelected());
+        }
     }
 }

@@ -1,3 +1,6 @@
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: JS
+// reason - no ArithmeticException in JS
 fun box(): String {
     val a1 = 0
     val a2 = try { 1 / 0 } catch(e: ArithmeticException) { 0 }

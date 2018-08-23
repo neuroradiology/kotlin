@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 fun Int.foo() : Boolean = true
 
 fun foo() : Int {
@@ -5,11 +6,12 @@ fun foo() : Int {
     val x = 1
     when (x) {
       is <!INCOMPATIBLE_TYPES!>String<!> -> <!UNUSED_EXPRESSION!>1<!>
-      !is Int -> <!UNUSED_EXPRESSION!>1<!>
-      is Any<!USELESS_NULLABLE_CHECK!>?<!> -> <!UNUSED_EXPRESSION!>1<!>
+      <!USELESS_IS_CHECK!>!is Int<!> -> <!UNUSED_EXPRESSION!>1<!>
+      <!USELESS_IS_CHECK!>is Any<!USELESS_NULLABLE_CHECK!>?<!><!> -> <!UNUSED_EXPRESSION!>1<!>
+      <!USELESS_IS_CHECK!>is Any<!> -> <!UNUSED_EXPRESSION!>1<!>
       <!INCOMPATIBLE_TYPES!>s<!> -> <!UNUSED_EXPRESSION!>1<!>
       1 -> <!UNUSED_EXPRESSION!>1<!>
-      1 + <!UNRESOLVED_REFERENCE!>a<!> -> <!UNUSED_EXPRESSION!>1<!>
+      1 <!NI;OVERLOAD_RESOLUTION_AMBIGUITY!>+<!> <!UNRESOLVED_REFERENCE!>a<!> -> <!UNUSED_EXPRESSION!>1<!>
       in 1..<!UNRESOLVED_REFERENCE!>a<!> -> <!UNUSED_EXPRESSION!>1<!>
       !in 1..<!UNRESOLVED_REFERENCE!>a<!> -> <!UNUSED_EXPRESSION!>1<!>
       else -> <!UNUSED_EXPRESSION!>1<!>
@@ -26,7 +28,7 @@ fun test() {
 
   when (x) {
     <!INCOMPATIBLE_TYPES!>s<!> -> <!UNUSED_EXPRESSION!>1<!>
-    <!INCOMPATIBLE_TYPES!>""<!> -> <!UNUSED_EXPRESSION!>1<!>
+    <!INCOMPATIBLE_TYPES, DUPLICATE_LABEL_IN_WHEN!>""<!> -> <!UNUSED_EXPRESSION!>1<!>
     x -> <!UNUSED_EXPRESSION!>1<!>
     1 -> <!UNUSED_EXPRESSION!>1<!>
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import com.google.common.collect.Lists;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.cfg.TailRecursionKind;
 import org.jetbrains.kotlin.codegen.context.MethodContext;
+import org.jetbrains.kotlin.codegen.coroutines.CoroutineCodegenUtilKt;
 import org.jetbrains.kotlin.codegen.state.GenerationState;
 import org.jetbrains.kotlin.descriptors.CallableDescriptor;
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor;
@@ -60,12 +61,12 @@ public class TailRecursionCodegen {
     }
 
     public boolean isTailRecursion(@NotNull ResolvedCall<?> resolvedCall) {
-        TailRecursionKind status = state.getBindingContext().get(TAIL_RECURSION_CALL, resolvedCall);
+        TailRecursionKind status = state.getBindingContext().get(TAIL_RECURSION_CALL, resolvedCall.getCall());
         return status != null && status.isDoGenerateTailRecursion();
     }
 
     public void generateTailRecursion(ResolvedCall<?> resolvedCall) {
-        CallableDescriptor fd = resolvedCall.getResultingDescriptor();
+        CallableDescriptor fd = CoroutineCodegenUtilKt.unwrapInitialDescriptorForSuspendFunction(resolvedCall.getResultingDescriptor());
         assert fd instanceof FunctionDescriptor : "Resolved call doesn't refer to the function descriptor: " + fd;
         CallableMethod callable = (CallableMethod) codegen.resolveToCallable((FunctionDescriptor) fd, false, resolvedCall);
 
@@ -73,6 +74,11 @@ public class TailRecursionCodegen {
         if (arguments == null) {
             throw new IllegalStateException("Failed to arrange value arguments by index: " + fd);
         }
+
+        if (((FunctionDescriptor) fd).isSuspend()) {
+            AsmUtil.pop(v, callable.getValueParameters().get(callable.getValueParameters().size() - 1).getAsmType());
+        }
+
         assignParameterValues(fd, callable, arguments);
         if (callable.getExtensionReceiverType() != null) {
             if (resolvedCall.getExtensionReceiver() != fd.getExtensionReceiverParameter().getValue()) {

@@ -2,6 +2,7 @@ import pack.oldFun1
 import pack.oldFun2 // should not be removed for non-deprecated overload used
 import pack.oldFun3
 import kotlin.reflect.KProperty
+import some.unresolved.declaration // should not be removed
 
 class A private()
 
@@ -38,14 +39,7 @@ annotation class Fancy(val param: Int)
 
 @Fancy(<caret>i) class D
 
-class CustomDelegate {
-    operator fun get(thisRef: Any?, prop: KProperty<*>): String = ""
-    operator fun set(thisRef: Any?, prop: KProperty<*>, value: String) {}
-}
-
 class B {
-    var a: String by CustomDelegate()
-
     fun plus(a: A): A = A()
 }
 
@@ -75,27 +69,51 @@ fun infixTest() {
     arrayListOf(1, 2, 3) map { it }
 }
 
-fun async(f: () -> Unit) {}
-infix fun Any.async(f: () -> Unit) {}
-object async {
-    operator fun times(f: () -> Unit) = f()
+
+fun bar(yield: Int = 4) {}
+
+fun yield(yield: Int) {
+    "$yield"
+    "${yield}"
+
+    yield
+    val foo = yield + yield
+    val foo2 = yield
+
+    bar(yield = 5)
+
+    yield(4)
+    yield {}
+
+    class yield<T: yield<T>>
+
+    return@yield
+    return@yield Unit
+
+    val foo5: yield<*>
 }
 
-fun test(foo: Any) {
-    async {  }
-    async /**/ {  }
-    foo async {  }
+fun yield(i: (Int) -> Unit) {}
 
-    async() { }
+annotation class yield
 
-    async({ })
-    foo async ({ })
+@yield()
+fun test2(p: Int) {
+    yield@ p
 
-    foo async fun () {}
-    foo async (fun () {})
-
-    async (fun () {})
-
-    async* {}
+    @yield fun f() {}
 }
 
+object X {
+    fun yield() {}
+
+    fun test3(yield: Int) {
+        X::yield
+
+        yield::toInt
+    }
+}
+
+header class Expected
+
+impl class Actual

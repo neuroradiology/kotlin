@@ -1,4 +1,4 @@
-JetFile: firstInSecondaryConstructor.kt
+KtFile: firstInSecondaryConstructor.kt
   PACKAGE_DIRECTIVE
     <empty list>
   IMPORT_LIST
@@ -25,10 +25,10 @@ JetFile: firstInSecondaryConstructor.kt
                 REFERENCE_EXPRESSION
                   PsiElement(IDENTIFIER)('Int')
           PsiElement(RPAR)(')')
-        PsiWhiteSpace(' ')
         CONSTRUCTOR_DELEGATION_CALL
           CONSTRUCTOR_DELEGATION_REFERENCE
             <empty list>
+        PsiWhiteSpace(' ')
         BLOCK
           PsiElement(LBRACE)('{')
           PsiWhiteSpace('\n\n    ')

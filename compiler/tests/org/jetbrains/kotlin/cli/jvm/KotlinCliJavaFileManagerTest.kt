@@ -1,5 +1,5 @@
 /*
- * Copyright 2000-2013 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,26 +13,45 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.jetbrains.kotlin.cli.jvm
 
-import com.intellij.ide.highlighter.JavaFileType
-import com.intellij.psi.PsiFileFactory
+import com.intellij.core.CoreJavaFileManager
+import com.intellij.openapi.components.ServiceManager
+import com.intellij.openapi.vfs.StandardFileSystems
 import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.testFramework.PlatformTestCase
-import com.intellij.testFramework.PsiTestCase
-import com.intellij.testFramework.PsiTestUtil
 import junit.framework.TestCase
 import org.intellij.lang.annotations.Language
-import org.jetbrains.kotlin.cli.jvm.compiler.JavaRoot
-import org.jetbrains.kotlin.cli.jvm.compiler.JvmDependenciesIndex
+import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCliJavaFileManagerImpl
+import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.cli.jvm.index.JavaRoot
+import org.jetbrains.kotlin.cli.jvm.index.JvmDependenciesIndexImpl
+import org.jetbrains.kotlin.cli.jvm.index.SingleJavaFileRootsIndex
+import org.jetbrains.kotlin.load.java.structure.impl.JavaClassImpl
+import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.test.ConfigurationKind
+import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
+import org.jetbrains.kotlin.test.TestJdkKind
+import java.io.File
 
-//Partial copy of CoreJavaFileManagerTest
-class KotlinCliJavaFileManagerTest : PsiTestCase() {
+class KotlinCliJavaFileManagerTest : KotlinTestWithEnvironment() {
+    private lateinit var javaFilesDir: File
+
     fun testCommon() {
-        val manager = configureManager("package foo;\n\n" + "public class TopLevel {\n" + "public class Inner {\n" + "   public class Inner {}\n" + "}\n" + "\n" + "}", "TopLevel")
+        val manager = configureManager(
+                "package foo;\n" +
+                "\n" +
+                "public class TopLevel {\n" +
+                "public class Inner {\n" +
+                "   public class Inner {}\n" +
+                "}\n" +
+                "\n" +
+                "}",
+                "TopLevel")
 
         assertCanFind(manager, "foo", "TopLevel")
         assertCanFind(manager, "foo", "TopLevel.Inner")
@@ -44,8 +63,32 @@ class KotlinCliJavaFileManagerTest : PsiTestCase() {
     }
 
     fun testInnerClassesWithDollars() {
-        val manager = configureManager("package foo;\n\n" + "public class TopLevel {\n" +
-                                       "public class I\$nner {" + "   public class I\$nner{}" + "   public class \$Inner{}" + "   public class In\$ne\$r\${}" + "   public class Inner\$\${}" + "   public class \$\$\$\$\${}" + "}\n" + "public class Inner\$ {" + "   public class I\$nner{}" + "   public class \$Inner{}" + "   public class In\$ne\$r\${}" + "   public class Inner\$\${}" + "   public class \$\$\$\$\${}" + "}\n" + "public class In\$ner\$\$ {" + "   public class I\$nner{}" + "   public class \$Inner{}" + "   public class In\$ne\$r\${}" + "   public class Inner\$\${}" + "   public class \$\$\$\$\${}" + "}\n" + "\n" + "}", "TopLevel")
+        val manager = configureManager(
+                "package foo;\n\n" +
+                "public class TopLevel {\n" +
+                "public class I\$nner {\n" +
+                "   public class I\$nner{}\n" +
+                "   public class \$Inner{}\n" +
+                "   public class In\$ne\$r\${}\n" +
+                "   public class Inner\$\${}\n" +
+                "   public class \$\$\$\$\${}\n" +
+                "}\n" +
+                "public class Inner\$ {\n" +
+                "   public class I\$nner{}\n" +
+                "   public class \$Inner{}\n" +
+                "   public class In\$ne\$r\${}\n" +
+                "   public class Inner\$\${}\n" +
+                "   public class \$\$\$\$\${}\n" +
+                "}\n" +
+                "public class In\$ner\$\$ {\n" +
+                "   public class I\$nner{}\n" +
+                "   public class \$Inner{}\n" +
+                "   public class In\$ne\$r\${}\n" +
+                "   public class Inner\$\${}\n" +
+                "   public class \$\$\$\$\${}\n" +
+                "}\n" +
+                "\n" +
+                "}", "TopLevel")
 
         assertCanFind(manager, "foo", "TopLevel")
 
@@ -138,17 +181,35 @@ class KotlinCliJavaFileManagerTest : PsiTestCase() {
         TestCase.assertNull("Should not find class in empty scope", manager.findClass("foo.Test", GlobalSearchScope.EMPTY_SCOPE))
     }
 
+    override fun createEnvironment(): KotlinCoreEnvironment {
+        javaFilesDir = KotlinTestUtils.tmpDir("java-file-manager-test")
+
+        val configuration = KotlinTestUtils.newConfiguration(
+                ConfigurationKind.JDK_ONLY, TestJdkKind.MOCK_JDK, emptyList(), listOf(javaFilesDir)
+        )
+
+        return KotlinCoreEnvironment.createForTests(testRootDisposable, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES)
+    }
+
     private fun configureManager(@Language("JAVA") text: String, className: String): KotlinCliJavaFileManagerImpl {
-        val root = PsiTestUtil.createTestProjectStructure(myProject, myModule, PlatformTestCase.myFilesToDelete)
-        val pkg = root.createChildDirectory(this, "foo")
-        val dir = myPsiManager.findDirectory(pkg)
-        TestCase.assertNotNull(dir)
-        dir!!
-        dir.add(PsiFileFactory.getInstance(project).createFileFromText(className + ".java", JavaFileType.INSTANCE, text))
-        val coreJavaFileManagerExt = KotlinCliJavaFileManagerImpl(myPsiManager)
-        coreJavaFileManagerExt.initIndex(JvmDependenciesIndex(listOf(JavaRoot(root, JavaRoot.RootType.SOURCE))))
-        coreJavaFileManagerExt.addToClasspath(root)
-        return coreJavaFileManagerExt
+        val fooPackageDir = File(javaFilesDir, "foo")
+        fooPackageDir.mkdir()
+
+        File(fooPackageDir, "$className.java").writeText(text)
+
+        @Suppress("UNUSED_VARIABLE") // used to implicitly initialize classpath/index in the manager
+        val coreJavaFileFinder = VirtualFileFinder.SERVICE.getInstance(project)
+        val coreJavaFileManager = ServiceManager.getService(project, CoreJavaFileManager::class.java) as KotlinCliJavaFileManagerImpl
+
+        val root = StandardFileSystems.local().findFileByPath(javaFilesDir.path)!!
+        coreJavaFileManager.initialize(
+                JvmDependenciesIndexImpl(listOf(JavaRoot(root, JavaRoot.RootType.SOURCE))),
+                emptyList(),
+                SingleJavaFileRootsIndex(emptyList()),
+                useFastClassFilesReading = true
+        )
+
+        return coreJavaFileManager
     }
 
     private fun assertCanFind(manager: KotlinCliJavaFileManagerImpl, packageFQName: String, classFqName: String) {
@@ -157,14 +218,14 @@ class KotlinCliJavaFileManagerTest : PsiTestCase() {
         val classId = ClassId(FqName(packageFQName), FqName(classFqName), false)
         val stringRequest = classId.asSingleFqName().asString()
 
-        val foundByClassId = manager.findClass(classId, allScope)
+        val foundByClassId = (manager.findClass(classId, allScope) as JavaClassImpl).psi
         val foundByString = manager.findClass(stringRequest, allScope)
 
         TestCase.assertNotNull("Could not find: $classId", foundByClassId)
         TestCase.assertNotNull("Could not find: $stringRequest", foundByString)
 
         TestCase.assertEquals(foundByClassId, foundByString)
-        TestCase.assertEquals("Found ${foundByClassId!!.qualifiedName} instead of $packageFQName", packageFQName + "." + classFqName,
+        TestCase.assertEquals("Found ${foundByClassId.qualifiedName} instead of $packageFQName", packageFQName + "." + classFqName,
                               foundByClassId.qualifiedName)
     }
 

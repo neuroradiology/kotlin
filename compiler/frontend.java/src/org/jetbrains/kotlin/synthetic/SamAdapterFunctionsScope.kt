@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,44 +17,95 @@
 package org.jetbrains.kotlin.synthetic
 
 import com.intellij.util.SmartList
+import org.jetbrains.kotlin.config.LanguageFeature
+import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
 import org.jetbrains.kotlin.descriptors.impl.SimpleFunctionDescriptorImpl
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptor
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptorImpl
+import org.jetbrains.kotlin.descriptors.synthetic.SyntheticMemberDescriptor
 import org.jetbrains.kotlin.incremental.components.LookupLocation
+import org.jetbrains.kotlin.incremental.components.LookupTracker
+import org.jetbrains.kotlin.incremental.record
+import org.jetbrains.kotlin.load.java.components.SamConversionResolver
+import org.jetbrains.kotlin.load.java.descriptors.JavaClassConstructorDescriptor
+import org.jetbrains.kotlin.load.java.descriptors.JavaClassDescriptor
+import org.jetbrains.kotlin.load.java.descriptors.JavaMethodDescriptor
+import org.jetbrains.kotlin.load.java.lazy.descriptors.LazyJavaClassDescriptor
+import org.jetbrains.kotlin.load.java.sam.SamAdapterDescriptor
+import org.jetbrains.kotlin.load.java.sam.SamConstructorDescriptor
 import org.jetbrains.kotlin.load.java.sam.SingleAbstractMethodUtils
 import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.resolve.DescriptorUtils
-import org.jetbrains.kotlin.resolve.descriptorUtil.parentsWithSelf
+import org.jetbrains.kotlin.resolve.DeprecationResolver
+import org.jetbrains.kotlin.resolve.calls.inference.wrapWithCapturingSubstitution
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
+import org.jetbrains.kotlin.resolve.scopes.ResolutionScope
 import org.jetbrains.kotlin.resolve.scopes.SyntheticScope
 import org.jetbrains.kotlin.storage.StorageManager
 import org.jetbrains.kotlin.types.*
-import java.util.*
+import org.jetbrains.kotlin.types.checker.findCorrespondingSupertype
 import kotlin.properties.Delegates
 
-interface SamAdapterExtensionFunctionDescriptor : FunctionDescriptor {
-    val sourceFunction: FunctionDescriptor
+interface SamAdapterExtensionFunctionDescriptor : FunctionDescriptor, SyntheticMemberDescriptor<FunctionDescriptor> {
+    override val baseDescriptorForSynthetic: FunctionDescriptor
 }
 
-class SamAdapterFunctionsScope(storageManager: StorageManager) : SyntheticScope {
-    private val extensionForFunction = storageManager.createMemoizedFunctionWithNullableValues<FunctionDescriptor, FunctionDescriptor> { function ->
-        extensionForFunctionNotCached(function)
-    }
+val SAM_LOOKUP_NAME = Name.special("<SAM-CONSTRUCTOR>")
+
+class SamAdapterFunctionsScope(
+        storageManager: StorageManager,
+        private val languageVersionSettings: LanguageVersionSettings,
+        private val samResolver: SamConversionResolver,
+        private val deprecationResolver: DeprecationResolver,
+        private val lookupTracker: LookupTracker
+) : SyntheticScope {
+    private val samViaSyntheticScopeDisabled = languageVersionSettings.supportsFeature(LanguageFeature.NewInference)
+
+    private val extensionForFunction =
+            storageManager.createMemoizedFunctionWithNullableValues<FunctionDescriptor, FunctionDescriptor> { function ->
+                extensionForFunctionNotCached(function)
+            }
+
+    private val samAdapterForStaticFunction =
+            storageManager.createMemoizedFunction<JavaMethodDescriptor, SamAdapterDescriptor<JavaMethodDescriptor>> { function ->
+                SingleAbstractMethodUtils.createSamAdapterFunction(function, samResolver)
+            }
+
+    private val samConstructorForClassifier =
+            storageManager.createMemoizedFunction<JavaClassDescriptor, SamConstructorDescriptor> { classifier ->
+                SingleAbstractMethodUtils.createSamConstructorFunction(classifier.containingDeclaration, classifier, samResolver)
+            }
+
+    private val samConstructorForJavaConstructor =
+            storageManager.createMemoizedFunction<JavaClassConstructorDescriptor, ClassConstructorDescriptor> { constructor ->
+                SingleAbstractMethodUtils.createSamAdapterConstructor(constructor, samResolver) as ClassConstructorDescriptor
+            }
+
+    private val samConstructorForTypeAliasConstructor =
+            storageManager.createMemoizedFunctionWithNullableValues<Pair<ClassConstructorDescriptor, TypeAliasDescriptor>, TypeAliasConstructorDescriptor> {
+                (constructor, typeAliasDescriptor) ->
+                TypeAliasConstructorDescriptorImpl.createIfAvailable(storageManager, typeAliasDescriptor, constructor)
+            }
 
     private fun extensionForFunctionNotCached(function: FunctionDescriptor): FunctionDescriptor? {
         if (!function.visibility.isVisibleOutside()) return null
         if (!function.hasJavaOriginInHierarchy()) return null //TODO: should we go into base at all?
         if (!SingleAbstractMethodUtils.isSamAdapterNecessary(function)) return null
         if (function.returnType == null) return null
-        return MyFunctionDescriptor.create(function)
+        if (deprecationResolver.isHiddenInResolution(function)) return null
+        return SamAdapterExtensionFunctionDescriptorImpl.create(function, samResolver)
     }
 
-    override fun getSyntheticExtensionFunctions(receiverTypes: Collection<KotlinType>, name: Name, location: LookupLocation): Collection<FunctionDescriptor> {
+    override fun getSyntheticMemberFunctions(receiverTypes: Collection<KotlinType>, name: Name, location: LookupLocation): Collection<FunctionDescriptor> {
+        if (samViaSyntheticScopeDisabled) return emptyList()
+
         var result: SmartList<FunctionDescriptor>? = null
         for (type in receiverTypes) {
             for (function in type.memberScope.getContributedFunctions(name, location)) {
-                val extension = extensionForFunction(function.original)
+                val extension = extensionForFunction(function.original)?.substituteForReceiverType(type)
                 if (extension != null) {
+                    recordSamLookupsForParameters(function, location)
                     if (result == null) {
                         result = SmartList()
                     }
@@ -69,11 +120,33 @@ class SamAdapterFunctionsScope(storageManager: StorageManager) : SyntheticScope 
         }
     }
 
-    override fun getSyntheticExtensionFunctions(receiverTypes: Collection<KotlinType>): Collection<FunctionDescriptor> {
+    private fun recordSamLookupsForParameters(function: FunctionDescriptor, location: LookupLocation) {
+        for (valueParameter in function.valueParameters) {
+            recordSamLookupsToClassifier(valueParameter.type.constructor.declarationDescriptor ?: continue, location)
+        }
+    }
+
+    private fun FunctionDescriptor.substituteForReceiverType(receiverType: KotlinType): FunctionDescriptor? {
+        val containingClass = containingDeclaration as? ClassDescriptor ?: return null
+        val correspondingSupertype = findCorrespondingSupertype(receiverType, containingClass.defaultType) ?: return null
+
+        return substitute(
+                TypeConstructorSubstitution
+                        .create(correspondingSupertype)
+                        .wrapWithCapturingSubstitution(needApproximation = true)
+                        .buildSubstitutor()
+        )
+    }
+
+    override fun getSyntheticMemberFunctions(receiverTypes: Collection<KotlinType>): Collection<FunctionDescriptor> {
+        if (samViaSyntheticScopeDisabled) return emptyList()
+
         return receiverTypes.flatMapTo(LinkedHashSet<FunctionDescriptor>()) { type ->
             type.memberScope.getContributedDescriptors(DescriptorKindFilter.FUNCTIONS)
                     .filterIsInstance<FunctionDescriptor>()
-                    .mapNotNull { extensionForFunction(it.original) }
+                    .mapNotNull {
+                        extensionForFunction(it.original)?.substituteForReceiverType(type)
+                    }
         }
     }
 
@@ -81,7 +154,112 @@ class SamAdapterFunctionsScope(storageManager: StorageManager) : SyntheticScope 
 
     override fun getSyntheticExtensionProperties(receiverTypes: Collection<KotlinType>): Collection<PropertyDescriptor> = emptyList()
 
-    private class MyFunctionDescriptor(
+    override fun getSyntheticStaticFunctions(scope: ResolutionScope, name: Name, location: LookupLocation): Collection<FunctionDescriptor> {
+        if (samViaSyntheticScopeDisabled) return emptyList()
+
+        return getSamFunctions(scope.getContributedFunctions(name, location), location)
+    }
+
+    override fun getSyntheticConstructors(scope: ResolutionScope, name: Name, location: LookupLocation): Collection<FunctionDescriptor> {
+        val classifier = scope.getContributedClassifier(name, location) ?: return emptyList()
+        recordSamLookupsToClassifier(classifier, location)
+
+        if (samViaSyntheticScopeDisabled) return listOfNotNull(getSamConstructor(classifier))
+
+        return getAllSamConstructors(classifier)
+    }
+
+    private fun recordSamLookupsToClassifier(classifier: ClassifierDescriptor, location: LookupLocation) {
+        if (classifier !is JavaClassDescriptor || classifier.kind != ClassKind.INTERFACE) return
+        // TODO: We should also record SAM lookups even when the interface is not SAM
+        if (!SingleAbstractMethodUtils.isSamType(classifier.defaultType)) return
+
+        lookupTracker.record(location, classifier, SAM_LOOKUP_NAME)
+    }
+
+    override fun getSyntheticStaticFunctions(scope: ResolutionScope): Collection<FunctionDescriptor> {
+        if (samViaSyntheticScopeDisabled) return emptyList()
+
+        return getSamFunctions(scope.getContributedDescriptors(DescriptorKindFilter.FUNCTIONS), location = null)
+    }
+
+    override fun getSyntheticConstructors(scope: ResolutionScope): Collection<FunctionDescriptor> {
+        val classifiers = scope.getContributedDescriptors(DescriptorKindFilter.CLASSIFIERS).filterIsInstance<ClassifierDescriptor>()
+
+        if (samViaSyntheticScopeDisabled) return classifiers.mapNotNull { getSamConstructor(it) }
+
+        return classifiers.flatMap { getAllSamConstructors(it) }
+    }
+
+    override fun getSyntheticConstructor(constructor: ConstructorDescriptor): ConstructorDescriptor? {
+        if (samViaSyntheticScopeDisabled) return null
+
+        return when (constructor) {
+            is JavaClassConstructorDescriptor -> createJavaSamAdapterConstructor(constructor)
+            is TypeAliasConstructorDescriptor -> {
+                val underlyingConstructor = constructor.underlyingConstructorDescriptor
+                if (underlyingConstructor !is JavaClassConstructorDescriptor) return null
+                val underlyingSamConstructor = createJavaSamAdapterConstructor(underlyingConstructor) ?: return null
+
+                samConstructorForTypeAliasConstructor(Pair(underlyingSamConstructor, constructor.typeAliasDescriptor))
+            }
+            else -> null
+        }
+    }
+
+    private fun createJavaSamAdapterConstructor(constructor: JavaClassConstructorDescriptor): ClassConstructorDescriptor? {
+        if (!SingleAbstractMethodUtils.isSamAdapterNecessary(constructor)) return null
+        return samConstructorForJavaConstructor(constructor)
+    }
+
+    private fun getSamFunctions(
+            functions: Collection<DeclarationDescriptor>,
+            location: LookupLocation?
+    ): List<SamAdapterDescriptor<JavaMethodDescriptor>> {
+        return functions.mapNotNull { function ->
+            if (function !is JavaMethodDescriptor) return@mapNotNull null
+            if (function.dispatchReceiverParameter != null) return@mapNotNull null // consider only statics
+            if (!SingleAbstractMethodUtils.isSamAdapterNecessary(function)) return@mapNotNull null
+
+            location?.let { recordSamLookupsForParameters(function, it) }
+
+            samAdapterForStaticFunction(function)
+        }
+    }
+
+    private fun getAllSamConstructors(classifier: ClassifierDescriptor): List<FunctionDescriptor> {
+        return getSamAdaptersFromConstructors(classifier) + listOfNotNull(getSamConstructor(classifier))
+    }
+
+    private fun getSamAdaptersFromConstructors(classifier: ClassifierDescriptor): List<FunctionDescriptor> {
+        if (classifier !is JavaClassDescriptor) return emptyList()
+
+        return arrayListOf<FunctionDescriptor>().apply {
+            for (constructor in classifier.constructors) {
+                val samConstructor = getSyntheticConstructor(constructor) ?: continue
+                add(samConstructor)
+            }
+        }
+    }
+
+    private fun getSamConstructor(classifier: ClassifierDescriptor): SamConstructorDescriptor? {
+        if (classifier is TypeAliasDescriptor) {
+            return getTypeAliasSamConstructor(classifier)
+        }
+
+        if (classifier !is LazyJavaClassDescriptor || classifier.defaultFunctionTypeForSamInterface == null) return null
+        return samConstructorForClassifier(classifier)
+    }
+
+    private fun getTypeAliasSamConstructor(classifier: TypeAliasDescriptor): SamConstructorDescriptor? {
+        val classDescriptor = classifier.classDescriptor ?: return null
+        if (classDescriptor !is LazyJavaClassDescriptor || classDescriptor.defaultFunctionTypeForSamInterface == null) return null
+
+        return SingleAbstractMethodUtils.createTypeAliasSamConstructorFunction(
+                classifier, samConstructorForClassifier(classDescriptor), samResolver)
+    }
+
+    private class SamAdapterExtensionFunctionDescriptorImpl(
             containingDeclaration: DeclarationDescriptor,
             original: SimpleFunctionDescriptor?,
             annotations: Annotations,
@@ -90,43 +268,37 @@ class SamAdapterFunctionsScope(storageManager: StorageManager) : SyntheticScope 
             source: SourceElement
     ) : SamAdapterExtensionFunctionDescriptor, SimpleFunctionDescriptorImpl(containingDeclaration, original, annotations, name, kind, source) {
 
-        override var sourceFunction: FunctionDescriptor by Delegates.notNull()
+        override var baseDescriptorForSynthetic: FunctionDescriptor by Delegates.notNull()
             private set
 
-        private var toSourceFunctionTypeParameters: Map<TypeParameterDescriptor, TypeParameterDescriptor>? = null
+        private val fromSourceFunctionTypeParameters: Map<TypeParameterDescriptor, TypeParameterDescriptor> by lazy {
+            baseDescriptorForSynthetic.typeParameters.zip(typeParameters).toMap()
+        }
 
         companion object {
-            fun create(sourceFunction: FunctionDescriptor): MyFunctionDescriptor {
-                val descriptor = MyFunctionDescriptor(DescriptorUtils.getContainingModule(sourceFunction),
-                                                      null,
-                                                      sourceFunction.annotations,
-                                                      sourceFunction.name,
-                                                      CallableMemberDescriptor.Kind.SYNTHESIZED,
-                                                      sourceFunction.original.source)
-                descriptor.sourceFunction = sourceFunction
+            fun create(sourceFunction: FunctionDescriptor, samResolver: SamConversionResolver): SamAdapterExtensionFunctionDescriptorImpl {
+                val descriptor = SamAdapterExtensionFunctionDescriptorImpl(
+                        sourceFunction.containingDeclaration,
+                        null,
+                        sourceFunction.annotations,
+                        sourceFunction.name,
+                        CallableMemberDescriptor.Kind.SYNTHESIZED,
+                        sourceFunction.original.source)
+                descriptor.baseDescriptorForSynthetic = sourceFunction
 
                 val sourceTypeParams = (sourceFunction.typeParameters).toMutableList()
                 val ownerClass = sourceFunction.containingDeclaration as ClassDescriptor
-                //TODO: should we go up parents for getters/setters too?
-                //TODO: non-inner classes
-                for (parent in ownerClass.parentsWithSelf) {
-                    if (parent !is ClassDescriptor) break
-                    sourceTypeParams += parent.declaredTypeParameters
-                }
-                //TODO: duplicated parameter names
 
                 val typeParameters = ArrayList<TypeParameterDescriptor>(sourceTypeParams.size)
                 val typeSubstitutor = DescriptorSubstitutor.substituteTypeParameters(sourceTypeParams, TypeSubstitution.EMPTY, descriptor, typeParameters)
 
-                descriptor.toSourceFunctionTypeParameters = typeParameters.zip(sourceTypeParams).toMap()
-
                 val returnType = typeSubstitutor.safeSubstitute(sourceFunction.returnType!!, Variance.INVARIANT)
-                val receiverType = typeSubstitutor.safeSubstitute(ownerClass.defaultType, Variance.INVARIANT)
-                val valueParameters = SingleAbstractMethodUtils.createValueParametersForSamAdapter(sourceFunction, descriptor, typeSubstitutor)
+                val valueParameters = SingleAbstractMethodUtils.createValueParametersForSamAdapter(
+                        sourceFunction, descriptor, typeSubstitutor, samResolver)
 
-                val visibility = syntheticExtensionVisibility(sourceFunction)
+                val visibility = syntheticVisibility(sourceFunction, isUsedForExtension = false)
 
-                descriptor.initialize(receiverType, null, typeParameters, valueParameters, returnType,
+                descriptor.initialize(null, ownerClass.thisAsReceiverParameter, typeParameters, valueParameters, returnType,
                                       Modality.FINAL, visibility)
 
                 descriptor.isOperator = sourceFunction.isOperator
@@ -136,42 +308,39 @@ class SamAdapterFunctionsScope(storageManager: StorageManager) : SyntheticScope 
             }
         }
 
-        override fun hasStableParameterNames() = sourceFunction.hasStableParameterNames()
-        override fun hasSynthesizedParameterNames() = sourceFunction.hasSynthesizedParameterNames()
+        override fun hasStableParameterNames() = baseDescriptorForSynthetic.hasStableParameterNames()
+        override fun hasSynthesizedParameterNames() = baseDescriptorForSynthetic.hasSynthesizedParameterNames()
 
         override fun createSubstitutedCopy(
                 newOwner: DeclarationDescriptor,
                 original: FunctionDescriptor?,
                 kind: CallableMemberDescriptor.Kind,
                 newName: Name?,
-                preserveSource: Boolean
-        ): MyFunctionDescriptor {
-            return MyFunctionDescriptor(
+                annotations: Annotations,
+                source: SourceElement
+        ): SamAdapterExtensionFunctionDescriptorImpl {
+            return SamAdapterExtensionFunctionDescriptorImpl(
                     containingDeclaration, original as SimpleFunctionDescriptor?, annotations, newName ?: name, kind, source
             ).apply {
-                sourceFunction = this@MyFunctionDescriptor.sourceFunction
+                baseDescriptorForSynthetic = this@SamAdapterExtensionFunctionDescriptorImpl.baseDescriptorForSynthetic
             }
         }
 
-        override fun doSubstitute(configuration: CopyConfiguration): FunctionDescriptor? {
-            val descriptor = super.doSubstitute(configuration) as MyFunctionDescriptor? ?: return null
-            val original = configuration.original
-                           ?: throw UnsupportedOperationException("doSubstitute with no original should not be called for synthetic extension")
+        override fun newCopyBuilder(substitutor: TypeSubstitutor): CopyConfiguration =
+                super.newCopyBuilder(substitutor).setOriginal(this.original)
 
-            original as MyFunctionDescriptor
+        override fun doSubstitute(configuration: CopyConfiguration): FunctionDescriptor? {
+            val descriptor = super.doSubstitute(configuration) as SamAdapterExtensionFunctionDescriptorImpl? ?: return null
+            val original = configuration.original
+                           ?: throw UnsupportedOperationException("doSubstitute with no original should not be called for synthetic extension $this")
+
+            original as SamAdapterExtensionFunctionDescriptorImpl
             assert(original.original == original) { "original in doSubstitute should have no other original" }
 
-            val substitutionMap = HashMap<TypeConstructor, TypeProjection>()
-            for (typeParameter in original.typeParameters) {
-                val typeProjection = configuration.originalSubstitutor.substitution[typeParameter.defaultType] ?: continue
-                val sourceTypeParameter = original.toSourceFunctionTypeParameters!![typeParameter]!!
-                substitutionMap[sourceTypeParameter.typeConstructor] = typeProjection
+            val sourceFunctionSubstitutor =
+                    CompositionTypeSubstitution(configuration.substitution, fromSourceFunctionTypeParameters).buildSubstitutor()
 
-            }
-
-            val sourceFunctionSubstitutor = TypeSubstitutor.create(substitutionMap)
-            descriptor.sourceFunction = original.sourceFunction.substitute(sourceFunctionSubstitutor)
-
+            descriptor.baseDescriptorForSynthetic = original.baseDescriptorForSynthetic.substitute(sourceFunctionSubstitutor) ?: return null
             return descriptor
         }
     }

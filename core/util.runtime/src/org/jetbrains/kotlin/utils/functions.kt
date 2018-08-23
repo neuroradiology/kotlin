@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,5 +31,9 @@ private val ALWAYS_NULL: (Any?) -> Any? = { null }
 fun <T, R: Any> alwaysNull(): (T) -> R? = ALWAYS_NULL as (T) -> R?
 
 val DO_NOTHING: (Any?) -> Unit = { }
+val DO_NOTHING_2: (Any?, Any?) -> Unit = { _, _ -> }
+val DO_NOTHING_3: (Any?, Any?, Any?) -> Unit = { _, _, _ -> }
 
 fun <T> doNothing(): (T) -> Unit = DO_NOTHING
+
+fun doNothing() {}

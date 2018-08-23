@@ -1,11 +1,18 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package templates
 
 import templates.Family.*
+import templates.SequenceClass.*
 
-fun strings(): List<GenericFunction> {
-    val templates = arrayListOf<GenericFunction>()
+object StringJoinOps : TemplateGroupBase() {
 
-    templates add f("joinTo(buffer: A, separator: CharSequence = \", \", prefix: CharSequence = \"\", postfix: CharSequence = \"\", limit: Int = -1, truncated: CharSequence = \"...\", transform: ((T) -> CharSequence)? = null)") {
+    val f_joinTo = fn("joinTo(buffer: A, separator: CharSequence = \", \", prefix: CharSequence = \"\", postfix: CharSequence = \"\", limit: Int = -1, truncated: CharSequence = \"...\", transform: ((T) -> CharSequence)? = null)") {
+        includeDefault()
+    } builder {
         doc {
             """
             Appends the string from all the elements separated using [separator] and using the given [prefix] and [postfix] if supplied.
@@ -14,8 +21,10 @@ fun strings(): List<GenericFunction> {
             elements will be appended, followed by the [truncated] string (which defaults to "...").
             """
         }
+        sample("samples.collections.Collections.Transformations.joinTo")
+        sequenceClassification(terminal)
         typeParam("A : Appendable")
-        returns { "A" }
+        returns("A")
         body {
             """
             buffer.append(prefix)
@@ -23,10 +32,7 @@ fun strings(): List<GenericFunction> {
             for (element in this) {
                 if (++count > 1) buffer.append(separator)
                 if (limit < 0 || count <= limit) {
-                    if (transform != null)
-                        buffer.append(transform(element))
-                    else
-                        buffer.append(if (element == null) "null" else element.toString())
+                    buffer.appendElement(element, transform)
                 } else break
             }
             if (limit >= 0 && count > limit) buffer.append(truncated)
@@ -34,7 +40,6 @@ fun strings(): List<GenericFunction> {
             return buffer
             """
         }
-        exclude(Strings)
         body(ArraysOfPrimitives) {
             """
             buffer.append(prefix)
@@ -45,7 +50,7 @@ fun strings(): List<GenericFunction> {
                     if (transform != null)
                         buffer.append(transform(element))
                     else
-                        buffer.append(element.toString())
+                        buffer.append(${if (primitive == PrimitiveType.Char) "element" else "element.toString()"})
                 } else break
             }
             if (limit >= 0 && count > limit) buffer.append(truncated)
@@ -55,7 +60,9 @@ fun strings(): List<GenericFunction> {
         }
     }
 
-    templates add f("joinToString(separator: CharSequence = \", \", prefix: CharSequence = \"\", postfix: CharSequence = \"\", limit: Int = -1, truncated: CharSequence = \"...\", transform: ((T) -> CharSequence)? = null)") {
+    val f_joinToString = fn("joinToString(separator: CharSequence = \", \", prefix: CharSequence = \"\", postfix: CharSequence = \"\", limit: Int = -1, truncated: CharSequence = \"...\", transform: ((T) -> CharSequence)? = null)") {
+        includeDefault()
+    } builder {
         doc {
             """
             Creates a string from all the elements separated using [separator] and using the given [prefix] and [postfix] if supplied.
@@ -64,8 +71,9 @@ fun strings(): List<GenericFunction> {
             elements will be appended, followed by the [truncated] string (which defaults to "...").
             """
         }
+        sample("samples.collections.Collections.Transformations.joinToString")
+        sequenceClassification(terminal)
 
-        exclude(Strings)
         returns("String")
         body {
             """
@@ -73,6 +81,4 @@ fun strings(): List<GenericFunction> {
             """
         }
     }
-
-    return templates
 }

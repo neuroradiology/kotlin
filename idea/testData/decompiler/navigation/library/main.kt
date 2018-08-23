@@ -111,13 +111,10 @@ public inline fun <T> T.filter(predicate: (T)-> Boolean) : T? = this
 
 public class Double
 
-public fun processDouble(d: Double) {}
-
-public fun processDouble(d: kotlin.Double) {}
-
-
 public fun <T: CharSequence> funWithTypeParam(t: T) {
 }
 
 public fun <T: Number> funWithTypeParam(t: T) {
 }
+
+typealias SimpleClassAlias = SimpleClass

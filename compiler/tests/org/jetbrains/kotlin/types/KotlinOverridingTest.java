@@ -17,6 +17,8 @@
 package org.jetbrains.kotlin.types;
 
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
+import org.jetbrains.kotlin.container.ComponentProvider;
+import org.jetbrains.kotlin.container.DslKt;
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor;
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor;
 import org.jetbrains.kotlin.psi.KtNamedFunction;
@@ -24,15 +26,14 @@ import org.jetbrains.kotlin.psi.KtPsiFactoryKt;
 import org.jetbrains.kotlin.resolve.FunctionDescriptorResolver;
 import org.jetbrains.kotlin.resolve.OverridingUtil;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfoFactory;
+import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope;
 import org.jetbrains.kotlin.test.ConfigurationKind;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
-import org.jetbrains.kotlin.tests.di.InjectionKt;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 
-public class KotlinOverridingTest extends KotlinLiteFixture {
-
-    private final ModuleDescriptor root = KotlinTestUtils.createEmptyModule("<test_root>");
+public class KotlinOverridingTest extends KotlinTestWithEnvironment {
+    private ModuleDescriptor module;
     private FunctionDescriptorResolver functionDescriptorResolver;
 
     @Override
@@ -43,11 +44,14 @@ public class KotlinOverridingTest extends KotlinLiteFixture {
     @Override
     public void setUp() throws Exception {
         super.setUp();
-        functionDescriptorResolver = InjectionKt.createContainerForTests(getProject(), root).getFunctionDescriptorResolver();
+        ComponentProvider container = JvmResolveUtil.createContainer(getEnvironment());
+        module = DslKt.getService(container, ModuleDescriptor.class);
+        functionDescriptorResolver = DslKt.getService(container, FunctionDescriptorResolver.class);
     }
 
     @Override
     protected void tearDown() throws Exception {
+        module = null;
         functionDescriptorResolver = null;
         super.tearDown();
     }
@@ -166,8 +170,9 @@ public class KotlinOverridingTest extends KotlinLiteFixture {
 
     private FunctionDescriptor makeFunction(String funDecl) {
         KtNamedFunction function = KtPsiFactoryKt.KtPsiFactory(getProject()).createFunction(funDecl);
-        LexicalScope scope = TypeTestUtilsKt.builtInPackageAsLexicalScope(root.getBuiltIns());
-        return functionDescriptorResolver.resolveFunctionDescriptor(root, scope, function,
-                                                                    KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY);
+        LexicalScope scope = TypeTestUtilsKt.builtInPackageAsLexicalScope(module);
+        return functionDescriptorResolver.resolveFunctionDescriptor(
+                module, scope, function, KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY
+        );
     }
 }

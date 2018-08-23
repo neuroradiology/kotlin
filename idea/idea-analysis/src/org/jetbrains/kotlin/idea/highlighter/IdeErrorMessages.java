@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,25 +21,20 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.TestOnly;
 import org.jetbrains.kotlin.diagnostics.Diagnostic;
 import org.jetbrains.kotlin.diagnostics.TypeMismatchDueToTypeProjectionsData;
-import org.jetbrains.kotlin.diagnostics.rendering.DefaultErrorMessages;
-import org.jetbrains.kotlin.diagnostics.rendering.DiagnosticFactoryToRendererMap;
-import org.jetbrains.kotlin.diagnostics.rendering.DiagnosticRenderer;
-import org.jetbrains.kotlin.diagnostics.rendering.Renderers;
+import org.jetbrains.kotlin.diagnostics.rendering.*;
 import org.jetbrains.kotlin.js.resolve.diagnostics.ErrorsJs;
 import org.jetbrains.kotlin.js.resolve.diagnostics.JsCallDataHtmlRenderer;
-import org.jetbrains.kotlin.renderer.DescriptorRenderer;
-import org.jetbrains.kotlin.renderer.MultiRenderer;
 
 import java.net.URL;
 
 import static org.jetbrains.kotlin.diagnostics.Errors.*;
-import static org.jetbrains.kotlin.diagnostics.rendering.Renderers.RENDER_CLASS_OR_OBJECT;
-import static org.jetbrains.kotlin.diagnostics.rendering.Renderers.STRING;
+import static org.jetbrains.kotlin.diagnostics.rendering.Renderers.*;
 import static org.jetbrains.kotlin.diagnostics.rendering.TabledDescriptorRenderer.TextElementType;
 import static org.jetbrains.kotlin.idea.highlighter.HtmlTabledDescriptorRenderer.tableForTypes;
 import static org.jetbrains.kotlin.idea.highlighter.IdeRenderers.*;
 import static org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm.ACCIDENTAL_OVERRIDE;
 import static org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm.CONFLICTING_JVM_DECLARATIONS;
+import static org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm.NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS;
 
 
 /**
@@ -69,6 +64,9 @@ public class IdeErrorMessages {
         MAP.put(TYPE_MISMATCH, "<html>Type mismatch.<table><tr><td>Required:</td><td>{0}</td></tr><tr><td>Found:</td><td>{1}</td></tr></table></html>",
                 HTML_RENDER_TYPE, HTML_RENDER_TYPE);
 
+        MAP.put(NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS, "<html>Type mismatch.<table><tr><td>Required:</td><td>{0}</td></tr><tr><td>Found:</td><td>{1}</td></tr></table></html>",
+                HTML_RENDER_TYPE, HTML_RENDER_TYPE);
+
         MAP.put(TYPE_MISMATCH_DUE_TO_TYPE_PROJECTIONS,
                 "<html>Type mismatch.<table><tr><td>Required:</td><td>{0}</td></tr><tr><td>Found:</td><td>{1}</td></tr></table><br />\n" +
                 "Projected type {2} restricts use of <br />\n{3}\n</html>",
@@ -76,11 +74,13 @@ public class IdeErrorMessages {
                     @NotNull
                     @Override
                     public String[] render(@NotNull TypeMismatchDueToTypeProjectionsData object) {
+                        RenderingContext context = RenderingContext
+                                .of(object.getExpectedType(), object.getExpressionType(), object.getReceiverType(), object.getCallableDescriptor());
                         return new String[] {
-                                HTML_RENDER_TYPE.render(object.getExpectedType()),
-                                HTML_RENDER_TYPE.render(object.getExpressionType()),
-                                HTML_RENDER_TYPE.render(object.getReceiverType()),
-                                DescriptorRenderer.HTML.render(object.getCallableDescriptor())
+                                HTML_RENDER_TYPE.render(object.getExpectedType(), context),
+                                HTML_RENDER_TYPE.render(object.getExpressionType(), context),
+                                HTML_RENDER_TYPE.render(object.getReceiverType(), context),
+                                HTML.render(object.getCallableDescriptor(), context)
                         };
                     }
                 });
@@ -114,32 +114,31 @@ public class IdeErrorMessages {
                                            "<tr><td>Parameter:</td><td>{1}</td></tr></table></html>", HTML_RENDER_TYPE, HTML_RENDER_TYPE);
 
         MAP.put(RETURN_TYPE_MISMATCH_ON_OVERRIDE, "<html>Return type is ''{0}'', which is not a subtype of overridden<br/>" +
-                                                  "{1}</html>", HTML_RENDER_RETURN_TYPE, DescriptorRenderer.HTML);
+                                                  "{1}</html>", HTML_RENDER_RETURN_TYPE, HTML);
         MAP.put(RETURN_TYPE_MISMATCH_ON_INHERITANCE, "<html>Return types of inherited members are incompatible:<br/>{0},<br/>{1}</html>",
-                DescriptorRenderer.HTML, DescriptorRenderer.HTML);
+                HTML, HTML);
 
         MAP.put(PROPERTY_TYPE_MISMATCH_ON_OVERRIDE, "<html>Property type is ''{0}'', which is not a subtype type of overridden<br/>" +
-                                                  "{1}</html>", HTML_RENDER_RETURN_TYPE, DescriptorRenderer.HTML);
+                                                  "{1}</html>", HTML_RENDER_RETURN_TYPE, HTML);
         MAP.put(VAR_TYPE_MISMATCH_ON_OVERRIDE, "<html>Var-property type is ''{0}'', which is not a type of overridden<br/>" +
-                                                    "{1}</html>", HTML_RENDER_RETURN_TYPE, DescriptorRenderer.HTML);
+                                                    "{1}</html>", HTML_RENDER_RETURN_TYPE, HTML);
         MAP.put(PROPERTY_TYPE_MISMATCH_ON_INHERITANCE, "<html>Types of inherited properties are incompatible:<br/>{0},<br/>{1}</html>",
-                DescriptorRenderer.HTML, DescriptorRenderer.HTML);
+                HTML, HTML);
         MAP.put(VAR_TYPE_MISMATCH_ON_INHERITANCE, "<html>Types of inherited var-properties do not match:<br/>{0},<br/>{1}</html>",
-                DescriptorRenderer.HTML, DescriptorRenderer.HTML);
+                HTML, HTML);
 
         MAP.put(VAR_OVERRIDDEN_BY_VAL, "<html>Val-property cannot override var-property<br />" +
-                                       "{1}</html>", DescriptorRenderer.HTML, DescriptorRenderer.HTML);
+                                       "{1}</html>", HTML, HTML);
         MAP.put(VAR_OVERRIDDEN_BY_VAL_BY_DELEGATION, "<html>Val-property cannot override var-property<br />" +
-                                       "{1}</html>", DescriptorRenderer.HTML, DescriptorRenderer.HTML);
+                                       "{1}</html>", HTML, HTML);
 
-        MAP.put(ABSTRACT_MEMBER_NOT_IMPLEMENTED, "<html>{0} must be declared abstract or implement abstract member<br/>" +
-                                                 "{1}</html>", RENDER_CLASS_OR_OBJECT,
-                DescriptorRenderer.HTML);
+        MAP.put(ABSTRACT_MEMBER_NOT_IMPLEMENTED, "<html>{0} is not abstract and does not implement abstract member<br/>" +
+                                                 "{1}</html>", RENDER_CLASS_OR_OBJECT, HTML);
+        MAP.put(ABSTRACT_CLASS_MEMBER_NOT_IMPLEMENTED, "<html>{0} is not abstract and does not implement abstract base class member<br/>" +
+                                                       "{1}</html>", RENDER_CLASS_OR_OBJECT, HTML);
 
         MAP.put(MANY_IMPL_MEMBER_NOT_IMPLEMENTED, "<html>{0} must override {1}<br />because it inherits many implementations of it</html>",
-                RENDER_CLASS_OR_OBJECT, DescriptorRenderer.HTML);
-        MAP.put(CONFLICTING_OVERLOADS, "<html>''{0}''<br />conflicts with another declaration in {1}</html>",
-                IdeRenderers.HTML_COMPACT_WITH_MODIFIERS, Renderers.DECLARATION_NAME_WITH_KIND);
+                RENDER_CLASS_OR_OBJECT, HTML);
 
         MAP.put(RESULT_TYPE_MISMATCH, "<html>Function return type mismatch." +
                                       "<table><tr><td>Expected:</td><td>{1}</td></tr>" +
@@ -160,7 +159,7 @@ public class IdeErrorMessages {
         MAP.put(CONFLICTING_JVM_DECLARATIONS, "<html>Platform declaration clash: {0}</html>", HTML_CONFLICTING_JVM_DECLARATIONS_DATA);
         MAP.put(ACCIDENTAL_OVERRIDE, "<html>Accidental override: {0}</html>", HTML_CONFLICTING_JVM_DECLARATIONS_DATA);
 
-        URL errorIconUrl = AllIcons.class.getResource("/general/error.png");
+        URL errorIconUrl = AllIcons.class.getResource(ErrorIconUtil.getErrorIconUrl());
         MAP.put(EXCEPTION_FROM_ANALYZER, "<html>Internal Error occurred while analyzing this expression <br/>" +
                                          "<table cellspacing=\"0\" cellpadding=\"0\">" +
                                          "<tr>" +
@@ -176,6 +175,18 @@ public class IdeErrorMessages {
 
         MAP.put(ErrorsJs.JSCODE_ERROR, "<html>JavaScript: {0}</html>", JsCallDataHtmlRenderer.INSTANCE);
         MAP.put(ErrorsJs.JSCODE_WARNING, "<html>JavaScript: {0}</html>", JsCallDataHtmlRenderer.INSTANCE);
+        MAP.put(UNSUPPORTED_FEATURE, "<html>{0}</html>", new LanguageFeatureMessageRenderer(LanguageFeatureMessageRenderer.Type.UNSUPPORTED, true));
+        MAP.put(EXPERIMENTAL_FEATURE_WARNING, "<html>{0}</html>", new LanguageFeatureMessageRenderer(LanguageFeatureMessageRenderer.Type.WARNING, true));
+        MAP.put(EXPERIMENTAL_FEATURE_ERROR, "<html>{0}</html>", new LanguageFeatureMessageRenderer(LanguageFeatureMessageRenderer.Type.ERROR, true));
+
+        MAP.put(NO_ACTUAL_FOR_EXPECT, "<html>Expected {0} has no actual declaration in module{1}{2}</html>", DECLARATION_NAME_WITH_KIND,
+                PLATFORM, new PlatformIncompatibilityDiagnosticRenderer(IdeMultiplatformDiagnosticRenderingMode.INSTANCE));
+        MAP.put(ACTUAL_WITHOUT_EXPECT, "<html>{0} has no corresponding expected declaration{1}</html>", CAPITALIZED_DECLARATION_NAME_WITH_KIND_AND_PLATFORM,
+                new PlatformIncompatibilityDiagnosticRenderer(IdeMultiplatformDiagnosticRenderingMode.INSTANCE));
+
+        MAP.put(NO_ACTUAL_CLASS_MEMBER_FOR_EXPECTED_CLASS, "<html>Actual class ''{0}'' has no corresponding members for expected class members:{1}</html>",
+                NAME, new IncompatibleExpectedActualClassScopesRenderer(IdeMultiplatformDiagnosticRenderingMode.INSTANCE));
+
         MAP.setImmutable();
     }
 

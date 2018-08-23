@@ -1,3 +1,14 @@
+// IGNORE_BACKEND: JVM_IR
+// FILE: JavaClass.java
+
+class JavaClass {
+    void invoke(Runnable i) {
+        i.run();
+    }
+}
+
+// FILE: 1.kt
+
 fun box(): String {
     val obj = JavaClass()
 

@@ -1,5 +1,5 @@
-import java.util.HashMap
-
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: NATIVE
 class A : HashMap<String, Double>()
 
 fun box(): String {

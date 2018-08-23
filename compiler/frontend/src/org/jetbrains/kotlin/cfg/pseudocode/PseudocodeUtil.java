@@ -22,8 +22,6 @@ import org.jetbrains.kotlin.cfg.ControlFlowProcessor;
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.Instruction;
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.eval.AccessTarget;
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.eval.AccessValueInstruction;
-import org.jetbrains.kotlin.cfg.pseudocode.instructions.eval.ReadValueInstruction;
-import org.jetbrains.kotlin.cfg.pseudocode.instructions.eval.WriteValueInstruction;
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.special.VariableDeclarationInstruction;
 import org.jetbrains.kotlin.descriptors.VariableDescriptor;
 import org.jetbrains.kotlin.diagnostics.Diagnostic;
@@ -31,8 +29,8 @@ import org.jetbrains.kotlin.psi.KtDeclaration;
 import org.jetbrains.kotlin.psi.KtElement;
 import org.jetbrains.kotlin.psi.KtExpression;
 import org.jetbrains.kotlin.resolve.BindingContext;
-import org.jetbrains.kotlin.resolve.BindingContextUtils;
 import org.jetbrains.kotlin.resolve.BindingTrace;
+import org.jetbrains.kotlin.resolve.PropertyImportedFromObject;
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall;
 import org.jetbrains.kotlin.resolve.calls.resolvedCallUtil.ResolvedCallUtilKt;
 import org.jetbrains.kotlin.types.KotlinType;
@@ -41,9 +39,11 @@ import org.jetbrains.kotlin.util.slicedMap.WritableSlice;
 
 import java.util.Collection;
 
+import static org.jetbrains.kotlin.resolve.BindingContextUtils.variableDescriptorForDeclaration;
+
 public class PseudocodeUtil {
     @NotNull
-    public static Pseudocode generatePseudocode(@NotNull KtDeclaration declaration, @NotNull final BindingContext bindingContext) {
+    public static Pseudocode generatePseudocode(@NotNull KtDeclaration declaration, @NotNull BindingContext bindingContext) {
         BindingTrace mockTrace = new BindingTrace() {
             @NotNull
             @Override
@@ -83,23 +83,52 @@ public class PseudocodeUtil {
             @Override
             public void report(@NotNull Diagnostic diagnostic) {
             }
+
+            @Override
+            public boolean wantsDiagnostics() {
+                return false;
+            }
         };
-        return new ControlFlowProcessor(mockTrace).generatePseudocode(declaration);
+        return new ControlFlowProcessor(mockTrace, null).generatePseudocode(declaration);
     }
 
     @Nullable
-    public static VariableDescriptor extractVariableDescriptorIfAny(@NotNull Instruction instruction, boolean onlyReference, @NotNull BindingContext bindingContext) {
-        KtElement element = null;
-        if (instruction instanceof ReadValueInstruction) {
-            element = ((ReadValueInstruction) instruction).getElement();
+    public static VariableDescriptor extractVariableDescriptorFromReference(
+            @NotNull Instruction instruction,
+            @NotNull BindingContext bindingContext
+    ) {
+        if (instruction instanceof AccessValueInstruction) {
+            KtElement element = ((AccessValueInstruction) instruction).getElement();
+            if (element instanceof KtDeclaration) return null;
+            VariableDescriptor descriptor = extractVariableDescriptorIfAny(instruction, bindingContext);
+            if (descriptor instanceof PropertyImportedFromObject) {
+                return ((PropertyImportedFromObject) descriptor).getCallableFromObject();
+            }
+            return descriptor;
         }
-        else if (instruction instanceof WriteValueInstruction) {
-            element = ((WriteValueInstruction) instruction).getLValue();
+        return null;
+    }
+
+
+    @Nullable
+    public static VariableDescriptor extractVariableDescriptorIfAny(
+            @NotNull Instruction instruction,
+            @NotNull BindingContext bindingContext
+    ) {
+        if (instruction instanceof VariableDeclarationInstruction) {
+            KtDeclaration declaration = ((VariableDeclarationInstruction) instruction).getVariableDeclarationElement();
+            return variableDescriptorForDeclaration(bindingContext.get(BindingContext.DECLARATION_TO_DESCRIPTOR, declaration));
         }
-        else if (instruction instanceof VariableDeclarationInstruction) {
-            element = ((VariableDeclarationInstruction) instruction).getVariableDeclarationElement();
+        else if (instruction instanceof AccessValueInstruction) {
+            AccessTarget target = ((AccessValueInstruction) instruction).getTarget();
+            if (target instanceof AccessTarget.Declaration) {
+                return ((AccessTarget.Declaration) target).getDescriptor();
+            }
+            else if (target instanceof AccessTarget.Call) {
+                return variableDescriptorForDeclaration(((AccessTarget.Call) target).getResolvedCall().getResultingDescriptor());
+            }
         }
-        return BindingContextUtils.extractVariableDescriptorIfAny(bindingContext, element, onlyReference);
+        return null;
     }
 
     // When deal with constructed object (not this) treat it like it's fully initialized

@@ -16,12 +16,9 @@
 
 package org.jetbrains.kotlin.resolve.lazy.declarations;
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.Collections2;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Sets;
-import kotlin.jvm.functions.Function0;
+import kotlin.collections.CollectionsKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.name.FqName;
@@ -31,27 +28,23 @@ import org.jetbrains.kotlin.storage.NotNullLazyValue;
 import org.jetbrains.kotlin.storage.StorageManager;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
 
 public class FileBasedDeclarationProviderFactory extends AbstractDeclarationProviderFactory  {
 
     private static class Index {
         private final Multimap<FqName, KtFile> filesByPackage = LinkedHashMultimap.create();
-        private final Set<FqName> declaredPackages = Sets.newHashSet();
+        private final Set<FqName> declaredPackages = new HashSet<>();
     }
 
     private final StorageManager storageManager;
     private final NotNullLazyValue<Index> index;
 
-    public FileBasedDeclarationProviderFactory(@NotNull StorageManager storageManager, @NotNull final Collection<KtFile> files) {
+    public FileBasedDeclarationProviderFactory(@NotNull StorageManager storageManager, @NotNull Collection<KtFile> files) {
         super(storageManager);
         this.storageManager = storageManager;
-        this.index = storageManager.createLazyValue(new Function0<Index>() {
-            @Override
-            public Index invoke() {
-                return computeFilesByPackage(files);
-            }
-        });
+        this.index = storageManager.createLazyValue(() -> computeFilesByPackage(files));
     }
 
     @NotNull
@@ -72,23 +65,19 @@ public class FileBasedDeclarationProviderFactory extends AbstractDeclarationProv
         }
     }
 
-    /*package*/ boolean isPackageDeclaredExplicitly(@NotNull FqName packageFqName) {
+    @Override
+    public boolean packageExists(@NotNull FqName packageFqName) {
         return index.invoke().declaredPackages.contains(packageFqName);
     }
 
-    /*package*/ Collection<FqName> getAllDeclaredSubPackagesOf(@NotNull final FqName parent) {
-        return Collections2.filter(index.invoke().declaredPackages, new Predicate<FqName>() {
-            @Override
-            public boolean apply(FqName fqName) {
-                return !fqName.isRoot() && fqName.parent().equals(parent);
-            }
-        });
+    /*package*/ Collection<FqName> getAllDeclaredSubPackagesOf(@NotNull FqName parent) {
+        return CollectionsKt.filter(index.invoke().declaredPackages, fqName -> !fqName.isRoot() && fqName.parent().equals(parent));
     }
 
     @Nullable
     @Override
     protected PackageMemberDeclarationProvider createPackageMemberDeclarationProvider(@NotNull FqName packageFqName) {
-        if (isPackageDeclaredExplicitly(packageFqName)) {
+        if (packageExists(packageFqName)) {
             return new FileBasedPackageMemberDeclarationProvider(
                     storageManager, packageFqName, this, index.invoke().filesByPackage.get(packageFqName));
         }

@@ -1,22 +1,12 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2000-2017 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
  */
 
 package org.jetbrains.kotlin.codegen.binding;
 
 import com.intellij.openapi.vfs.VirtualFile;
+import kotlin.collections.CollectionsKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.codegen.JvmCodegenUtil;
@@ -24,7 +14,7 @@ import org.jetbrains.kotlin.codegen.SamType;
 import org.jetbrains.kotlin.codegen.state.GenerationState;
 import org.jetbrains.kotlin.codegen.when.WhenByEnumsMapping;
 import org.jetbrains.kotlin.descriptors.*;
-import org.jetbrains.kotlin.fileClasses.JvmFileClassesProvider;
+import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor;
 import org.jetbrains.kotlin.name.FqName;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.psi.psiUtil.PsiUtilsKt;
@@ -34,6 +24,7 @@ import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils;
 import org.jetbrains.kotlin.util.slicedMap.BasicWritableSlice;
 import org.jetbrains.kotlin.util.slicedMap.Slices;
 import org.jetbrains.kotlin.util.slicedMap.WritableSlice;
+import org.jetbrains.kotlin.utils.KotlinExceptionWithAttachments;
 import org.jetbrains.org.objectweb.asm.Type;
 
 import java.util.*;
@@ -49,9 +40,10 @@ public class CodegenBinding {
 
     public static final WritableSlice<ClassDescriptor, Boolean> ENUM_ENTRY_CLASS_NEED_SUBCLASS = Slices.createSimpleSetSlice();
 
-    public static final WritableSlice<ClassDescriptor, Collection<ClassDescriptor>> INNER_CLASSES = Slices.createSimpleSlice();
+    private static final WritableSlice<ClassDescriptor, Collection<ClassDescriptor>> INNER_CLASSES = Slices.createSimpleSlice();
 
     public static final WritableSlice<KtExpression, SamType> SAM_VALUE = Slices.createSimpleSlice();
+    public static final WritableSlice<KtExpression, Type> FUNCTION_TYPE_FOR_SUSPEND_WRAPPER = Slices.createSimpleSlice();
 
     public static final WritableSlice<KtCallElement, KtExpression> SAM_CONSTRUCTOR_TO_ARGUMENT = Slices.createSimpleSlice();
 
@@ -60,11 +52,33 @@ public class CodegenBinding {
     public static final WritableSlice<String, List<WhenByEnumsMapping>> MAPPINGS_FOR_WHENS_BY_ENUM_IN_CLASS_FILE =
             Slices.createSimpleSlice();
 
+    public static final WritableSlice<FunctionDescriptor, FunctionDescriptor> SUSPEND_FUNCTION_TO_JVM_VIEW =
+            Slices.createSimpleSlice();
+
+    public static final WritableSlice<FunctionDescriptor, Boolean> CAPTURES_CROSSINLINE_SUSPEND_LAMBDA =
+            Slices.createSimpleSlice();
+
+    public static final WritableSlice<ValueParameterDescriptor, ValueParameterDescriptor> PARAMETER_SYNONYM =
+            Slices.createSimpleSlice();
+
+    public static final WritableSlice<Type, List<VariableDescriptorWithAccessors>> DELEGATED_PROPERTIES =
+            Slices.createSimpleSlice();
+    public static final WritableSlice<VariableDescriptorWithAccessors, Type> DELEGATED_PROPERTY_METADATA_OWNER =
+            Slices.createSimpleSlice();
+    public static final WritableSlice<VariableDescriptor, VariableDescriptor> LOCAL_VARIABLE_PROPERTY_METADATA =
+            Slices.createSimpleSlice();
+
     static {
         BasicWritableSlice.initSliceDebugNames(CodegenBinding.class);
     }
 
     private CodegenBinding() {
+    }
+
+    @Nullable
+    public static List<LocalVariableDescriptor> getLocalDelegatedProperties(@NotNull BindingContext bindingContext, @NotNull Type owner) {
+        List<VariableDescriptorWithAccessors> properties = bindingContext.get(DELEGATED_PROPERTIES, owner);
+        return properties == null ? null : CollectionsKt.filterIsInstance(properties, LocalVariableDescriptor.class);
     }
 
     public static void initTrace(@NotNull GenerationState state) {
@@ -93,31 +107,52 @@ public class CodegenBinding {
 
     @NotNull
     public static Type asmTypeForAnonymousClass(@NotNull BindingContext bindingContext, @NotNull KtElement expression) {
+        Type result = asmTypeForAnonymousClassOrNull(bindingContext, expression);
+        if (result == null) {
+            throw new IllegalStateException("Type must not be null: " + expression.getText());
+        }
+
+        return result;
+    }
+
+    @Nullable
+    public static Type asmTypeForAnonymousClassOrNull(@NotNull BindingContext bindingContext, @NotNull KtElement expression) {
         if (expression instanceof KtObjectLiteralExpression) {
             expression = ((KtObjectLiteralExpression) expression).getObjectDeclaration();
         }
 
         ClassDescriptor descriptor = bindingContext.get(CLASS, expression);
         if (descriptor != null) {
-            return getAsmType(bindingContext, descriptor);
+            return bindingContext.get(ASM_TYPE, descriptor);
         }
 
         SimpleFunctionDescriptor functionDescriptor = bindingContext.get(FUNCTION, expression);
         if (functionDescriptor != null) {
-            return asmTypeForAnonymousClass(bindingContext, functionDescriptor);
+            return asmTypeForAnonymousClassOrNull(bindingContext, functionDescriptor);
         }
 
         VariableDescriptor variableDescriptor = bindingContext.get(VARIABLE, expression);
         if (variableDescriptor != null) {
-            return asmTypeForAnonymousClass(bindingContext, variableDescriptor);
+            return asmTypeForAnonymousClassOrNull(bindingContext, variableDescriptor);
         }
 
-        throw new IllegalStateException("Couldn't compute ASM type for " + PsiUtilsKt.getElementTextWithContext(expression));
+        throw new KotlinExceptionWithAttachments("Couldn't compute ASM type for expression")
+              .withAttachment("expression.kt", PsiUtilsKt.getElementTextWithContext(expression));
     }
 
     @NotNull
     public static Type asmTypeForAnonymousClass(@NotNull BindingContext bindingContext, @NotNull CallableDescriptor descriptor) {
-        return getAsmType(bindingContext, anonymousClassForCallable(bindingContext, descriptor));
+        Type result = asmTypeForAnonymousClassOrNull(bindingContext, descriptor);
+        if (result == null) {
+            throw new IllegalStateException("Type must not be null: " + descriptor);
+        }
+
+        return result;
+    }
+
+    @Nullable
+    public static Type asmTypeForAnonymousClassOrNull(@NotNull BindingContext bindingContext, @NotNull CallableDescriptor descriptor) {
+        return bindingContext.get(ASM_TYPE, anonymousClassForCallable(bindingContext, descriptor));
     }
 
     public static boolean canHaveOuter(@NotNull BindingContext bindingContext, @NotNull ClassDescriptor classDescriptor) {
@@ -130,15 +165,18 @@ public class CodegenBinding {
             return false;
         }
 
-        return classDescriptor.isInner() || !(classDescriptor.getContainingDeclaration() instanceof ClassDescriptor);
+        DeclarationDescriptor containingDeclaration = classDescriptor.getContainingDeclaration();
+        return classDescriptor.isInner()
+               || containingDeclaration instanceof ScriptDescriptor
+               || !(containingDeclaration instanceof ClassDescriptor);
     }
 
-    static void recordClosure(
+    @NotNull
+    static MutableClosure recordClosure(
             @NotNull BindingTrace trace,
             @NotNull ClassDescriptor classDescriptor,
             @Nullable ClassDescriptor enclosing,
-            @NotNull Type asmType,
-            @NotNull JvmFileClassesProvider fileClassesManager
+            @NotNull Type asmType
     ) {
         KtElement element = (KtElement) DescriptorToSourceUtils.descriptorToDeclaration(classDescriptor);
         assert element != null : "No source element for " + classDescriptor;
@@ -149,7 +187,6 @@ public class CodegenBinding {
             closure.setCaptureThis();
         }
 
-        assert PsiCodegenPredictor.checkPredictedNameFromPsi(classDescriptor, asmType, fileClassesManager);
         trace.record(ASM_TYPE, classDescriptor, asmType);
         trace.record(CLOSURE, classDescriptor, closure);
 
@@ -158,6 +195,8 @@ public class CodegenBinding {
         if (enclosing != null && !JvmCodegenUtil.isArgumentWhichWillBeInlined(trace.getBindingContext(), classDescriptor)) {
             recordInnerClass(trace, enclosing, classDescriptor);
         }
+
+        return closure;
     }
 
     private static void recordInnerClass(
@@ -167,7 +206,7 @@ public class CodegenBinding {
     ) {
         Collection<ClassDescriptor> innerClasses = bindingTrace.get(INNER_CLASSES, outer);
         if (innerClasses == null) {
-            innerClasses = new ArrayList<ClassDescriptor>(1);
+            innerClasses = new ArrayList<>(1);
             bindingTrace.record(INNER_CLASSES, outer, innerClasses);
         }
         innerClasses.add(inner);
@@ -178,14 +217,14 @@ public class CodegenBinding {
         // todo: we use Set and add given files but ignoring other scripts because something non-clear kept in binding
         // for scripts especially in case of REPL
 
-        Set<FqName> names = new HashSet<FqName>();
+        Set<FqName> names = new HashSet<>();
         for (KtFile file : files) {
             if (!file.isScript()) {
                 names.add(file.getPackageFqName());
             }
         }
 
-        Set<KtFile> answer = new HashSet<KtFile>();
+        Set<KtFile> answer = new HashSet<>();
         answer.addAll(files);
 
         for (FqName name : names) {
@@ -195,20 +234,13 @@ public class CodegenBinding {
             }
         }
 
-        List<KtFile> sortedAnswer = new ArrayList<KtFile>(answer);
-        Collections.sort(sortedAnswer, new Comparator<KtFile>() {
-            @NotNull
-            private String path(KtFile file) {
-                VirtualFile virtualFile = file.getVirtualFile();
-                assert virtualFile != null : "VirtualFile is null for JetFile: " + file.getName();
-                return virtualFile.getPath();
-            }
+        List<KtFile> sortedAnswer = new ArrayList<>(answer);
 
-            @Override
-            public int compare(@NotNull KtFile first, @NotNull KtFile second) {
-                return path(first).compareTo(path(second));
-            }
-        });
+        sortedAnswer.sort(Comparator.comparing((KtFile file) -> {
+            VirtualFile virtualFile = file.getVirtualFile();
+            assert virtualFile != null : "VirtualFile is null for KtFile: " + file.getName();
+            return virtualFile.getPath();
+        }));
 
         return sortedAnswer;
     }
@@ -216,32 +248,19 @@ public class CodegenBinding {
     @NotNull
     public static Type getAsmType(@NotNull BindingContext bindingContext, @NotNull ClassDescriptor klass) {
         Type type = bindingContext.get(ASM_TYPE, klass);
-        assert type != null : "Type is not yet recorded for " + klass;
+        if (type == null) {
+            throw new IllegalStateException("Type is not yet recorded for " + klass);
+        }
         return type;
     }
 
     @NotNull
-    public static Collection<ClassDescriptor> getAllInnerClasses(
-            @NotNull BindingContext bindingContext, @NotNull ClassDescriptor outermostClass
+    public static VariableDescriptor getDelegatedLocalVariableMetadata(
+            @NotNull VariableDescriptor variableDescriptor,
+            @NotNull BindingContext bindingContext
     ) {
-        Collection<ClassDescriptor> innerClasses = bindingContext.get(INNER_CLASSES, outermostClass);
-        if (innerClasses == null || innerClasses.isEmpty()) return Collections.emptySet();
-
-        Set<ClassDescriptor> allInnerClasses = new HashSet<ClassDescriptor>();
-
-        Deque<ClassDescriptor> stack = new ArrayDeque<ClassDescriptor>(innerClasses);
-        do {
-            ClassDescriptor currentClass = stack.pop();
-            if (allInnerClasses.add(currentClass)) {
-                Collection<ClassDescriptor> nextClasses = bindingContext.get(INNER_CLASSES, currentClass);
-                if (nextClasses != null) {
-                    for (ClassDescriptor nextClass : nextClasses) {
-                        stack.push(nextClass);
-                    }
-                }
-            }
-        } while (!stack.isEmpty());
-
-        return allInnerClasses;
+        VariableDescriptor metadataVariableDescriptor = bindingContext.get(LOCAL_VARIABLE_PROPERTY_METADATA, variableDescriptor);
+        assert metadataVariableDescriptor != null : "Metadata for local delegated property should be not null: " + variableDescriptor;
+        return metadataVariableDescriptor;
     }
 }

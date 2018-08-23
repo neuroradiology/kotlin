@@ -26,27 +26,29 @@ class LocalFileKotlinClass private constructor(
         private val file: File,
         private val fileContents: ByteArray,
         className: ClassId,
+        classVersion: Int,
         classHeader: KotlinClassHeader,
-        innerClasses: FileBasedKotlinClass.InnerClassesInfo
-) : FileBasedKotlinClass(className, classHeader, innerClasses) {
+        innerClasses: InnerClassesInfo
+) : FileBasedKotlinClass(className, classVersion, classHeader, innerClasses) {
 
     companion object {
         fun create(file: File): LocalFileKotlinClass? {
             val fileContents = file.readBytes()
             return FileBasedKotlinClass.create(fileContents) {
-                className, classHeader, innerClasses ->
-                LocalFileKotlinClass(file, fileContents, className, classHeader, innerClasses)
+                className, classVersion, classHeader, innerClasses ->
+                LocalFileKotlinClass(file, fileContents, className, classVersion, classHeader, innerClasses)
             }
         }
     }
 
     val className: JvmClassName by lazy { JvmClassName.byClassId(classId) }
 
-    override fun getLocation(): String = file.absolutePath
+    override val location: String
+        get() = file.absolutePath
 
     public override fun getFileContents(): ByteArray = fileContents
 
     override fun hashCode(): Int = file.hashCode()
     override fun equals(other: Any?): Boolean = other is LocalFileKotlinClass && file == other.file
-    override fun toString(): String = "$javaClass: $file"
+    override fun toString(): String = "${this::class.java}: $file"
 }

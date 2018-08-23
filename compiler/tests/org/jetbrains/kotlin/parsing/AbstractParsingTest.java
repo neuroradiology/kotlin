@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,27 +25,24 @@ import com.intellij.psi.PsiErrorElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.tree.IElementType;
 import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.testFramework.ParsingTestCase;
 import com.intellij.util.PathUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.KtNodeTypes;
+import org.jetbrains.kotlin.cli.common.script.CliScriptDefinitionProvider;
 import org.jetbrains.kotlin.psi.*;
-import org.jetbrains.kotlin.script.KotlinScriptDefinitionProvider;
+import org.jetbrains.kotlin.script.ScriptDefinitionProvider;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.testFramework.KtParsingTestCase;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
-public abstract class AbstractParsingTest extends ParsingTestCase {
-    static {
-        System.setProperty("idea.platform.prefix", "Idea");
-    }
-
+public abstract class AbstractParsingTest extends KtParsingTestCase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        getProject().registerService(KotlinScriptDefinitionProvider.class);
+        getProject().registerService(ScriptDefinitionProvider.class, CliScriptDefinitionProvider.class);
     }
 
     @Override

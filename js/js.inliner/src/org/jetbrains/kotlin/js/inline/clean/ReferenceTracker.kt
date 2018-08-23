@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,11 @@
 
 package org.jetbrains.kotlin.js.inline.clean
 
-import com.google.dart.compiler.backend.js.ast.JsNode
+import org.jetbrains.kotlin.js.backend.ast.JsNode
 import org.jetbrains.kotlin.js.inline.util.IdentitySet
 import java.util.*
 
-internal class ReferenceTracker<Reference, RemoveCandidate : JsNode> {
+internal class ReferenceTracker<in Reference, RemoveCandidate : JsNode> {
     private val reachable = IdentityHashMap<Reference, Boolean>()
     private val removableCandidates = IdentityHashMap<Reference, RemoveCandidate>()
     private val referenceFromTo = IdentityHashMap<Reference, MutableSet<Reference>>()
@@ -30,18 +30,18 @@ internal class ReferenceTracker<Reference, RemoveCandidate : JsNode> {
         get() {
             return reachable
                         .filter { !it.value }
-                        .map { removableCandidates.get(it.key)!! }
+                        .map { removableCandidates[it.key]!! }
         }
 
     fun addCandidateForRemoval(reference: Reference, candidate: RemoveCandidate) {
-        assert(!isKnown(reference)) { "Candidate for removal cannot be reassigned: $candidate" }
+        assert(!isReferenceToRemovableCandidate(reference)) { "Candidate for removal cannot be reassigned: $candidate" }
 
         removableCandidates.put(reference, candidate)
         reachable.put(reference, false)
     }
 
     fun addRemovableReference(referrer: Reference, referenced: Reference) {
-        if (!isKnown(referenced)) return
+        if (!isReferenceToRemovableCandidate(referenced)) return
 
         getReferencedBy(referrer).add(referenced)
 
@@ -51,12 +51,12 @@ internal class ReferenceTracker<Reference, RemoveCandidate : JsNode> {
     }
 
     fun markReachable(reference: Reference) {
-        if (!isKnown(reference)) return
+        if (!isReferenceToRemovableCandidate(reference)) return
 
         visited.add(reference)
         getReferencedBy(reference)
                 .filterNot { it in visited }
-                .filter { isKnown(it) && !isReachable(it) }
+                .filter { isReferenceToRemovableCandidate(it) && !isReachable(it) }
                 .forEach { markReachable(it) }
 
         visited.remove(reference)
@@ -67,7 +67,7 @@ internal class ReferenceTracker<Reference, RemoveCandidate : JsNode> {
         return referenceFromTo.getOrPut(referrer, { IdentitySet<Reference>() })
     }
 
-    private fun isKnown(ref: Reference): Boolean {
+    fun isReferenceToRemovableCandidate(ref: Reference): Boolean {
         return removableCandidates.containsKey(ref)
     }
 

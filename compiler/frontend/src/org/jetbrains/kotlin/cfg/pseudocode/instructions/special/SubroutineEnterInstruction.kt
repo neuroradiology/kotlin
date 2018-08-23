@@ -17,26 +17,24 @@
 package org.jetbrains.kotlin.cfg.pseudocode.instructions.special
 
 import org.jetbrains.kotlin.psi.KtElement
-import org.jetbrains.kotlin.cfg.pseudocode.instructions.LexicalScope
+import org.jetbrains.kotlin.cfg.pseudocode.instructions.BlockScope
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionWithNext
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitor
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitorWithResult
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionImpl
 
 class SubroutineEnterInstruction(
-        val subroutine: KtElement,
-        lexicalScope: LexicalScope
-) : InstructionWithNext(subroutine, lexicalScope) {
+    val subroutine: KtElement,
+    blockScope: BlockScope
+) : InstructionWithNext(subroutine, blockScope) {
     override fun accept(visitor: InstructionVisitor) {
         visitor.visitSubroutineEnter(this)
     }
 
-    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R {
-        return visitor.visitSubroutineEnter(this)
-    }
+    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R = visitor.visitSubroutineEnter(this)
 
     override fun toString(): String = "<START>"
 
     override fun createCopy(): InstructionImpl =
-            SubroutineEnterInstruction(subroutine, lexicalScope)
+        SubroutineEnterInstruction(subroutine, blockScope)
 }

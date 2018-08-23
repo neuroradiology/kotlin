@@ -1,6 +1,5 @@
-import java.util.*
-import java.io.*
-
+// IGNORE_BACKEND: JS_IR
+// WITH_RUNTIME
 class World() {
   public val items: ArrayList<Item> = ArrayList<Item>()
 

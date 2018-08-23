@@ -1,4 +1,4 @@
-JetFile: FunctionExpressions_ERR.kt
+KtFile: FunctionExpressions_ERR.kt
   PACKAGE_DIRECTIVE
     <empty list>
   IMPORT_LIST
@@ -45,16 +45,17 @@ JetFile: FunctionExpressions_ERR.kt
       PsiElement(fun)('fun')
       PsiWhiteSpace(' ')
       TYPE_REFERENCE
-        ANNOTATION
-          PsiElement(AT)('@')
-          PsiElement(LBRACKET)('[')
-          ANNOTATION_ENTRY
-            CONSTRUCTOR_CALLEE
-              TYPE_REFERENCE
-                USER_TYPE
-                  REFERENCE_EXPRESSION
-                    PsiElement(IDENTIFIER)('a')
-          PsiElement(RBRACKET)(']')
+        MODIFIER_LIST
+          ANNOTATION
+            PsiElement(AT)('@')
+            PsiElement(LBRACKET)('[')
+            ANNOTATION_ENTRY
+              CONSTRUCTOR_CALLEE
+                TYPE_REFERENCE
+                  USER_TYPE
+                    REFERENCE_EXPRESSION
+                      PsiElement(IDENTIFIER)('a')
+            PsiElement(RBRACKET)(']')
         PsiWhiteSpace(' ')
         USER_TYPE
           REFERENCE_EXPRESSION
@@ -91,19 +92,20 @@ JetFile: FunctionExpressions_ERR.kt
       PsiElement(fun)('fun')
       PsiWhiteSpace(' ')
       TYPE_REFERENCE
-        ANNOTATION
-          PsiElement(AT)('@')
-          PsiElement(LBRACKET)('[')
-          ANNOTATION_ENTRY
-            CONSTRUCTOR_CALLEE
-              TYPE_REFERENCE
-                USER_TYPE
-                  REFERENCE_EXPRESSION
-                    PsiElement(IDENTIFIER)('a')
-            VALUE_ARGUMENT_LIST
-              PsiElement(LPAR)('(')
-              PsiElement(RPAR)(')')
-          PsiElement(RBRACKET)(']')
+        MODIFIER_LIST
+          ANNOTATION
+            PsiElement(AT)('@')
+            PsiElement(LBRACKET)('[')
+            ANNOTATION_ENTRY
+              CONSTRUCTOR_CALLEE
+                TYPE_REFERENCE
+                  USER_TYPE
+                    REFERENCE_EXPRESSION
+                      PsiElement(IDENTIFIER)('a')
+              VALUE_ARGUMENT_LIST
+                PsiElement(LPAR)('(')
+                PsiElement(RPAR)(')')
+            PsiElement(RBRACKET)(']')
         PsiWhiteSpace(' ')
         USER_TYPE
           REFERENCE_EXPRESSION
@@ -146,19 +148,20 @@ JetFile: FunctionExpressions_ERR.kt
       PsiElement(fun)('fun')
       PsiWhiteSpace(' ')
       TYPE_REFERENCE
-        ANNOTATION
-          PsiElement(AT)('@')
-          PsiElement(LBRACKET)('[')
-          ANNOTATION_ENTRY
-            CONSTRUCTOR_CALLEE
-              TYPE_REFERENCE
-                USER_TYPE
-                  REFERENCE_EXPRESSION
-                    PsiElement(IDENTIFIER)('a')
-            VALUE_ARGUMENT_LIST
-              PsiElement(LPAR)('(')
-              PsiElement(RPAR)(')')
-          PsiElement(RBRACKET)(']')
+        MODIFIER_LIST
+          ANNOTATION
+            PsiElement(AT)('@')
+            PsiElement(LBRACKET)('[')
+            ANNOTATION_ENTRY
+              CONSTRUCTOR_CALLEE
+                TYPE_REFERENCE
+                  USER_TYPE
+                    REFERENCE_EXPRESSION
+                      PsiElement(IDENTIFIER)('a')
+              VALUE_ARGUMENT_LIST
+                PsiElement(LPAR)('(')
+                PsiElement(RPAR)(')')
+            PsiElement(RBRACKET)(']')
         PsiWhiteSpace(' ')
         USER_TYPE
           REFERENCE_EXPRESSION
@@ -384,10 +387,13 @@ JetFile: FunctionExpressions_ERR.kt
     PsiWhiteSpace(' ')
     REFERENCE_EXPRESSION
       PsiElement(IDENTIFIER)('public')
-    PsiWhiteSpace(' ')
     PsiErrorElement:Property getter or setter expected
-      PsiElement(fun)('fun')
-      PsiWhiteSpace(' ')
+      <empty list>
+  PsiWhiteSpace(' ')
+  FUN
+    PsiElement(fun)('fun')
+    PsiWhiteSpace(' ')
+    VALUE_PARAMETER_LIST
       PsiElement(LPAR)('(')
       PsiElement(RPAR)(')')
   PsiWhiteSpace('\n')
@@ -400,10 +406,13 @@ JetFile: FunctionExpressions_ERR.kt
     PsiWhiteSpace(' ')
     REFERENCE_EXPRESSION
       PsiElement(IDENTIFIER)('open')
-    PsiWhiteSpace(' ')
     PsiErrorElement:Property getter or setter expected
-      PsiElement(fun)('fun')
-      PsiWhiteSpace(' ')
+      <empty list>
+  PsiWhiteSpace(' ')
+  FUN
+    PsiElement(fun)('fun')
+    PsiWhiteSpace(' ')
+    VALUE_PARAMETER_LIST
       PsiElement(LPAR)('(')
       PsiElement(RPAR)(')')
   PsiWhiteSpace('\n')
@@ -416,10 +425,13 @@ JetFile: FunctionExpressions_ERR.kt
     PsiWhiteSpace(' ')
     REFERENCE_EXPRESSION
       PsiElement(IDENTIFIER)('final')
-    PsiWhiteSpace(' ')
     PsiErrorElement:Property getter or setter expected
-      PsiElement(fun)('fun')
-      PsiWhiteSpace(' ')
+      <empty list>
+  PsiWhiteSpace(' ')
+  FUN
+    PsiElement(fun)('fun')
+    PsiWhiteSpace(' ')
+    VALUE_PARAMETER_LIST
       PsiElement(LPAR)('(')
       PsiElement(RPAR)(')')
   PsiWhiteSpace('\n\n')

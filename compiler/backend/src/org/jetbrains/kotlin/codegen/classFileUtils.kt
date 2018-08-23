@@ -18,8 +18,10 @@ package org.jetbrains.kotlin.codegen
 
 import org.jetbrains.kotlin.backend.common.output.OutputFile
 import org.jetbrains.kotlin.codegen.state.GenerationState
-import org.jetbrains.kotlin.load.kotlin.ModuleMapping
-import org.jetbrains.kotlin.load.kotlin.PackageParts
+import org.jetbrains.kotlin.load.kotlin.loadModuleMapping
+import org.jetbrains.kotlin.metadata.jvm.deserialization.ModuleMapping
+import org.jetbrains.kotlin.metadata.jvm.deserialization.PackageParts
+import org.jetbrains.kotlin.resolve.jvm.JvmClassName
 
 fun ClassFileFactory.getClassFiles(): Iterable<OutputFile> {
     return asList().filterClassFiles()
@@ -29,30 +31,27 @@ fun List<OutputFile>.filterClassFiles(): Iterable<OutputFile> {
     return filter { it.relativePath.endsWith(".class") }
 }
 
-fun List<PackageParts>.addCompiledPartsAndSort(state: GenerationState): List<PackageParts> =
+fun Iterable<PackageParts>.addCompiledPartsAndSort(state: GenerationState): List<PackageParts> =
         addCompiledParts(state).sortedBy { it.packageFqName }
 
-private fun List<PackageParts>.addCompiledParts(state: GenerationState): List<PackageParts> {
-    if (state.incrementalCompilationComponents == null || state.targetId == null) return this
+private fun Iterable<PackageParts>.addCompiledParts(state: GenerationState): List<PackageParts> {
+    val incrementalCache = state.incrementalCacheForThisTarget ?: return this.toList()
+    val moduleMappingData = incrementalCache.getModuleMappingData() ?: return this.toList()
 
-    val incrementalCache = state.incrementalCompilationComponents.getIncrementalCache(state.targetId)
-    val moduleMappingData = incrementalCache.getModuleMappingData() ?: return this
+    val mapping = ModuleMapping.loadModuleMapping(moduleMappingData, "<incremental>", state.deserializationConfiguration) { version ->
+        throw IllegalStateException("Version of the generated module cannot be incompatible: $version")
+    }
 
-    val mapping = ModuleMapping.create(moduleMappingData)
-
-    incrementalCache.getObsoletePackageParts().forEach {
-        val i = it.lastIndexOf('/')
-        val qualifier = if (i == -1) "" else it.substring(0, i).replace('/', '.')
-        val name = it.substring(i + 1)
-        mapping.findPackageParts(qualifier)?.run { parts.remove(name) }
+    incrementalCache.getObsoletePackageParts().forEach { internalName ->
+        val qualifier = JvmClassName.byInternalName(internalName).packageFqName.asString()
+        mapping.findPackageParts(qualifier)?.removePart(internalName)
     }
 
     return (this + mapping.packageFqName2Parts.values)
             .groupBy { it.packageFqName }
-            .map {
-                val (packageFqName, packageParts) = it
-                val newPackageParts = PackageParts(packageFqName)
-                packageParts.forEach { newPackageParts.parts.addAll(it.parts) }
-                newPackageParts
+            .map { (packageFqName, allOldPackageParts) ->
+                PackageParts(packageFqName).apply {
+                    allOldPackageParts.forEach { packageParts -> this += packageParts }
+                }
             }
 }

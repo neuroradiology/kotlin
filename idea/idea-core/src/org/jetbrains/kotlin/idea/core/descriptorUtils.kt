@@ -19,6 +19,7 @@ package org.jetbrains.kotlin.idea.core
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor.Kind.*
 import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
@@ -27,11 +28,15 @@ import org.jetbrains.kotlin.lexer.KtModifierKeywordToken
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.resolve.descriptorUtil.isExtension
+import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.OverridingUtil
 import org.jetbrains.kotlin.resolve.findOriginalTopMostOverriddenDescriptors
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 import org.jetbrains.kotlin.resolve.scopes.utils.getImplicitReceiversHierarchy
 import org.jetbrains.kotlin.synthetic.SyntheticJavaPropertyDescriptor
+import java.util.*
 
 fun DeclarationDescriptorWithVisibility.isVisible(from: DeclarationDescriptor): Boolean {
     return isVisible(from, null)
@@ -54,11 +59,12 @@ private fun DeclarationDescriptorWithVisibility.isVisible(
         bindingContext: BindingContext? = null,
         resolutionScope: LexicalScope? = null
 ): Boolean {
-    if (Visibilities.isVisibleWithIrrelevantReceiver(this, from)) return true
+    if (Visibilities.isVisibleWithAnyReceiver(this, from)) return true
 
     if (bindingContext == null || resolutionScope == null) return false
 
-    if (receiverExpression != null) {
+    // for extension it makes no sense to check explicit receiver because we need dispatch receiver which is implicit in this case
+    if (receiverExpression != null && !isExtension) {
         val receiverType = bindingContext.getType(receiverExpression) ?: return false
         val explicitReceiver = ExpressionReceiver.create(receiverExpression, receiverType, bindingContext)
         return Visibilities.isVisible(explicitReceiver, this, from)
@@ -112,15 +118,42 @@ fun compareDescriptors(project: Project, currentDescriptor: DeclarationDescripto
 
 fun Visibility.toKeywordToken(): KtModifierKeywordToken {
     val normalized = normalize()
-    when (normalized) {
-        Visibilities.PUBLIC -> return KtTokens.PUBLIC_KEYWORD
-        Visibilities.PROTECTED -> return KtTokens.PROTECTED_KEYWORD
-        Visibilities.INTERNAL -> return KtTokens.INTERNAL_KEYWORD
+    return when (normalized) {
+        Visibilities.PUBLIC -> KtTokens.PUBLIC_KEYWORD
+        Visibilities.PROTECTED -> KtTokens.PROTECTED_KEYWORD
+        Visibilities.INTERNAL -> KtTokens.INTERNAL_KEYWORD
         else -> {
             if (Visibilities.isPrivate(normalized)) {
-                return KtTokens.PRIVATE_KEYWORD
+                KtTokens.PRIVATE_KEYWORD
             }
-            error("Unexpected visibility '$normalized'")
+            else {
+                error("Unexpected visibility '$normalized'")
+            }
         }
     }
+}
+
+fun <D : CallableMemberDescriptor> D.getDirectlyOverriddenDeclarations(): Collection<D> {
+    val result = LinkedHashSet<D>()
+    for (overriddenDescriptor in overriddenDescriptors) {
+        @Suppress("UNCHECKED_CAST")
+        when (overriddenDescriptor.kind) {
+            DECLARATION -> result.add(overriddenDescriptor as D)
+            FAKE_OVERRIDE, DELEGATION -> result.addAll((overriddenDescriptor as D).getDirectlyOverriddenDeclarations())
+            SYNTHESIZED -> {
+                //do nothing
+            }
+            else -> throw AssertionError("Unexpected callable kind ${overriddenDescriptor.kind}: $overriddenDescriptor")
+        }
+    }
+    return OverridingUtil.filterOutOverridden(result)
+}
+
+fun <D : CallableMemberDescriptor> D.getDeepestSuperDeclarations(withThis: Boolean = true): Collection<D> {
+    val overriddenDeclarations = DescriptorUtils.getAllOverriddenDeclarations(this)
+    if (overriddenDeclarations.isEmpty() && withThis) {
+        return setOf(this)
+    }
+
+    return overriddenDeclarations.filterNot(DescriptorUtils::isOverride)
 }

@@ -1,5 +1,5 @@
-import java.util.HashSet
-
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: NATIVE
 class A : HashSet<Long>()
 
 fun box(): String {

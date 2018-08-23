@@ -3,6 +3,7 @@
 Cleaning output files:
   out/production/module/A$AA.class
   out/production/module/A.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/A.kt
@@ -10,6 +11,7 @@ End of files
 Marked as dirty by Kotlin:
   src/companionExtension.kt
   src/companionReferenceExplicit.kt
+  src/companionReferenceImplicit.kt
 Exit code: ADDITIONAL_PASS_REQUIRED
 ------------------------------------------
 Cleaning output files:

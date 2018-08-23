@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ import com.intellij.psi.*
 import com.intellij.psi.search.GlobalSearchScopesCore
 import com.intellij.testIntegration.createTest.CreateTestAction
 import com.intellij.testIntegration.createTest.TestGenerators
-import org.jetbrains.kotlin.asJava.KtLightClass
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
 import org.jetbrains.kotlin.asJava.findFacadeClass
 import org.jetbrains.kotlin.asJava.toLightClass
 import org.jetbrains.kotlin.idea.actions.JavaToKotlinAction
@@ -48,7 +48,6 @@ import org.jetbrains.kotlin.idea.util.runWithAlternativeResolveEnabled
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.endOffset
 import org.jetbrains.kotlin.psi.psiUtil.startOffset
-import org.jetbrains.kotlin.utils.addToStdlib.singletonList
 import java.util.*
 
 class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration>(KtNamedDeclaration::class.java, "Create test") {
@@ -57,7 +56,7 @@ class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration
         if (element.nameIdentifier == null) return null
 
         if (element is KtClassOrObject) {
-            if (element.isLocal()) return null
+            if (element.isLocal) return null
             if (element is KtEnumEntry) return null
             if (element is KtClass && (element.isAnnotation() || element.isInterface())) return null
 
@@ -83,11 +82,13 @@ class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration
         return null
     }
 
+    override fun startInWriteAction() = false
+
     override fun applyTo(element: KtNamedDeclaration, editor: Editor?) {
         if (editor == null) throw IllegalArgumentException("This intention requires an editor")
         val lightClass = when (element) {
             is KtClassOrObject -> element.toLightClass()
-            else -> element.getContainingKtFile().findFacadeClass()
+            else -> element.containingKtFile.findFacadeClass()
         } ?: return
 
         object : CreateTestAction() {
@@ -132,7 +133,7 @@ class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration
                 val dialog = KotlinCreateTestDialog(project, text, srcClass, srcPackage, srcModule)
                 if (!dialog.showAndGet()) return
 
-                val existingClass = (findTestClass(dialog.targetDirectory, dialog.className) as? KtLightClass)?.getOrigin()
+                val existingClass = (findTestClass(dialog.targetDirectory, dialog.className) as? KtLightClass)?.kotlinOrigin
                 if (existingClass != null) {
                     // TODO: Override dialog method when it becomes protected
                     val answer = Messages.showYesNoDialog(
@@ -168,8 +169,9 @@ class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration
                             if (existingClass != null) {
                                 runWriteAction {
                                     val existingMethodNames = existingClass
-                                            .declarations
-                                            .filterIsInstance<KtNamedFunction>()
+                                        .declarations
+                                        .asSequence()
+                                        .filterIsInstance<KtNamedFunction>()
                                             .mapTo(HashSet()) { it.name }
                                     generatedClass
                                             .methods
@@ -180,7 +182,11 @@ class KotlinCreateTestIntention : SelfTargetingRangeIntention<KtNamedDeclaration
                                 NavigationUtil.activateFileWithPsiElement(existingClass)
                             }
                             else {
-                                JavaToKotlinAction.convertFiles(generatedFile.singletonList(), project, false).singleOrNull()
+                                with(PsiDocumentManager.getInstance(project)) {
+                                    getDocument(generatedFile)?.let { doPostponedOperationsAndUnblockDocument(it) }
+                                }
+
+                                JavaToKotlinAction.convertFiles(listOf(generatedFile), project, false).singleOrNull()
                             }
                         }
                     }

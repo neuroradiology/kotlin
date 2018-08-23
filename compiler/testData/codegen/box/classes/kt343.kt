@@ -1,5 +1,4 @@
-import java.util.ArrayList
-
+// IGNORE_BACKEND: JS_IR
 fun launch(f : () -> Unit) {
     f()
 }

@@ -1,35 +1,44 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package templates
 
 import templates.Family.*
 import templates.PrimitiveType.Companion.maxByCapacity
 
-fun ranges(): List<GenericFunction> {
-    val templates = arrayListOf<GenericFunction>()
+object RangeOps : TemplateGroupBase() {
 
-    val rangePrimitives = listOf(PrimitiveType.Int, PrimitiveType.Long, PrimitiveType.Char)
-    fun rangeElementType(fromType: PrimitiveType, toType: PrimitiveType)
+    private val rangePrimitives = setOf(PrimitiveType.Int, PrimitiveType.Long, PrimitiveType.Char)
+    private fun rangeElementType(fromType: PrimitiveType, toType: PrimitiveType)
             = maxByCapacity(fromType, toType).let { if (it == PrimitiveType.Char) it else maxByCapacity(it, PrimitiveType.Int) }
 
-    fun <T> Collection<T>.permutations(): List<Pair<T, T>> = flatMap { a -> map { b -> a to b } }
+    private fun <T> Collection<T>.permutations(): List<Pair<T, T>> = flatMap { a -> map { b -> a to b } }
 
-    templates add f("reversed()") {
-        only(ProgressionsOfPrimitives)
-        only(rangePrimitives)
-        doc(ProgressionsOfPrimitives) { "Returns a progression that goes over the same range in the opposite direction with the same step." }
+    private val numericPrimitives = PrimitiveType.numericPrimitives
+    private val numericPermutations = numericPrimitives.permutations()
+    private val primitivePermutations = numericPermutations + (PrimitiveType.Char to PrimitiveType.Char)
+    private val integralPermutations = primitivePermutations.filter { it.first.isIntegral() && it.second.isIntegral() }
+
+
+    val f_reversed = fn("reversed()") {
+        include(ProgressionsOfPrimitives, rangePrimitives)
+    } builder {
+        doc { "Returns a progression that goes over the same range in the opposite direction with the same step." }
         returns("TProgression")
-        body(ProgressionsOfPrimitives) {
+        body {
             "return TProgression.fromClosedRange(last, first, -step)"
         }
     }
 
-    templates add f("step(step: SUM)") {
+    val f_step = fn("step(step: SUM)") {
+        include(ProgressionsOfPrimitives, rangePrimitives)
+    } builder {
         infix(true)
-
-        only(ProgressionsOfPrimitives)
-        only(rangePrimitives)
-        doc(ProgressionsOfPrimitives) { "Returns a progression that goes over the same range with the given step." }
+        doc { "Returns a progression that goes over the same range with the given step." }
         returns("TProgression")
-        body(ProgressionsOfPrimitives) {
+        body {
             """
             checkStepIsPositive(step > 0, step)
             return TProgression.fromClosedRange(first, last, if (this.step > 0) step else -step)
@@ -37,22 +46,27 @@ fun ranges(): List<GenericFunction> {
         }
     }
 
-    fun downTo(fromType: PrimitiveType, toType: PrimitiveType) = f("downTo(to: $toType)") {
-        infix(true)
-
+    val f_downTo = fn("downTo(to: Primitive)").byTwoPrimitives {
+        include(Primitives, integralPermutations)
+    } builderWith { (fromType, toType) ->
         sourceFile(SourceFile.Ranges)
-        only(Primitives)
-        only(fromType)
+
         val elementType = rangeElementType(fromType, toType)
         val progressionType = elementType.name + "Progression"
+
+        infix()
+        signature("downTo(to: $toType)")
         returns(progressionType)
 
         doc {
             """
             Returns a progression from this value down to the specified [to] value with the step -1.
-            The [to] value has to be less than this value.
+
+            The [to] value should be less than or equal to `this` value.
+            If the [to] value is greater than `this` value the returned progression is empty.
             """
         }
+
 
         val fromExpr = if (elementType == fromType) "this" else "this.to$elementType()"
         val toExpr = if (elementType == toType) "to" else "to.to$elementType()"
@@ -63,30 +77,35 @@ fun ranges(): List<GenericFunction> {
             else -> "-1"
         }
 
-        body { "return $progressionType.fromClosedRange($fromExpr, $toExpr, $incrementExpr)" }
+        body {
+            "return $progressionType.fromClosedRange($fromExpr, $toExpr, $incrementExpr)"
+        }
     }
 
-    val numericPrimitives = PrimitiveType.numericPrimitives
-    val numericPermutations = numericPrimitives.permutations()
-    val primitivePermutations = numericPermutations + (PrimitiveType.Char to PrimitiveType.Char)
-    val integralPermutations = primitivePermutations.filter { it.first.isIntegral() && it.second.isIntegral() }
 
-    templates addAll integralPermutations.map { downTo(it.first, it.second) }
-
-    fun until(fromType: PrimitiveType, toType: PrimitiveType) = f("until(to: $toType)") {
-        infix(true)
-
+    val f_until = fn("until(to: Primitive)").byTwoPrimitives {
+        include(Primitives, integralPermutations)
+    } builderWith { (fromType, toType) ->
         sourceFile(SourceFile.Ranges)
-        only(Primitives)
-        only(fromType)
+
+        infix()
+        signature("until(to: $toType)")
+
         val elementType = rangeElementType(fromType, toType)
         val progressionType = elementType.name + "Range"
         returns(progressionType)
+        val minValue = if (elementType == PrimitiveType.Char) "'\\u0000'" else "$elementType.MIN_VALUE"
+        val minValueRef = if (elementType == PrimitiveType.Char) "`$minValue`" else "[$minValue]"
 
         doc {
             """
             Returns a range from this value up to but excluding the specified [to] value.
-            ${ if (elementType == toType) "The [to] value must be greater than [$elementType.MIN_VALUE]." else "" }
+
+            If the [to] value is less than or equal to `this` value the returned range is empty.
+
+            ${textWhen(elementType == toType) {
+                "If the [to] value is less than or equal to $minValueRef the returned range is empty."
+            }}
             """
         }
 
@@ -100,10 +119,10 @@ fun ranges(): List<GenericFunction> {
                 else -> "to"
             }
             body {
+                // <= instead of == for JS
                 """
-                val to_  = ($toExpr - 1).to$elementType()
-                if (to_ > to) throw IllegalArgumentException("The to argument value '${'$'}to' was too small.")
-                return $fromExpr .. to_
+                if (to <= $minValue) return $progressionType.EMPTY
+                return $fromExpr .. (to - 1).to$elementType()
                 """
             }
         } else {
@@ -111,23 +130,37 @@ fun ranges(): List<GenericFunction> {
         }
     }
 
-    templates addAll integralPermutations.map { until(it.first, it.second) }
-
-    fun contains(rangeType: PrimitiveType, itemType: PrimitiveType) = f("contains(value: $itemType)") {
-        operator(true)
+    val f_contains = fn("contains(value: Primitive)").byTwoPrimitives {
+        include(Ranges, numericPermutations)
+        filter { _, (rangeType, itemType) -> rangeType != itemType }
+    } builderWith { (rangeType, itemType) ->
+        operator()
+        signature("contains(value: $itemType)")
 
         check(rangeType.isNumeric() == itemType.isNumeric()) { "Required rangeType and itemType both to be numeric or both not, got: $rangeType, $itemType" }
-        only(Ranges)
-        onlyPrimitives(Ranges, rangeType)
         platformName("${rangeType.name.decapitalize()}RangeContains")
         returns("Boolean")
         doc { "Checks if the specified [value] belongs to this range." }
-        body { "return start <= value && value <= endInclusive" }
+        body {
+            if (rangeType.capacity > itemType.capacity || !rangeType.isIntegral())
+                "return contains(value.to$rangeType())"
+            else
+                "return value.to${rangeType}ExactOrNull().let { if (it != null) contains(it) else false }"
+        }
     }
 
+    val f_toPrimitiveExactOrNull = fn("to{}ExactOrNull()").byTwoPrimitives {
+        include(Primitives, numericPermutations)
+        filter { _, (fromType, toType) -> fromType.capacity > toType.capacity && toType.isIntegral() }
+    } builderWith { (fromType, toType) ->
+        check(toType.isIntegral())
+        visibility("internal")
+        sourceFile(SourceFile.Ranges)
 
-    templates addAll numericPermutations.filter { it.first != it.second }.map { contains(it.first, it.second) }
-
-
-    return templates
+        signature("to${toType}ExactOrNull()")
+        returns("$toType?")
+        body {
+            "return if (this in $toType.MIN_VALUE.to$fromType()..$toType.MAX_VALUE.to$fromType()) this.to$toType() else null"
+        }
+    }
 }

@@ -1,5 +1,4 @@
-import java.util.HashSet
-
+// IGNORE_BACKEND: JS_IR
 fun box() : String{
     val set = HashSet<String>()
     set.add("foo")

@@ -22,11 +22,12 @@ import java.io.File
 class Kotlin2JsTask : KotlinCompilerBaseTask() {
     override val compilerFqName = "org.jetbrains.kotlin.cli.js.K2JSCompiler"
 
-    var library: Path? = null
+    var libraries: Path? = null
     var outputPrefix: File? = null
     var outputPostfix: File? = null
     var sourceMap: Boolean = false
     var metaInfo: Boolean = false
+    var moduleKind: String = "plain"
 
     /**
      * {@link K2JsArgumentConstants.CALL} (default) if need generate a main function call (main function will be auto detected)
@@ -34,15 +35,9 @@ class Kotlin2JsTask : KotlinCompilerBaseTask() {
      */
     var main: String? = null
 
-    fun createLibrary(): Path {
-        val libraryPath = library
-        if (libraryPath == null) {
-            val t = Path(getProject())
-            library = t
-            return t
-        }
-
-        return libraryPath.createPath()
+    fun createLibraries(): Path {
+        val libraryPaths = libraries ?: return Path(getProject()).also { libraries = it }
+        return libraryPaths.createPath()
     }
 
     override fun fillSpecificArguments() {
@@ -50,9 +45,9 @@ class Kotlin2JsTask : KotlinCompilerBaseTask() {
         args.add(output!!.canonicalPath)
 
         // TODO: write test
-        library?.let {
-            args.add("-library-files")
-            args.add(it.list().joinToString(separator = ",") { File(it).canonicalPath })
+        libraries?.let {
+            args.add("-libraries")
+            args.add(it.list().joinToString(File.pathSeparator) { File(it).canonicalPath })
         }
 
         outputPrefix?.let {
@@ -73,5 +68,7 @@ class Kotlin2JsTask : KotlinCompilerBaseTask() {
         if (noStdlib) args.add("-no-stdlib")
         if (sourceMap) args.add("-source-map")
         if (metaInfo) args.add("-meta-info")
+
+        args += listOf("-module-kind", moduleKind)
     }
 }

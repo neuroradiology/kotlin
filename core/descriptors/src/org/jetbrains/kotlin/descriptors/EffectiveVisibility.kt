@@ -20,6 +20,7 @@ import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.descriptors.EffectiveVisibility.*
 import org.jetbrains.kotlin.descriptors.RelationToType.*
+import org.jetbrains.kotlin.resolve.descriptorUtil.isPublishedApi
 
 sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = false, val privateApi: Boolean = false) {
 
@@ -41,17 +42,23 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
     object Private : EffectiveVisibility("private", privateApi = true) {
         override fun relation(other: EffectiveVisibility) =
                 if (this == other || Local == other) Permissiveness.SAME else Permissiveness.LESS
+
+        override fun toVisibility() = Visibilities.PRIVATE
     }
 
     // Effectively same as Private
     object Local : EffectiveVisibility("local") {
         override fun relation(other: EffectiveVisibility) =
                 if (this == other || Private == other) Permissiveness.SAME else Permissiveness.LESS
+
+        override fun toVisibility() = Visibilities.LOCAL
     }
 
     object Public : EffectiveVisibility("public", publicApi = true) {
         override fun relation(other: EffectiveVisibility) =
                 if (this == other) Permissiveness.SAME else Permissiveness.MORE
+
+        override fun toVisibility() = Visibilities.PUBLIC
     }
 
     abstract class InternalOrPackage protected constructor(internal: Boolean) : EffectiveVisibility(
@@ -72,9 +79,13 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
         }
     }
 
-    object Internal : InternalOrPackage(true)
+    object Internal : InternalOrPackage(true) {
+        override fun toVisibility() = Visibilities.INTERNAL
+    }
 
-    object PackagePrivate : InternalOrPackage(false)
+    object PackagePrivate : InternalOrPackage(false) {
+        override fun toVisibility() = Visibilities.PRIVATE
+    }
 
     class Protected(val container: ClassDescriptor?) : EffectiveVisibility("protected", publicApi = true) {
 
@@ -110,6 +121,8 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
             }
             is InternalOrPackage -> InternalProtected(container)
         }
+
+        override fun toVisibility() = Visibilities.PROTECTED
     }
 
     // Lower bound for all protected visibilities
@@ -126,6 +139,8 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
             Private, Local, ProtectedBound, InternalProtectedBound -> other
             is InternalOrPackage, is InternalProtected -> InternalProtectedBound
         }
+
+        override fun toVisibility() = Visibilities.PROTECTED
     }
 
     // Lower bound for internal and protected(C)
@@ -159,6 +174,8 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
             }
             ProtectedBound -> InternalProtectedBound
         }
+
+        override fun toVisibility() = Visibilities.PRIVATE
     }
 
     // Lower bound for internal and protected lower bound
@@ -168,16 +185,20 @@ sealed class EffectiveVisibility(val name: String, val publicApi: Boolean = fals
             Private, Local -> Permissiveness.MORE
             InternalProtectedBound -> Permissiveness.SAME
         }
+
+        override fun toVisibility() = Visibilities.PRIVATE
     }
 
-    internal enum class Permissiveness {
+    enum class Permissiveness {
         LESS,
         SAME,
         MORE,
         UNKNOWN
     }
 
-    abstract internal fun relation(other: EffectiveVisibility): Permissiveness
+    abstract fun relation(other: EffectiveVisibility): Permissiveness
+
+    abstract fun toVisibility(): Visibility
 
     open internal fun lowerBound(other: EffectiveVisibility) = when (relation(other)) {
         Permissiveness.SAME, Permissiveness.LESS -> this
@@ -212,16 +233,20 @@ private fun lowerBound(first: EffectiveVisibility, args: List<EffectiveVisibilit
 private fun lowerBound(args: List<EffectiveVisibility>) =
         if (args.isEmpty()) Public else lowerBound(args.first(), args.subList(1, args.size))
 
-private fun Visibility.forVisibility(descriptor: ClassDescriptor? = null): EffectiveVisibility = when (this) {
-    Visibilities.PRIVATE, Visibilities.PRIVATE_TO_THIS -> Private
-    Visibilities.PROTECTED -> Protected(descriptor)
-    Visibilities.INTERNAL -> Internal
-    Visibilities.PUBLIC -> Public
-    Visibilities.LOCAL -> Local
-    else -> this.effectiveVisibility(descriptor)
-}
+private fun Visibility.forVisibility(descriptor: DeclarationDescriptor, checkPublishedApi: Boolean = false): EffectiveVisibility =
+        when (this) {
+            Visibilities.PRIVATE, Visibilities.PRIVATE_TO_THIS, Visibilities.INVISIBLE_FAKE -> Private
+            Visibilities.PROTECTED -> Protected(descriptor.containingDeclaration as? ClassDescriptor)
+            Visibilities.INTERNAL -> if (!checkPublishedApi ||
+                                         !descriptor.isPublishedApi()) Internal else Public
+            Visibilities.PUBLIC -> Public
+            Visibilities.LOCAL -> Local
+        // NB: visibility must be already normalized here, so e.g. no JavaVisibilities are possible at this point
+            else -> throw AssertionError("Visibility $name is not allowed in forVisibility")
+        }
 
-fun effectiveVisibility(visibility: Visibility, descriptor: ClassDescriptor?) = visibility.forVisibility(descriptor)
+fun effectiveVisibility(visibility: Visibility, descriptor: DeclarationDescriptor, checkPublishedApi: Boolean = false) =
+        visibility.forVisibility(descriptor, checkPublishedApi)
 
 enum class RelationToType(val description: String) {
     CONSTRUCTOR(""),
@@ -237,9 +262,9 @@ enum class RelationToType(val description: String) {
     override fun toString() = description
 }
 
-data class DescriptorWithRelation(val descriptor: ClassifierDescriptor, val relation: RelationToType) {
+data class DescriptorWithRelation(val descriptor: ClassifierDescriptor, private val relation: RelationToType) {
     fun effectiveVisibility() =
-            (descriptor as? ClassDescriptor)?.visibility?.effectiveVisibility(descriptor.containingDeclaration as? ClassDescriptor) ?: Public
+            (descriptor as? ClassDescriptor)?.visibility?.effectiveVisibility(descriptor, false) ?: Public
 
     override fun toString() = "$relation ${descriptor.name}"
 }
@@ -248,16 +273,16 @@ private fun ClassifierDescriptor.dependentDescriptors(ownRelation: RelationToTyp
         setOf(DescriptorWithRelation(this, ownRelation)) +
         ((this.containingDeclaration as? ClassifierDescriptor)?.dependentDescriptors(ownRelation.containerRelation()) ?: emptySet())
 
-fun ClassDescriptor.effectiveVisibility() = effectiveVisibility(emptySet())
+fun ClassDescriptor.effectiveVisibility(checkPublishedApi: Boolean = false) = effectiveVisibility(emptySet(), checkPublishedApi)
 
-private fun ClassDescriptor.effectiveVisibility(classes: Set<ClassDescriptor>): EffectiveVisibility =
+private fun ClassDescriptor.effectiveVisibility(classes: Set<ClassDescriptor>, checkPublishedApi: Boolean): EffectiveVisibility =
         if (this in classes) Public
         else with(this.containingDeclaration as? ClassDescriptor) {
-            lowerBound(visibility.effectiveVisibility(this), this?.effectiveVisibility(classes + this@effectiveVisibility) ?: Public)
+            lowerBound(visibility.effectiveVisibility(this@effectiveVisibility, checkPublishedApi), this?.effectiveVisibility(classes + this@effectiveVisibility, checkPublishedApi) ?: Public)
         }
 
 // Should collect all dependent classifier descriptors, to get verbose diagnostic
-fun KotlinType.dependentDescriptors() = dependentDescriptors(emptySet(), CONSTRUCTOR)
+private fun KotlinType.dependentDescriptors() = dependentDescriptors(emptySet(), CONSTRUCTOR)
 
 private fun KotlinType.dependentDescriptors(types: Set<KotlinType>, ownRelation: RelationToType): Set<DescriptorWithRelation> {
     if (this in types) return emptySet()
@@ -266,7 +291,7 @@ private fun KotlinType.dependentDescriptors(types: Set<KotlinType>, ownRelation:
     return ownDependent + argumentDependent
 }
 
-fun Set<DescriptorWithRelation>.leastPermissive(base: EffectiveVisibility): DescriptorWithRelation? {
+private fun Set<DescriptorWithRelation>.leastPermissive(base: EffectiveVisibility): DescriptorWithRelation? {
     for (descriptorWithRelation in this) {
         val currentVisibility = descriptorWithRelation.effectiveVisibility()
         when (currentVisibility.relation(base)) {
@@ -279,7 +304,11 @@ fun Set<DescriptorWithRelation>.leastPermissive(base: EffectiveVisibility): Desc
     return null
 }
 
-fun DeclarationDescriptorWithVisibility.effectiveVisibility(): EffectiveVisibility =
-        lowerBound(visibility.effectiveVisibility(this.containingDeclaration as? ClassDescriptor),
-                   (this.containingDeclaration as? ClassDescriptor)?.effectiveVisibility() ?: Public)
+fun KotlinType.leastPermissiveDescriptor(base: EffectiveVisibility) = dependentDescriptors().leastPermissive(base)
+
+fun DeclarationDescriptorWithVisibility.effectiveVisibility(
+        visibility: Visibility = this.visibility, checkPublishedApi: Boolean = false
+): EffectiveVisibility =
+        lowerBound(visibility.effectiveVisibility(this, checkPublishedApi),
+                   (this.containingDeclaration as? ClassDescriptor)?.effectiveVisibility(checkPublishedApi) ?: Public)
 

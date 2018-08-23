@@ -1,3 +1,6 @@
+// IGNORE_BACKEND: JS_IR
+// DONT_RUN_GENERATED_CODE: JS
+
 tailrec fun foo(x: Int) {
     return if (x > 0) {
         (foo(x - 1))

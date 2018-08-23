@@ -24,9 +24,9 @@ import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.name.FqName;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtFile;
-import org.jetbrains.kotlin.resolve.lazy.KotlinTestWithEnvironment;
 import org.jetbrains.kotlin.resolve.lazy.LazyEntity;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 import org.jetbrains.kotlin.utils.Printer;
 
 import java.io.File;
@@ -77,7 +77,7 @@ public class RecursiveDescriptorProcessorTest extends KotlinTestWithEnvironment 
     }
 
     private static List<String> recursivelyCollectDescriptors(PackageViewDescriptor testPackage) {
-        final List<String> lines = Lists.newArrayList();
+        List<String> lines = Lists.newArrayList();
         RecursiveDescriptorProcessor.process(testPackage, null, new DeclarationDescriptorVisitor<Boolean, Void>() {
 
             private void add(DeclarationDescriptor descriptor) {
@@ -125,6 +125,12 @@ public class RecursiveDescriptorProcessorTest extends KotlinTestWithEnvironment 
 
             @Override
             public Boolean visitClassDescriptor(ClassDescriptor descriptor, Void data) {
+                add(descriptor);
+                return true;
+            }
+
+            @Override
+            public Boolean visitTypeAliasDescriptor(TypeAliasDescriptor descriptor, Void data) {
                 add(descriptor);
                 return true;
             }

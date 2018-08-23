@@ -2,7 +2,11 @@
   <dictionary name="dzharkov">
     <words>
       <w>checkcast</w>
+      <w>coroutine</w>
+      <w>experimentalities</w>
+      <w>experimentality</w>
       <w>insn</w>
+      <w>liveness</w>
     </words>
   </dictionary>
 </component>

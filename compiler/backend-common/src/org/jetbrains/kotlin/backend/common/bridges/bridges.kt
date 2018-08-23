@@ -17,16 +17,22 @@
 package org.jetbrains.kotlin.backend.common.bridges
 
 import org.jetbrains.kotlin.utils.DFS
-import java.util.HashSet
+import java.util.*
 
 interface FunctionHandle {
     val isDeclaration: Boolean
     val isAbstract: Boolean
 
+    /** On finding concrete super declaration we should distinguish non-abstract java8/js default methods from
+    * class ones (see [findConcreteSuperDeclaration] method in bridges.kt).
+    * Note that interface methods with body compiled to jvm 8 target are assumed to be non-abstract in bridges method calculation
+    * (more details in [DescriptorBasedFunctionHandle.isBodyOwner] comment).*/
+    val isInterfaceDeclaration: Boolean
+
     fun getOverridden(): Iterable<FunctionHandle>
 }
 
-data class Bridge<Signature>(
+data class Bridge<out Signature>(
         val from: Signature,
         val to: Signature
 ) {
@@ -50,7 +56,7 @@ fun <Function : FunctionHandle, Signature> generateBridges(
 
     val implementation = findConcreteSuperDeclaration(function)
 
-    val bridgesToGenerate = findAllReachableDeclarations(function).mapTo(HashSet<Signature>(), signature)
+    val bridgesToGenerate = findAllReachableDeclarations(function).mapTo(LinkedHashSet<Signature>(), signature)
 
     if (fake) {
         // If it's a concrete fake override, some of the bridges may be inherited from the super-classes. Specifically, bridges for all
@@ -79,7 +85,7 @@ fun <Function : FunctionHandle> findAllReachableDeclarations(function: Function)
     }
     @Suppress("UNCHECKED_CAST")
     DFS.dfs(listOf(function), { it.getOverridden() as Iterable<Function> }, collector)
-    return HashSet(collector.result())
+    return LinkedHashSet(collector.result())
 }
 
 /**
@@ -108,7 +114,7 @@ fun <Function : FunctionHandle> findConcreteSuperDeclaration(function: Function)
     }
     result.removeAll(toRemove)
 
-    val concreteRelevantDeclarations = result.filter { !it.isAbstract }
+    val concreteRelevantDeclarations = result.filter { !it.isAbstract && !it.isInterfaceDeclaration }
     if (concreteRelevantDeclarations.size != 1) {
         error("Concrete fake override $function should have exactly one concrete super-declaration: $concreteRelevantDeclarations")
     }

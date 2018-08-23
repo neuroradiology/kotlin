@@ -1,6 +1,7 @@
 ================ Step #1 =================
 
 Cleaning output files:
+  out/production/module/META-INF/module.kotlin_module
   out/production/module/foo/A.class
 End of files
 Compiling files:
@@ -51,16 +52,16 @@ End of files
 Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
-Type argument expected
-Type argument expected
-Type argument expected
+One type argument expected for class A<T>
+One type argument expected for class A<T>
+One type argument expected for class A<T>
 Type inference failed: Not enough information to infer parameter T in constructor A<T>()
 Please specify it explicitly.
 Type inference failed: Not enough information to infer parameter T in constructor A<T>()
 Please specify it explicitly.
 Type inference failed: Not enough information to infer parameter T in constructor A<T>()
 Please specify it explicitly.
-Type argument expected
+One type argument expected for class A<T>
 
 ================ Step #2 =================
 

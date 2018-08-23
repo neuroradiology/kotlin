@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,49 +16,55 @@
 
 package org.jetbrains.kotlin.resolve.lazy.descriptors
 
-import com.google.common.collect.Lists
+import org.jetbrains.kotlin.config.LanguageFeature
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor.Kind.DELEGATION
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor.Kind.FAKE_OVERRIDE
-import org.jetbrains.kotlin.descriptors.impl.ConstructorDescriptorImpl
+import org.jetbrains.kotlin.descriptors.impl.ClassConstructorDescriptorImpl
+import org.jetbrains.kotlin.diagnostics.DiagnosticSink
 import org.jetbrains.kotlin.diagnostics.Errors
+import org.jetbrains.kotlin.diagnostics.reportOnDeclarationAs
+import org.jetbrains.kotlin.diagnostics.reportOnDeclarationOrFail
 import org.jetbrains.kotlin.incremental.components.LookupLocation
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
+import org.jetbrains.kotlin.incremental.record
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtTypeReference
 import org.jetbrains.kotlin.resolve.*
-import org.jetbrains.kotlin.resolve.dataClassUtils.createComponentName
-import org.jetbrains.kotlin.resolve.dataClassUtils.isComponentLike
 import org.jetbrains.kotlin.resolve.lazy.LazyClassContext
 import org.jetbrains.kotlin.resolve.lazy.declarations.ClassMemberDeclarationProvider
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
-import org.jetbrains.kotlin.resolve.varianceChecker.VarianceChecker
 import org.jetbrains.kotlin.storage.NotNullLazyValue
 import org.jetbrains.kotlin.storage.NullableLazyValue
-import org.jetbrains.kotlin.types.DeferredType
 import org.jetbrains.kotlin.types.KotlinType
 import java.util.*
 
 open class LazyClassMemberScope(
-        c: LazyClassContext,
-        declarationProvider: ClassMemberDeclarationProvider,
-        thisClass: LazyClassDescriptor,
-        trace: BindingTrace
-) : AbstractLazyMemberScope<LazyClassDescriptor, ClassMemberDeclarationProvider>(c, declarationProvider, thisClass, trace) {
+    c: LazyClassContext,
+    declarationProvider: ClassMemberDeclarationProvider,
+    thisClass: ClassDescriptorWithResolutionScopes,
+    trace: BindingTrace
+) : AbstractLazyMemberScope<ClassDescriptorWithResolutionScopes, ClassMemberDeclarationProvider>(c, declarationProvider, thisClass, trace) {
 
     private val descriptorsFromDeclaredElements = storageManager.createLazyValue {
-        computeDescriptorsFromDeclaredElements(DescriptorKindFilter.ALL, MemberScope.ALL_NAME_FILTER, NoLookupLocation.WHEN_GET_ALL_DESCRIPTORS)
+        computeDescriptorsFromDeclaredElements(
+            DescriptorKindFilter.ALL,
+            MemberScope.ALL_NAME_FILTER,
+            NoLookupLocation.WHEN_GET_ALL_DESCRIPTORS
+        )
     }
     private val extraDescriptors: NotNullLazyValue<Collection<DeclarationDescriptor>> = storageManager.createLazyValue {
         computeExtraDescriptors(NoLookupLocation.FOR_ALREADY_TRACKED)
     }
 
-    override fun getContributedDescriptors(kindFilter: DescriptorKindFilter,
-                                           nameFilter: (Name) -> Boolean): Collection<DeclarationDescriptor> {
+    override fun getContributedDescriptors(
+        kindFilter: DescriptorKindFilter,
+        nameFilter: (Name) -> Boolean
+    ): Collection<DeclarationDescriptor> {
         val result = LinkedHashSet(descriptorsFromDeclaredElements())
         result.addAll(extraDescriptors())
         return result
@@ -70,8 +76,7 @@ open class LazyClassMemberScope(
             for (descriptor in supertype.memberScope.getContributedDescriptors()) {
                 if (descriptor is FunctionDescriptor) {
                     result.addAll(getContributedFunctions(descriptor.name, location))
-                }
-                else if (descriptor is PropertyDescriptor) {
+                } else if (descriptor is PropertyDescriptor) {
                     result.addAll(getContributedVariables(descriptor.name, location))
                 }
                 // Nothing else is inherited
@@ -79,73 +84,157 @@ open class LazyClassMemberScope(
         }
 
         addDataClassMethods(result, location)
+        addSyntheticFunctions(result, location)
+        addSyntheticCompanionObject(result, location)
+        addSyntheticNestedClasses(result, location)
 
         result.trimToSize()
         return result
     }
 
-    private interface MemberExtractor<T : CallableMemberDescriptor> {
+    private val _variableNames: MutableSet<Name>
+            by lazy(LazyThreadSafetyMode.PUBLICATION) {
+                mutableSetOf<Name>().apply {
+                    addAll(declarationProvider.getDeclarationNames())
+                    thisDescriptor.typeConstructor.supertypes.flatMapTo(this) {
+                        it.memberScope.getVariableNames()
+                    }
+                }
+            }
+
+    private val _functionNames: MutableSet<Name>
+            by lazy(LazyThreadSafetyMode.PUBLICATION) {
+                mutableSetOf<Name>().apply {
+                    addAll(declarationProvider.getDeclarationNames())
+                    thisDescriptor.typeConstructor.supertypes.flatMapTo(this) {
+                        it.memberScope.getFunctionNames()
+                    }
+
+                    addAll(getDataClassRelatedFunctionNames())
+                }
+            }
+
+    private fun getDataClassRelatedFunctionNames(): Collection<Name> {
+        val declarations = mutableListOf<DeclarationDescriptor>()
+        addDataClassMethods(declarations, NoLookupLocation.WHEN_GET_ALL_DESCRIPTORS)
+        return declarations.map { it.name }
+    }
+
+    override fun getVariableNames() = _variableNames
+    override fun getFunctionNames() = _functionNames
+
+    private interface MemberExtractor<out T : CallableMemberDescriptor> {
         fun extract(extractFrom: KotlinType, name: Name): Collection<T>
     }
 
-    private val primaryConstructor: NullableLazyValue<ConstructorDescriptor>
-            = c.storageManager.createNullableLazyValue { resolvePrimaryConstructor() }
+    private val primaryConstructor: NullableLazyValue<ClassConstructorDescriptor> =
+        c.storageManager.createNullableLazyValue { resolvePrimaryConstructor() }
 
-    override fun getScopeForMemberDeclarationResolution(declaration: KtDeclaration): LexicalScope {
-        if (declaration is KtProperty) {
-            return thisDescriptor.scopeForInitializerResolution
-        }
-        return thisDescriptor.scopeForMemberDeclarationResolution
-    }
+    override fun getScopeForMemberDeclarationResolution(declaration: KtDeclaration): LexicalScope =
+        thisDescriptor.scopeForMemberDeclarationResolution
 
-    private fun <D : CallableMemberDescriptor> generateFakeOverrides(name: Name, fromSupertypes: Collection<D>, result: MutableCollection<D>, exactDescriptorClass: Class<out D>) {
-        OverridingUtil.generateOverridesInFunctionGroup(name, fromSupertypes, ArrayList(result), thisDescriptor, object : OverridingStrategy() {
-            override fun addFakeOverride(fakeOverride: CallableMemberDescriptor) {
-                assert(exactDescriptorClass.isInstance(fakeOverride)) { "Wrong descriptor type in an override: " + fakeOverride + " while expecting " + exactDescriptorClass.simpleName }
-                @Suppress("UNCHECKED_CAST")
-                result.add(fakeOverride as D)
-            }
+    override fun getScopeForInitializerResolution(declaration: KtDeclaration): LexicalScope =
+        thisDescriptor.scopeForInitializerResolution
 
-            override fun conflict(fromSuper: CallableMemberDescriptor, fromCurrent: CallableMemberDescriptor) {
-                val declaration = DescriptorToSourceUtils.descriptorToDeclaration(fromCurrent) as? KtDeclaration ?: error("fromCurrent can not be a fake override")
-                trace.report(Errors.CONFLICTING_OVERLOADS.on(declaration, fromCurrent, fromSuper.containingDeclaration))
-            }
-        })
+    private fun <D : CallableMemberDescriptor> generateFakeOverrides(
+        name: Name,
+        fromSupertypes: Collection<D>,
+        result: MutableCollection<D>,
+        exactDescriptorClass: Class<out D>
+    ) {
+        OverridingUtil.generateOverridesInFunctionGroup(
+            name,
+            fromSupertypes,
+            ArrayList(result),
+            thisDescriptor,
+            object : OverridingStrategy() {
+                override fun addFakeOverride(fakeOverride: CallableMemberDescriptor) {
+                    assert(exactDescriptorClass.isInstance(fakeOverride)) { "Wrong descriptor type in an override: " + fakeOverride + " while expecting " + exactDescriptorClass.simpleName }
+                    @Suppress("UNCHECKED_CAST")
+                    result.add(fakeOverride as D)
+                }
+
+                override fun overrideConflict(
+                    fromSuper: CallableMemberDescriptor,
+                    fromCurrent: CallableMemberDescriptor
+                ) {
+                    reportOnDeclarationOrFail(
+                        trace,
+                        fromCurrent
+                    ) { Errors.CONFLICTING_OVERLOADS.on(it, listOf(fromCurrent, fromSuper)) }
+                }
+
+                override fun inheritanceConflict(
+                    first: CallableMemberDescriptor,
+                    second: CallableMemberDescriptor
+                ) {
+                    reportOnDeclarationAs<KtClassOrObject>(
+                        trace,
+                        thisDescriptor
+                    ) { ktClassOrObject ->
+                        Errors.CONFLICTING_INHERITED_MEMBERS.on(
+                            ktClassOrObject,
+                            thisDescriptor,
+                            listOf(first, second)
+                        )
+                    }
+                }
+            })
         OverrideResolver.resolveUnknownVisibilities(result, trace)
     }
 
-    override fun getContributedFunctions(name: Name, location: LookupLocation): Collection<FunctionDescriptor> {
+    override fun getContributedFunctions(name: Name, location: LookupLocation): Collection<SimpleFunctionDescriptor> {
         // TODO: this should be handled by lazy function descriptors
         val functions = super.getContributedFunctions(name, location)
         resolveUnknownVisibilitiesForMembers(functions)
         return functions
     }
 
-    override fun getNonDeclaredFunctions(name: Name, result: MutableSet<FunctionDescriptor>) {
+    override fun getNonDeclaredClasses(name: Name, result: MutableSet<ClassDescriptor>) {
+        generateSyntheticCompanionObject(name, result)
+        c.syntheticResolveExtension.generateSyntheticClasses(thisDescriptor, name, c, declarationProvider, result)
+    }
+
+    override fun getNonDeclaredFunctions(name: Name, result: MutableSet<SimpleFunctionDescriptor>) {
         val location = NoLookupLocation.FOR_ALREADY_TRACKED
 
-        val fromSupertypes = Lists.newArrayList<FunctionDescriptor>()
+        val fromSupertypes = arrayListOf<SimpleFunctionDescriptor>()
         for (supertype in thisDescriptor.typeConstructor.supertypes) {
             fromSupertypes.addAll(supertype.memberScope.getContributedFunctions(name, location))
         }
         result.addAll(generateDelegatingDescriptors(name, EXTRACT_FUNCTIONS, result))
-        generateDataClassMethods(result, name, location)
-        generateFakeOverrides(name, fromSupertypes, result, FunctionDescriptor::class.java)
+        generateDataClassMethods(result, name, location, fromSupertypes)
+        generateFunctionsFromAnyForInlineClass(result, name, fromSupertypes)
+        c.syntheticResolveExtension.generateSyntheticMethods(thisDescriptor, name, trace.bindingContext, fromSupertypes, result)
+        generateFakeOverrides(name, fromSupertypes, result, SimpleFunctionDescriptor::class.java)
     }
 
-    private fun generateDataClassMethods(result: MutableCollection<FunctionDescriptor>, name: Name, location: LookupLocation) {
+    private fun generateFunctionsFromAnyForInlineClass(
+        result: MutableCollection<SimpleFunctionDescriptor>,
+        name: Name,
+        fromSupertypes: List<SimpleFunctionDescriptor>
+    ) {
+        if (!thisDescriptor.isInline) return
+        addFunctionFromAnyIfNeeded(result, name, fromSupertypes)
+    }
+
+    private fun generateDataClassMethods(
+        result: MutableCollection<SimpleFunctionDescriptor>,
+        name: Name,
+        location: LookupLocation,
+        fromSupertypes: List<SimpleFunctionDescriptor>
+    ) {
         if (!thisDescriptor.isData) return
 
         val constructor = getPrimaryConstructor() ?: return
+        val primaryConstructorParameters = declarationProvider.primaryConstructorParameters
 
-        val primaryConstructorParameters = declarationProvider.getOwnerInfo().primaryConstructorParameters
         assert(constructor.valueParameters.size == primaryConstructorParameters.size) { "From descriptor: " + constructor.valueParameters.size + " but from PSI: " + primaryConstructorParameters.size }
 
-        if (isComponentLike(name)) {
+        if (DataClassDescriptorResolver.isComponentLike(name)) {
             var componentIndex = 0
 
             for (parameter in constructor.valueParameters) {
-                if (parameter.type.isError) continue
                 if (!primaryConstructorParameters.get(parameter.index).hasValOrVar()) continue
 
                 val properties = getContributedVariables(parameter.name, location)
@@ -155,22 +244,79 @@ open class LazyClassMemberScope(
 
                 ++componentIndex
 
-                if (name == createComponentName(componentIndex)) {
-                    val functionDescriptor = DescriptorResolver.createComponentFunctionDescriptor(componentIndex, property, parameter, thisDescriptor, trace)
-                    result.add(functionDescriptor)
+                if (name == DataClassDescriptorResolver.createComponentName(componentIndex)) {
+                    result.add(
+                        DataClassDescriptorResolver.createComponentFunctionDescriptor(
+                            componentIndex, property, parameter, thisDescriptor, trace
+                        )
+                    )
                     break
                 }
             }
         }
 
-        if (name == DescriptorResolver.COPY_METHOD_NAME) {
+        if (name == DataClassDescriptorResolver.COPY_METHOD_NAME) {
             for (parameter in constructor.valueParameters) {
                 // force properties resolution to fill BindingContext.VALUE_PARAMETER_AS_PROPERTY slice
                 getContributedVariables(parameter.name, location)
             }
 
-            val copyFunctionDescriptor = DescriptorResolver.createCopyFunctionDescriptor(constructor.valueParameters, thisDescriptor, trace)
-            result.add(copyFunctionDescriptor)
+            result.add(DataClassDescriptorResolver.createCopyFunctionDescriptor(constructor.valueParameters, thisDescriptor, trace))
+        }
+
+        if (c.languageVersionSettings.supportsFeature(LanguageFeature.DataClassInheritance)) {
+            addFunctionFromAnyIfNeeded(result, name, fromSupertypes)
+        }
+    }
+
+    private fun addFunctionFromAnyIfNeeded(
+        result: MutableCollection<SimpleFunctionDescriptor>,
+        name: Name,
+        fromSupertypes: List<SimpleFunctionDescriptor>
+    ) {
+        if (FunctionsFromAny.shouldAddEquals(name, result, fromSupertypes)) {
+            result.add(FunctionsFromAny.createEqualsFunctionDescriptor(thisDescriptor))
+        }
+
+        if (FunctionsFromAny.shouldAddHashCode(name, result, fromSupertypes)) {
+            result.add(FunctionsFromAny.createHashCodeFunctionDescriptor(thisDescriptor))
+        }
+
+        if (FunctionsFromAny.shouldAddToString(name, result, fromSupertypes)) {
+            result.add(FunctionsFromAny.createToStringFunctionDescriptor(thisDescriptor))
+        }
+    }
+
+    private fun addSyntheticCompanionObject(result: MutableCollection<DeclarationDescriptor>, location: LookupLocation) {
+        val syntheticCompanionName = c.syntheticResolveExtension.getSyntheticCompanionObjectNameIfNeeded(thisDescriptor) ?: return
+        val descriptor = getContributedClassifier(syntheticCompanionName, location) ?: return
+        result.add(descriptor)
+    }
+
+    private fun addSyntheticFunctions(result: MutableCollection<DeclarationDescriptor>, location: LookupLocation) {
+        result.addAll(c.syntheticResolveExtension.getSyntheticFunctionNames(thisDescriptor).flatMap {
+            getContributedFunctions(
+                it,
+                location
+            )
+        }.toList())
+    }
+
+    private fun addSyntheticNestedClasses(result: MutableCollection<DeclarationDescriptor>, location: LookupLocation) {
+        result.addAll(c.syntheticResolveExtension.getSyntheticNestedClassNames(thisDescriptor).mapNotNull {
+            getContributedClassifier(
+                it,
+                location
+            )
+        }.toList())
+    }
+
+    private fun generateSyntheticCompanionObject(name: Name, result: MutableSet<ClassDescriptor>) {
+        val syntheticCompanionName = c.syntheticResolveExtension.getSyntheticCompanionObjectNameIfNeeded(thisDescriptor) ?: return
+        if (name == syntheticCompanionName && result.none { it.isCompanionObject }) {
+            // forces creation of companion object if needed
+            val companionObjectDescriptor = thisDescriptor.companionObjectDescriptor ?: return
+            result.add(companionObjectDescriptor)
         }
     }
 
@@ -186,7 +332,7 @@ open class LazyClassMemberScope(
             if (descriptor.kind != FAKE_OVERRIDE && descriptor.kind != DELEGATION) {
                 OverridingUtil.resolveUnknownVisibilityForMember(descriptor, OverrideResolver.createCannotInferVisibilityReporter(trace))
             }
-            VarianceChecker.recordPrivateToThisIfNeeded(trace, descriptor);
+            VarianceCheckerCore(trace.bindingContext, DiagnosticSink.DO_NOTHING).recordPrivateToThisIfNeeded(descriptor)
         }
     }
 
@@ -199,17 +345,17 @@ open class LazyClassMemberScope(
             fromSupertypes.addAll(supertype.memberScope.getContributedVariables(name, NoLookupLocation.FOR_ALREADY_TRACKED))
         }
         result.addAll(generateDelegatingDescriptors(name, EXTRACT_PROPERTIES, result))
+        c.syntheticResolveExtension.generateSyntheticProperties(thisDescriptor, name, trace.bindingContext, fromSupertypes, result)
         generateFakeOverrides(name, fromSupertypes, result, PropertyDescriptor::class.java)
     }
 
     protected open fun createPropertiesFromPrimaryConstructorParameters(name: Name, result: MutableSet<PropertyDescriptor>) {
-        val classInfo = declarationProvider.getOwnerInfo()
 
         // From primary constructor parameters
         val primaryConstructor = getPrimaryConstructor() ?: return
 
         val valueParameterDescriptors = primaryConstructor.valueParameters
-        val primaryConstructorParameters = classInfo.primaryConstructorParameters
+        val primaryConstructorParameters = declarationProvider.primaryConstructorParameters
         assert(valueParameterDescriptors.size == primaryConstructorParameters.size) {
             "From descriptor: ${valueParameterDescriptors.size} but from PSI: ${primaryConstructorParameters.size}"
         }
@@ -220,26 +366,33 @@ open class LazyClassMemberScope(
             val parameter = primaryConstructorParameters.get(valueParameterDescriptor.index)
             if (parameter.hasValOrVar()) {
                 val propertyDescriptor = c.descriptorResolver.resolvePrimaryConstructorParameterToAProperty(
-                        // TODO: can't test because we get types from cache for this case
-                        thisDescriptor, valueParameterDescriptor, thisDescriptor.scopeForConstructorHeaderResolution, parameter, trace)
+                    // TODO: can't test because we get types from cache for this case
+                    thisDescriptor, valueParameterDescriptor, thisDescriptor.scopeForConstructorHeaderResolution, parameter, trace
+                )
                 result.add(propertyDescriptor)
             }
         }
     }
 
-    private fun <T : CallableMemberDescriptor> generateDelegatingDescriptors(name: Name, extractor: MemberExtractor<T>, existingDescriptors: Collection<CallableDescriptor>): Collection<T> {
-        val classOrObject = declarationProvider.getOwnerInfo().correspondingClassOrObject
-            ?: return setOf()
+    private fun <T : CallableMemberDescriptor> generateDelegatingDescriptors(
+        name: Name,
+        extractor: MemberExtractor<T>,
+        existingDescriptors: Collection<CallableDescriptor>
+    ): Collection<T> {
+        val classOrObject = declarationProvider.correspondingClassOrObject ?: return setOf()
 
         val lazyTypeResolver = object : DelegationResolver.TypeResolver {
             override fun resolve(reference: KtTypeReference): KotlinType? =
-                    c.typeResolver.resolveType(thisDescriptor.scopeForClassHeaderResolution, reference, trace, false)
+                c.typeResolver.resolveType(thisDescriptor.scopeForClassHeaderResolution, reference, trace, false)
         }
         val lazyMemberExtractor = object : DelegationResolver.MemberExtractor<T> {
             override fun getMembersByType(type: KotlinType): Collection<T> =
-                    extractor.extract(type, name)
+                extractor.extract(type, name)
         }
-        return DelegationResolver.generateDelegatedMembers(classOrObject, thisDescriptor, existingDescriptors, trace, lazyMemberExtractor, lazyTypeResolver)
+        return DelegationResolver.generateDelegatedMembers(
+            classOrObject, thisDescriptor, existingDescriptors, trace, lazyMemberExtractor,
+            lazyTypeResolver, c.delegationFilter, c.languageVersionSettings
+        )
     }
 
     private fun addDataClassMethods(result: MutableCollection<DeclarationDescriptor>, location: LookupLocation) {
@@ -250,7 +403,7 @@ open class LazyClassMemberScope(
         // Generate componentN functions until there's no such function for some n
         var n = 1
         while (true) {
-            val componentName = createComponentName(n)
+            val componentName = DataClassDescriptorResolver.createComponentName(n)
             val functions = getContributedFunctions(componentName, location)
             if (functions.isEmpty()) break
 
@@ -261,60 +414,66 @@ open class LazyClassMemberScope(
         result.addAll(getContributedFunctions(Name.identifier("copy"), location))
     }
 
-    private val secondaryConstructors: NotNullLazyValue<Collection<ConstructorDescriptor>>
-            = c.storageManager.createLazyValue { resolveSecondaryConstructors() }
+    private val secondaryConstructors: NotNullLazyValue<Collection<ClassConstructorDescriptor>> =
+        c.storageManager.createLazyValue { resolveSecondaryConstructors() }
 
-    fun getConstructors(): Collection<ConstructorDescriptor> {
+    fun getConstructors(): Collection<ClassConstructorDescriptor> {
         val result = secondaryConstructors()
         val primaryConstructor = getPrimaryConstructor()
         return if (primaryConstructor == null) result else result + primaryConstructor
     }
 
-    fun getPrimaryConstructor(): ConstructorDescriptor? = primaryConstructor()
+    fun getPrimaryConstructor(): ClassConstructorDescriptor? = primaryConstructor()
 
-    protected open fun resolvePrimaryConstructor(): ConstructorDescriptor? {
-        val ownerInfo = declarationProvider.getOwnerInfo()
-        val classOrObject = ownerInfo.correspondingClassOrObject ?: return null
+    protected open fun resolvePrimaryConstructor(): ClassConstructorDescriptor? {
+        val classOrObject = declarationProvider.correspondingClassOrObject ?: return null
 
         val hasPrimaryConstructor = classOrObject.hasExplicitPrimaryConstructor()
-        if (DescriptorUtils.isInterface(thisDescriptor) && !hasPrimaryConstructor) return null
+        if (!hasPrimaryConstructor) {
+            if (thisDescriptor.isExpect && !DescriptorUtils.isEnumEntry(thisDescriptor)) return null
+            if (DescriptorUtils.isInterface(thisDescriptor)) return null
+        }
 
         if (DescriptorUtils.canHaveDeclaredConstructors(thisDescriptor) || hasPrimaryConstructor) {
             val constructor = c.functionDescriptorResolver.resolvePrimaryConstructorDescriptor(
-                    thisDescriptor.scopeForConstructorHeaderResolution, thisDescriptor, classOrObject, trace)
+                thisDescriptor.scopeForConstructorHeaderResolution, thisDescriptor, classOrObject, trace
+            )
             constructor ?: return null
             setDeferredReturnType(constructor)
             return constructor
         }
-        else {
-            val constructor = DescriptorResolver.createAndRecordPrimaryConstructorForObject(classOrObject, thisDescriptor, trace)
-            setDeferredReturnType(constructor)
-            return constructor
-        }
+
+        val constructor = DescriptorResolver.createAndRecordPrimaryConstructorForObject(classOrObject, thisDescriptor, trace)
+        setDeferredReturnType(constructor)
+        return constructor
     }
 
-    private fun resolveSecondaryConstructors(): Collection<ConstructorDescriptor> {
-        val classOrObject = declarationProvider.getOwnerInfo().correspondingClassOrObject ?: return emptyList()
+    private fun resolveSecondaryConstructors(): Collection<ClassConstructorDescriptor> {
+        val classOrObject = declarationProvider.correspondingClassOrObject ?: return emptyList()
 
-        return classOrObject.getSecondaryConstructors().map { constructor ->
+        return classOrObject.secondaryConstructors.map { constructor ->
             val descriptor = c.functionDescriptorResolver.resolveSecondaryConstructorDescriptor(
-                    thisDescriptor.scopeForConstructorHeaderResolution, thisDescriptor, constructor, trace
+                thisDescriptor.scopeForConstructorHeaderResolution, thisDescriptor, constructor, trace
             )
             setDeferredReturnType(descriptor)
             descriptor
         }
     }
 
-    protected fun setDeferredReturnType(descriptor: ConstructorDescriptorImpl) {
-        descriptor.returnType = DeferredType.create(c.storageManager, trace, { thisDescriptor.getDefaultType() })
+    protected fun setDeferredReturnType(descriptor: ClassConstructorDescriptorImpl) {
+        descriptor.returnType = c.wrappedTypeFactory.createDeferredType(trace, { thisDescriptor.defaultType })
+    }
+
+    override fun recordLookup(name: Name, from: LookupLocation) {
+        c.lookupTracker.record(from, thisDescriptor, name)
     }
 
     // Do not add details here, they may compromise the laziness during debugging
     override fun toString() = "lazy scope for class ${thisDescriptor.name}"
 
     companion object {
-        private val EXTRACT_FUNCTIONS: MemberExtractor<FunctionDescriptor> = object : MemberExtractor<FunctionDescriptor> {
-            override fun extract(extractFrom: KotlinType, name: Name): Collection<FunctionDescriptor> {
+        private val EXTRACT_FUNCTIONS: MemberExtractor<SimpleFunctionDescriptor> = object : MemberExtractor<SimpleFunctionDescriptor> {
+            override fun extract(extractFrom: KotlinType, name: Name): Collection<SimpleFunctionDescriptor> {
                 return extractFrom.memberScope.getContributedFunctions(name, NoLookupLocation.FOR_ALREADY_TRACKED)
             }
         }

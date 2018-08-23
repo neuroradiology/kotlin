@@ -16,7 +16,6 @@
 
 package org.jetbrains.kotlin.idea.highlighter;
 
-import com.google.common.collect.Sets;
 import com.intellij.openapi.util.Condition;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.util.containers.ContainerUtil;
@@ -24,6 +23,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.analyzer.AnalysisResult;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
+import org.jetbrains.kotlin.config.CommonConfigurationKeysKt;
+import org.jetbrains.kotlin.config.CompilerConfiguration;
+import org.jetbrains.kotlin.config.LanguageVersion;
+import org.jetbrains.kotlin.config.LanguageVersionSettingsImpl;
 import org.jetbrains.kotlin.diagnostics.Diagnostic;
 import org.jetbrains.kotlin.diagnostics.DiagnosticFactory;
 import org.jetbrains.kotlin.diagnostics.Errors;
@@ -35,16 +38,15 @@ import org.jetbrains.kotlin.resolve.BindingContext;
 import org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm;
 import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil;
 import org.jetbrains.kotlin.test.ConfigurationKind;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
+import org.jetbrains.kotlin.test.InTextDirectivesUtils;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 
 import java.io.File;
 import java.lang.reflect.Field;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
-public abstract class AbstractDiagnosticMessageTest extends KotlinLiteFixture {
+public abstract class AbstractDiagnosticMessageTest extends KotlinTestWithEnvironment {
     private static final String DIAGNOSTICS_NUMBER_DIRECTIVE = "DIAGNOSTICS_NUMBER";
     private static final String DIAGNOSTICS_DIRECTIVE = "DIAGNOSTICS";
     private static final String MESSAGE_TYPE_DIRECTIVE = "MESSAGE_TYPE";
@@ -68,14 +70,20 @@ public abstract class AbstractDiagnosticMessageTest extends KotlinLiteFixture {
     }
 
     @NotNull
-    @Override
     protected String getTestDataPath() {
         return PluginTestCaseBase.getTestDataPathBase() + "/diagnosticMessage/";
     }
 
     @NotNull
-    protected AnalysisResult analyze(@NotNull KtFile file) {
-        return JvmResolveUtil.analyzeOneFileWithJavaIntegration(file);
+    protected AnalysisResult analyze(@NotNull KtFile file, @Nullable LanguageVersion explicitLanguageVersion) {
+        CompilerConfiguration configuration = getEnvironment().getConfiguration();
+        if (explicitLanguageVersion != null) {
+            CommonConfigurationKeysKt.setLanguageVersionSettings(
+                    configuration,
+                    new LanguageVersionSettingsImpl(explicitLanguageVersion, LanguageVersionSettingsImpl.DEFAULT.getApiVersion())
+            );
+        }
+        return JvmResolveUtil.analyze(Collections.singleton(file), getEnvironment(), configuration);
     }
 
     public void doTest(String filePath) throws Exception {
@@ -88,8 +96,11 @@ public abstract class AbstractDiagnosticMessageTest extends KotlinLiteFixture {
         final Set<DiagnosticFactory<?>> diagnosticFactories = getDiagnosticFactories(directives);
         MessageType messageType = getMessageTypeDirective(directives);
 
-        KtFile psiFile = createPsiFile(null, fileName, loadFile(fileName));
-        AnalysisResult analysisResult = analyze(psiFile);
+        String explicitLanguageVersion = InTextDirectivesUtils.findStringWithPrefixes(fileData, "// LANGUAGE_VERSION:");
+        LanguageVersion version = explicitLanguageVersion == null ? null : LanguageVersion.fromVersionString(explicitLanguageVersion);
+
+        KtFile psiFile = KotlinTestUtils.createFile(fileName, KotlinTestUtils.doLoadFile(getTestDataPath(), fileName), getProject());
+        AnalysisResult analysisResult = analyze(psiFile, version);
         BindingContext bindingContext = analysisResult.getBindingContext();
 
         List<Diagnostic> diagnostics = ContainerUtil.filter(bindingContext.getDiagnostics().all(), new Condition<Diagnostic>() {
@@ -138,7 +149,7 @@ public abstract class AbstractDiagnosticMessageTest extends KotlinLiteFixture {
     private Set<DiagnosticFactory<?>> getDiagnosticFactories(Map<String, String> directives) {
         String diagnosticsData = directives.get(DIAGNOSTICS_DIRECTIVE);
         assert diagnosticsData != null : DIAGNOSTICS_DIRECTIVE + " should be present.";
-        Set<DiagnosticFactory<?>> diagnosticFactories = Sets.newHashSet();
+        Set<DiagnosticFactory<?>> diagnosticFactories = new HashSet<>();
         String[] diagnostics = diagnosticsData.split(" ");
         for (String diagnosticName : diagnostics) {
             Object diagnostic = getDiagnostic(diagnosticName);

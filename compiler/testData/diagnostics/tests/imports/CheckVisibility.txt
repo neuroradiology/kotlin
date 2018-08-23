@@ -39,36 +39,7 @@ package k {
     }
 }
 
-package k2 {
-}
-
 
 // -- Module: <m2> --
 package
-
-package k {
-
-    public final class A {
-        // -- Module: <m1> --
-    }
-
-    internal final class KInternal {
-        // -- Module: <m1> --
-    }
-
-    private final class KPrivate {
-        // -- Module: <m1> --
-    }
-
-    public final class KPublic {
-        // -- Module: <m1> --
-    }
-}
-
-package k2 {
-}
-
-package k3 {
-}
-
 

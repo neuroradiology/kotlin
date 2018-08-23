@@ -20,10 +20,8 @@ import com.intellij.codeInspection.CleanupLocalInspectionTool
 import com.intellij.codeInspection.ProblemHighlightType
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.TextRange
-import org.jetbrains.kotlin.idea.analysis.analyzeInContext
+import org.jetbrains.kotlin.idea.analysis.analyzeAsReplacement
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
-import org.jetbrains.kotlin.idea.util.getResolutionScope
 import org.jetbrains.kotlin.idea.inspections.IntentionBasedInspection
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.KtQualifiedExpression
@@ -32,16 +30,15 @@ import org.jetbrains.kotlin.psi.createExpressionByPattern
 import org.jetbrains.kotlin.psi.psiUtil.endOffset
 import org.jetbrains.kotlin.psi.psiUtil.getQualifiedExpressionForReceiver
 import org.jetbrains.kotlin.psi.psiUtil.startOffset
-import org.jetbrains.kotlin.resolve.BindingContext
-import org.jetbrains.kotlin.resolve.bindingContextUtil.getDataFlowInfo
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 import org.jetbrains.kotlin.types.ErrorUtils
-import org.jetbrains.kotlin.types.TypeUtils
 
-class RemoveExplicitSuperQualifierInspection : IntentionBasedInspection<KtSuperExpression>(RemoveExplicitSuperQualifierIntention()), CleanupLocalInspectionTool {
-    override val problemHighlightType: ProblemHighlightType
-        get() = ProblemHighlightType.LIKE_UNUSED_SYMBOL
+class RemoveExplicitSuperQualifierInspection : IntentionBasedInspection<KtSuperExpression>(
+        RemoveExplicitSuperQualifierIntention::class
+), CleanupLocalInspectionTool {
+    override fun problemHighlightType(element: KtSuperExpression): ProblemHighlightType =
+            ProblemHighlightType.LIKE_UNUSED_SYMBOL
 }
 
 class RemoveExplicitSuperQualifierIntention : SelfTargetingRangeIntention<KtSuperExpression>(KtSuperExpression::class.java, "Remove explicit supertype qualification") {
@@ -51,14 +48,14 @@ class RemoveExplicitSuperQualifierIntention : SelfTargetingRangeIntention<KtSupe
         val qualifiedExpression = element.getQualifiedExpressionForReceiver() ?: return null
         val selector = qualifiedExpression.selectorExpression ?: return null
 
-        val bindingContext = selector.analyze(BodyResolveMode.PARTIAL)
+        val bindingContext = selector.analyze(BodyResolveMode.PARTIAL_WITH_CFA)
         if (selector.getResolvedCall(bindingContext) == null) return null
-        val resolutionScope = qualifiedExpression.getResolutionScope(bindingContext, selector.getResolutionFacade())
-        val dataFlowInfo = bindingContext.getDataFlowInfo(element)
-        val expectedType = bindingContext[BindingContext.EXPECTED_EXPRESSION_TYPE, qualifiedExpression] ?: TypeUtils.NO_EXPECTED_TYPE
 
-        val newQualifiedExpression = KtPsiFactory(element).createExpressionByPattern("$0.$1", toNonQualified(element), selector) as KtQualifiedExpression
-        val newBindingContext = newQualifiedExpression.analyzeInContext(resolutionScope, qualifiedExpression, dataFlowInfo = dataFlowInfo, expectedType = expectedType, isStatement = true)
+        val newQualifiedExpression = KtPsiFactory(element).createExpressionByPattern(
+                "$0.$1", toNonQualified(element, reformat = false), selector,
+                reformat = false
+        ) as KtQualifiedExpression
+        val newBindingContext = newQualifiedExpression.analyzeAsReplacement(qualifiedExpression, bindingContext)
         val newResolvedCall = newQualifiedExpression.selectorExpression.getResolvedCall(newBindingContext) ?: return null
         if (ErrorUtils.isError(newResolvedCall.resultingDescriptor)) return null
 
@@ -66,14 +63,14 @@ class RemoveExplicitSuperQualifierIntention : SelfTargetingRangeIntention<KtSupe
     }
 
     override fun applyTo(element: KtSuperExpression, editor: Editor?) {
-        element.replace(toNonQualified(element))
+        element.replace(toNonQualified(element, reformat = true))
     }
 
-    private fun toNonQualified(superExpression: KtSuperExpression): KtSuperExpression {
+    private fun toNonQualified(superExpression: KtSuperExpression, reformat: Boolean): KtSuperExpression {
         val factory = KtPsiFactory(superExpression)
         val labelName = superExpression.getLabelNameAsName()
         return (if (labelName != null)
-            factory.createExpressionByPattern("super@$0", labelName)
+            factory.createExpressionByPattern("super@$0", labelName, reformat = reformat)
         else
             factory.createExpression("super")) as KtSuperExpression
     }

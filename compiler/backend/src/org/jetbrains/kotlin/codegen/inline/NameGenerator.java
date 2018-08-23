@@ -16,31 +16,47 @@
 
 package org.jetbrains.kotlin.codegen.inline;
 
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 
 public class NameGenerator {
 
-    private final String ownerMethod;
+    private final String generatorClass;
 
-    private int nextIndex = 1;
+    private int nextLambdaIndex = 1;
+    private int nextWhenIndex = 1;
 
-    private final Map<String, NameGenerator> subGenerators = new HashMap<String, NameGenerator>();
+    private final Map<String, NameGenerator> subGenerators = new HashMap<>();
 
-    public NameGenerator(String onwerMethod) {
-        this.ownerMethod = onwerMethod;
+    public NameGenerator(String generatorClass) {
+        this.generatorClass = generatorClass;
     }
 
-    public String genLambdaClassName() {
-        return ownerMethod + "$" + nextIndex++;
+    public String getGeneratorClass() {
+        return generatorClass;
+    }
+
+    private String genLambdaClassName() {
+        return generatorClass + "$" + nextLambdaIndex++;
+    }
+
+    private String genWhenClassName(@NotNull String original) {
+        return generatorClass + "$" + nextWhenIndex++ + WhenMappingTransformationInfo.TRANSFORMED_WHEN_MAPPING_MARKER + original;
     }
 
     public NameGenerator subGenerator(String inliningMethod) {
-        NameGenerator generator = subGenerators.get(inliningMethod);
-        if (generator == null) {
-            generator = new NameGenerator(ownerMethod+ "$" + inliningMethod);
-            subGenerators.put(inliningMethod, generator);
-        }
+        return subGenerators.computeIfAbsent(inliningMethod, method -> new NameGenerator(generatorClass + "$" + method));
+    }
+
+    @NotNull
+    public NameGenerator subGenerator(boolean lambdaNoWhen, @Nullable String nameSuffix) {
+        String generatorClass = lambdaNoWhen ? genLambdaClassName() : genWhenClassName(nameSuffix);
+        assert !subGenerators.containsKey(generatorClass) : "Name generator for regenerated class should be unique: " + generatorClass;
+        NameGenerator generator = new NameGenerator(generatorClass);
+        subGenerators.put(generatorClass, generator);
         return generator;
     }
 }

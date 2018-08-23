@@ -21,14 +21,17 @@ import com.intellij.psi.PsiFile;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.diagnostics.rendering.DefaultErrorMessages;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 public interface DiagnosticSink {
     DiagnosticSink DO_NOTHING = new DiagnosticSink() {
         @Override
         public void report(@NotNull Diagnostic diagnostic) {
+        }
+
+        @Override
+        public boolean wantsDiagnostics() {
+            return false;
         }
     };
 
@@ -39,10 +42,17 @@ public interface DiagnosticSink {
                 PsiFile psiFile = diagnostic.getPsiFile();
                 List<TextRange> textRanges = diagnostic.getTextRanges();
                 String diagnosticText = DefaultErrorMessages.render(diagnostic);
-                throw new IllegalStateException(diagnostic.getFactory().getName() + ": " + diagnosticText + " " + DiagnosticUtils.atLocation(psiFile, textRanges.get(0)));
+                throw new IllegalStateException(diagnostic.getFactory().getName() + ": " + diagnosticText + " " + PsiDiagnosticUtils
+                        .atLocation(psiFile, textRanges.get(0)));
             }
+        }
+
+        @Override
+        public boolean wantsDiagnostics() {
+            return true;
         }
     };
 
     void report(@NotNull Diagnostic diagnostic);
+    boolean wantsDiagnostics();
 }

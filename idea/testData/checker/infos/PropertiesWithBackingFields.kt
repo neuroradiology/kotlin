@@ -5,9 +5,9 @@
 
     <error>val a : Int</error>
     <error>val b : Int</error> <info>get</info>
-    val <info>c</info> = 1
+    val c = 1
 
-    val <info>c1</info> = 1
+    val c1 = 1
       <info>get</info>
     val c2 : Int
         <info>get</info>() = 1
@@ -30,10 +30,10 @@
     <error>var v1 : Int</error> <info>get</info>
     <error>var v2 : Int</error> <info>get</info> <info>set</info>
     <error>var v3 : Int</error> <info>get</info>() = 1; <info>set</info>
-    var v4 : Int <info>get</info>() = 1; <info>set</info>(x){}
+    var v4 : Int <info>get</info>() = 1; <info>set</info>(<warning>x</warning>){}
 
     <error>var v5 : Int</error> <info>get</info>() = 1; <info>set</info>(x){field = x}
-    <error>var v6 : Int</error> <info>get</info>() = field + 1; <info>set</info>(x){}
+    <error>var v6 : Int</error> <info>get</info>() = field + 1; <info>set</info>(<warning>x</warning>){}
 
   <error>var v9 : Int</error> <info>set</info>
   <error>var v10 : Int</error> <info>get</info>
@@ -42,9 +42,9 @@
 
 <info>open</info> class Super(<warning>i</warning> : Int)
 
-class TestPCParameters(w : Int, <warning>x</warning> : Int, val <info>y</info> : Int, var <info>z</info> : Int) : Super(w) {
+class TestPCParameters(w : Int, <warning>x</warning> : Int, val y : Int, var z : Int) : Super(w) {
 
-  val <info>xx</info> = w
+  val xx = w
 
   <info>init</info> {
     w + 1

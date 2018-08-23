@@ -26,13 +26,14 @@ import com.intellij.psi.PsiFile
 import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.diagnostics.Errors
 import org.jetbrains.kotlin.diagnostics.rendering.DefaultErrorMessages
-import org.jetbrains.kotlin.idea.caches.resolve.analyzeFullyAndGetResult
+import org.jetbrains.kotlin.idea.caches.resolve.analyzeWithAllCompilerChecks
 import org.jetbrains.kotlin.idea.highlighter.KotlinPsiChecker
 import org.jetbrains.kotlin.idea.quickfix.CleanupFix
 import org.jetbrains.kotlin.idea.quickfix.KotlinQuickFixAction
 import org.jetbrains.kotlin.idea.quickfix.ReplaceObsoleteLabelSyntaxFix
 import org.jetbrains.kotlin.idea.quickfix.replaceWith.DeprecatedSymbolUsageFix
 import org.jetbrains.kotlin.idea.util.ProjectRootsUtil
+import org.jetbrains.kotlin.js.resolve.diagnostics.ErrorsJs
 import org.jetbrains.kotlin.psi.KtAnnotationEntry
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtImportDirective
@@ -40,7 +41,7 @@ import org.jetbrains.kotlin.psi.psiUtil.forEachDescendantOfType
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
 import org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm
 
-class KotlinCleanupInspection(): LocalInspectionTool(), CleanupLocalInspectionTool {
+class KotlinCleanupInspection : LocalInspectionTool(), CleanupLocalInspectionTool {
     // required to simplify the inspection registration in tests
     override fun getDisplayName(): String = "Usage of redundant or deprecated syntax or deprecated symbols"
 
@@ -49,7 +50,7 @@ class KotlinCleanupInspection(): LocalInspectionTool(), CleanupLocalInspectionTo
             return null
         }
 
-        val analysisResult = file.analyzeFullyAndGetResult()
+        val analysisResult = file.analyzeWithAllCompilerChecks()
         if (analysisResult.isError()) {
             throw ProcessCanceledException(analysisResult.error)
         }
@@ -92,14 +93,14 @@ class KotlinCleanupInspection(): LocalInspectionTool(), CleanupLocalInspectionTo
             Errors.DEPRECATION_ERROR,
             Errors.NON_CONST_VAL_USED_IN_CONSTANT_EXPRESSION,
             Errors.OPERATOR_MODIFIER_REQUIRED,
-            Errors.DEPRECATED_UNARY_PLUS_MINUS,
-            Errors.DELEGATE_RESOLVED_TO_DEPRECATED_CONVENTION,
             Errors.INFIX_MODIFIER_REQUIRED,
-            Errors.CALLABLE_REFERENCE_TO_MEMBER_OR_EXTENSION_WITH_EMPTY_LHS,
             Errors.DEPRECATED_TYPE_PARAMETER_SYNTAX,
             Errors.MISPLACED_TYPE_PARAMETER_CONSTRAINTS,
             Errors.COMMA_IN_WHEN_CONDITION_WITHOUT_ARGUMENT,
-            Errors.UNSUPPORTED
+            ErrorsJs.WRONG_EXTERNAL_DECLARATION,
+            Errors.YIELD_IS_RESERVED,
+            Errors.DEPRECATED_MODIFIER_FOR_TARGET,
+            Errors.DEPRECATED_MODIFIER
     )
 
     private fun Diagnostic.isObsoleteLabel(): Boolean {
@@ -136,7 +137,7 @@ class KotlinCleanupInspection(): LocalInspectionTool(), CleanupLocalInspectionTo
         override fun getText() = familyName
 
         override fun invoke(project: Project, editor: Editor?, file: KtFile) {
-            element.delete()
+            element?.delete()
         }
     }
 }

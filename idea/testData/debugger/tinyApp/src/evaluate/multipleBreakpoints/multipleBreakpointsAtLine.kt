@@ -10,12 +10,12 @@ fun main(args: Array<String>) {
 
     // EXPRESSION: it + 2
     // RESULT: 3: I
-    //Breakpoint! (lambdaOrdinal = 0)
+    //Breakpoint! (lambdaOrdinal = 1)
     a.foo(1) { 1 }.foo(2) { 1 }
 
     // EXPRESSION: it + 3
     // RESULT: 5: I
-    //Breakpoint! (lambdaOrdinal = 1)
+    //Breakpoint! (lambdaOrdinal = 2)
     a.foo(1) { 1 }.foo(2) { 1 }
 
     // EXPRESSION: it + 4
@@ -29,9 +29,6 @@ fun main(args: Array<String>) {
     //Breakpoint!
     a.foo(1) { 1 }.foo(2) { 1 }
 
-    // EXPRESSION: it + 7
-    // RESULT: Unresolved reference: it
-
     // EXPRESSION: it + 8
     // RESULT: Unresolved reference: it
     //Breakpoint! (lambdaOrdinal = -1)
@@ -39,12 +36,12 @@ fun main(args: Array<String>) {
 
     // EXPRESSION: it + 9
     // RESULT: 10: I
-    //Breakpoint! (lambdaOrdinal = 0)
+    //Breakpoint! (lambdaOrdinal = 1)
     a.bar(1) { 1 }.bar(2) { 1 }
 
     // EXPRESSION: it + 10
     // RESULT: 12: I
-    //Breakpoint! (lambdaOrdinal = 1)
+    //Breakpoint! (lambdaOrdinal = 2)
     a.bar(1) { 1 }.bar(2) { 1 }
 
     // EXPRESSION: it + 11
@@ -53,9 +50,6 @@ fun main(args: Array<String>) {
     // EXPRESSION: it + 12
     // RESULT: 13: I
 
-    // EXPRESSION: it + 13
-    // RESULT: Unresolved reference: it
-
     // EXPRESSION: it + 14
     // RESULT: 16: I
     //Breakpoint!
@@ -63,7 +57,7 @@ fun main(args: Array<String>) {
 
     // EXPRESSION: it + 15
     // RESULT: 17: I
-    //Breakpoint! (lambdaOrdinal = 1)
+    //Breakpoint! (lambdaOrdinal = 2)
     a.bar(1) { 1 }.bar(2) { 1 + 1
         1 + 1
     }

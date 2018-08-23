@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2016 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,283 +16,459 @@
 
 package org.jetbrains.kotlin.cli.jvm
 
-import com.google.common.base.Predicates.`in`
+import com.intellij.ide.highlighter.JavaFileType
 import com.intellij.openapi.Disposable
-import org.jetbrains.kotlin.cli.common.CLICompiler
-import org.jetbrains.kotlin.cli.common.CLIConfigurationKeys
-import org.jetbrains.kotlin.cli.common.ExitCode
+import org.jetbrains.kotlin.cli.common.*
 import org.jetbrains.kotlin.cli.common.ExitCode.*
 import org.jetbrains.kotlin.cli.common.arguments.K2JVMCompilerArguments
-import org.jetbrains.kotlin.cli.common.messages.*
-import org.jetbrains.kotlin.cli.jvm.compiler.*
-import org.jetbrains.kotlin.cli.jvm.config.JVMConfigurationKeys
+import org.jetbrains.kotlin.cli.common.config.addKotlinSourceRoot
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.*
+import org.jetbrains.kotlin.cli.common.messages.FilteringMessageCollector
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.cli.common.messages.MessageUtil
+import org.jetbrains.kotlin.cli.common.messages.OutputMessageUtil
+import org.jetbrains.kotlin.cli.jvm.compiler.CompileEnvironmentUtil
+import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
+import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.cli.jvm.compiler.KotlinToJVMBytecodeCompiler
+import org.jetbrains.kotlin.cli.jvm.config.JvmClasspathRoot
+import org.jetbrains.kotlin.cli.jvm.config.JvmModulePathRoot
 import org.jetbrains.kotlin.cli.jvm.config.addJavaSourceRoot
-import org.jetbrains.kotlin.cli.jvm.config.addJvmClasspathRoots
+import org.jetbrains.kotlin.cli.jvm.modules.CoreJrtFileSystem
+import org.jetbrains.kotlin.cli.jvm.plugins.PluginCliParser
 import org.jetbrains.kotlin.cli.jvm.repl.ReplFromTerminal
 import org.jetbrains.kotlin.codegen.CompilationException
-import org.jetbrains.kotlin.compiler.plugin.CliOptionProcessingException
-import org.jetbrains.kotlin.compiler.plugin.PluginCliOptionProcessingException
-import org.jetbrains.kotlin.compiler.plugin.cliPluginUsageString
 import org.jetbrains.kotlin.config.*
+import org.jetbrains.kotlin.incremental.components.ExpectActualTracker
+import org.jetbrains.kotlin.incremental.components.LookupTracker
+import org.jetbrains.kotlin.javac.JavacWrapper
+import org.jetbrains.kotlin.load.java.JavaClassesTracker
 import org.jetbrains.kotlin.load.java.JvmAbi
-import org.jetbrains.kotlin.load.kotlin.JvmMetadataVersion
 import org.jetbrains.kotlin.load.kotlin.incremental.components.IncrementalCompilationComponents
+import org.jetbrains.kotlin.metadata.deserialization.BinaryVersion
+import org.jetbrains.kotlin.metadata.jvm.deserialization.JvmMetadataVersion
+import org.jetbrains.kotlin.script.ScriptDefinitionProvider
 import org.jetbrains.kotlin.script.StandardScriptDefinition
-import org.jetbrains.kotlin.util.PerformanceCounter
 import org.jetbrains.kotlin.utils.KotlinPaths
-import org.jetbrains.kotlin.utils.KotlinPathsFromHomeDir
 import org.jetbrains.kotlin.utils.PathUtil
 import java.io.File
-import java.lang.management.ManagementFactory
-import java.util.concurrent.TimeUnit
+import java.util.*
 
-open class K2JVMCompiler : CLICompiler<K2JVMCompilerArguments>() {
+class K2JVMCompiler : CLICompiler<K2JVMCompilerArguments>() {
 
-    override fun doExecute(arguments: K2JVMCompilerArguments, services: Services, messageCollector: MessageCollector, rootDisposable: Disposable): ExitCode {
-        val messageSeverityCollector = MessageSeverityCollector(messageCollector)
-        val paths = if (arguments.kotlinHome != null)
-            KotlinPathsFromHomeDir(File(arguments.kotlinHome))
-        else
-            PathUtil.getKotlinPathsForCompiler()
+    private val performanceManager: K2JVMCompilerPerformanceManager = K2JVMCompilerPerformanceManager()
 
-        messageSeverityCollector.report(CompilerMessageSeverity.LOGGING, "Using Kotlin home directory " + paths.homePath, CompilerMessageLocation.NO_LOCATION)
-        PerformanceCounter.setTimeCounterEnabled(arguments.reportPerf);
+    override fun doExecute(
+        arguments: K2JVMCompilerArguments,
+        configuration: CompilerConfiguration,
+        rootDisposable: Disposable,
+        paths: KotlinPaths?
+    ): ExitCode {
+        val messageCollector = configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
 
-        val configuration = CompilerConfiguration()
-        configuration.put(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY, messageSeverityCollector)
-
-        if (IncrementalCompilation.isEnabled()) {
-            val incrementalCompilationComponents = services.get(IncrementalCompilationComponents::class.java)
-            configuration.put(JVMConfigurationKeys.INCREMENTAL_COMPILATION_COMPONENTS, incrementalCompilationComponents)
+        configureJdkHome(arguments, configuration, messageCollector).let {
+            if (it != OK) return it
         }
 
-        val locator = services.get(CompilerJarLocator::class.java)
-        configuration.put(JVMConfigurationKeys.COMPILER_JAR_LOCATOR, locator)
-
-        try {
-            if (!arguments.noJdk) {
-                configuration.addJvmClasspathRoots(PathUtil.getJdkClassesRoots())
-            }
-        }
-        catch (t: Throwable) {
-            MessageCollectorUtil.reportException(messageSeverityCollector, t)
-            return INTERNAL_ERROR
+        if (arguments.disableStandardScript) {
+            configuration.put(JVMConfigurationKeys.DISABLE_STANDARD_SCRIPT_DEFINITION, true)
         }
 
+        val pluginLoadResult = loadPlugins(arguments, configuration)
+        if (pluginLoadResult != ExitCode.OK) return pluginLoadResult
 
-        try {
-            PluginCliParser.loadPlugins(arguments, configuration)
-        }
-        catch (e: PluginCliOptionProcessingException) {
-            val message = e.message + "\n\n" + cliPluginUsageString(e.pluginId, e.options)
-            messageSeverityCollector.report(CompilerMessageSeverity.ERROR, message, CompilerMessageLocation.NO_LOCATION)
-            return INTERNAL_ERROR
-        }
-        catch (e: CliOptionProcessingException) {
-            messageSeverityCollector.report(CompilerMessageSeverity.ERROR, e.message!!, CompilerMessageLocation.NO_LOCATION)
-            return INTERNAL_ERROR
-        }
-        catch (t: Throwable) {
-            MessageCollectorUtil.reportException(messageSeverityCollector, t)
-            return INTERNAL_ERROR
-        }
-
-
-        if (arguments.script) {
-            if (arguments.freeArgs.isEmpty()) {
-                messageSeverityCollector.report(CompilerMessageSeverity.ERROR, "Specify script source path to evaluate", CompilerMessageLocation.NO_LOCATION)
-                return COMPILATION_ERROR
-            }
-            configuration.addKotlinSourceRoot(arguments.freeArgs.get(0))
-        }
-        else if (arguments.module == null) {
+        val commonSources = arguments.commonSources?.toSet().orEmpty()
+        if (!arguments.script && arguments.buildFile == null) {
             for (arg in arguments.freeArgs) {
-                configuration.addKotlinSourceRoot(arg)
                 val file = File(arg)
-                if (file.isDirectory) {
+                if (file.extension == JavaFileType.DEFAULT_EXTENSION) {
                     configuration.addJavaSourceRoot(file)
+                } else {
+                    configuration.addKotlinSourceRoot(arg, isCommon = arg in commonSources)
+                    if (file.isDirectory) {
+                        configuration.addJavaSourceRoot(file)
+                    }
                 }
             }
         }
 
-        configuration.addJvmClasspathRoots(getClasspath(paths, arguments))
+        configuration.put(CommonConfigurationKeys.MODULE_NAME, arguments.moduleName ?: JvmAbi.DEFAULT_MODULE_NAME)
 
-        configuration.put(JVMConfigurationKeys.MODULE_NAME, arguments.moduleName ?: JvmAbi.DEFAULT_MODULE_NAME)
+        if (arguments.buildFile == null) {
+            configureContentRoots(paths, arguments, configuration)
 
-        if (arguments.module == null && arguments.freeArgs.isEmpty() && !arguments.version) {
-            ReplFromTerminal.run(rootDisposable, configuration)
-            return ExitCode.OK
+            if (arguments.freeArgs.isEmpty() && !arguments.version) {
+                if (arguments.script) {
+                    messageCollector.report(ERROR, "Specify script source path to evaluate")
+                    return COMPILATION_ERROR
+                }
+                ReplFromTerminal.run(rootDisposable, configuration)
+                return ExitCode.OK
+            }
         }
 
-        configuration.add(CommonConfigurationKeys.SCRIPT_DEFINITIONS_KEY, StandardScriptDefinition)
-
-        if (arguments.skipMetadataVersionCheck) {
-            JvmMetadataVersion.skipCheck = true
+        if (arguments.includeRuntime) {
+            configuration.put(JVMConfigurationKeys.INCLUDE_RUNTIME, true)
         }
+        val friendPaths = arguments.friendPaths?.toList()
+        if (friendPaths != null) {
+            configuration.put(JVMConfigurationKeys.FRIEND_PATHS, friendPaths)
+        }
+
+        if (arguments.jvmTarget != null) {
+            val jvmTarget = JvmTarget.fromString(arguments.jvmTarget!!)
+            if (jvmTarget != null) {
+                configuration.put(JVMConfigurationKeys.JVM_TARGET, jvmTarget)
+            } else {
+                messageCollector.report(
+                    ERROR, "Unknown JVM target version: ${arguments.jvmTarget}\n" +
+                            "Supported versions: ${JvmTarget.values().joinToString { it.description }}"
+                )
+            }
+        }
+
+        configuration.put(JVMConfigurationKeys.PARAMETERS_METADATA, arguments.javaParameters)
 
         putAdvancedOptions(configuration, arguments)
 
-        messageSeverityCollector.report(CompilerMessageSeverity.LOGGING, "Configuring the compilation environment", CompilerMessageLocation.NO_LOCATION)
+        messageCollector.report(LOGGING, "Configuring the compilation environment")
         try {
-            configureEnvironment(configuration, arguments)
-
             val destination = arguments.destination
 
-            val jar: File?
-            val outputDir: File?
-            if (destination != null) {
-                val isJar = destination.endsWith(".jar")
-                jar = if (isJar) File(destination) else null
-                outputDir = if (isJar) null else File(destination)
-            }
-            else {
-                jar = null
-                outputDir = null
-            }
-            val environment: KotlinCoreEnvironment
-
-            val friendPaths = arguments.friendPaths?.toList() ?: emptyList<String>()
-
-            if (arguments.module != null) {
-                val sanitizedCollector = FilteringMessageCollector(messageSeverityCollector, `in`(CompilerMessageSeverity.VERBOSE))
-                val moduleScript = CompileEnvironmentUtil.loadModuleDescriptions(arguments.module, sanitizedCollector)
-
-                if (outputDir != null) {
-                    messageSeverityCollector.report(CompilerMessageSeverity.WARNING, "The '-d' option with a directory destination is ignored because '-module' is specified", CompilerMessageLocation.NO_LOCATION)
+            if (arguments.buildFile != null) {
+                if (destination != null) {
+                    messageCollector.report(
+                        STRONG_WARNING,
+                        "The '-d' option with a directory destination is ignored because '-Xbuild-file' is specified"
+                    )
                 }
 
-                val directory = File(arguments.module).absoluteFile.parentFile
+                val sanitizedCollector = FilteringMessageCollector(messageCollector, VERBOSE::contains)
+                val buildFile = File(arguments.buildFile)
+                val moduleChunk = CompileEnvironmentUtil.loadModuleChunk(buildFile, sanitizedCollector)
 
-                val compilerConfiguration = KotlinToJVMBytecodeCompiler.createCompilerConfiguration(configuration, moduleScript.modules, directory)
-                compilerConfiguration.put(JVMConfigurationKeys.MODULE_XML_FILE_PATH, arguments.module)
+                configuration.put(JVMConfigurationKeys.MODULE_XML_FILE, buildFile)
 
-                environment = createCoreEnvironment(rootDisposable, compilerConfiguration)
+                KotlinToJVMBytecodeCompiler.configureSourceRoots(configuration, moduleChunk.modules, buildFile)
 
-                if (messageSeverityCollector.anyReported(CompilerMessageSeverity.ERROR)) return COMPILATION_ERROR
+                val environment = createCoreEnvironment(rootDisposable, configuration, messageCollector)
+                    ?: return COMPILATION_ERROR
 
-                KotlinToJVMBytecodeCompiler.compileModules(environment, configuration, moduleScript.modules, directory, jar, friendPaths, arguments.includeRuntime)
-            }
-            else if (arguments.script) {
+                registerJavacIfNeeded(environment, arguments).let {
+                    if (!it) return COMPILATION_ERROR
+                }
+
+                KotlinToJVMBytecodeCompiler.compileModules(environment, buildFile, moduleChunk.modules)
+            } else if (arguments.script) {
+                val sourcePath = arguments.freeArgs.first()
+                configuration.addKotlinSourceRoot(sourcePath)
+
+                configuration.put(JVMConfigurationKeys.RETAIN_OUTPUT_IN_MEMORY, true)
+
+                val environment = createCoreEnvironment(rootDisposable, configuration, messageCollector)
+                    ?: return COMPILATION_ERROR
+
+                val scriptDefinitionProvider = ScriptDefinitionProvider.getInstance(environment.project)
+                val scriptFile = File(sourcePath)
+                if (scriptFile.isDirectory || !scriptDefinitionProvider.isScript(scriptFile.name)) {
+                    val extensionHint =
+                        if (configuration.get(JVMConfigurationKeys.SCRIPT_DEFINITIONS) == listOf(StandardScriptDefinition)) " (.kts)"
+                        else ""
+                    messageCollector.report(ERROR, "Specify path to the script file$extensionHint as the first argument")
+                    return COMPILATION_ERROR
+                }
+
                 val scriptArgs = arguments.freeArgs.subList(1, arguments.freeArgs.size)
-                environment = createCoreEnvironment(rootDisposable, configuration)
+                return KotlinToJVMBytecodeCompiler.compileAndExecuteScript(environment, scriptArgs)
+            } else {
+                if (destination != null) {
+                    if (destination.endsWith(".jar")) {
+                        configuration.put(JVMConfigurationKeys.OUTPUT_JAR, File(destination))
+                    } else {
+                        configuration.put(JVMConfigurationKeys.OUTPUT_DIRECTORY, File(destination))
+                    }
+                }
 
-                if (messageSeverityCollector.anyReported(CompilerMessageSeverity.ERROR)) return COMPILATION_ERROR
+                val environment = createCoreEnvironment(rootDisposable, configuration, messageCollector)
+                    ?: return COMPILATION_ERROR
 
-                return KotlinToJVMBytecodeCompiler.compileAndExecuteScript(configuration, paths, environment, scriptArgs)
-            }
-            else {
-                environment = createCoreEnvironment(rootDisposable, configuration)
-
-                if (messageSeverityCollector.anyReported(CompilerMessageSeverity.ERROR)) return COMPILATION_ERROR
+                registerJavacIfNeeded(environment, arguments).let {
+                    if (!it) return COMPILATION_ERROR
+                }
 
                 if (environment.getSourceFiles().isEmpty()) {
                     if (arguments.version) {
                         return OK
                     }
-                    messageSeverityCollector.report(CompilerMessageSeverity.ERROR, "No source files", CompilerMessageLocation.NO_LOCATION)
+                    messageCollector.report(ERROR, "No source files")
                     return COMPILATION_ERROR
                 }
 
-                KotlinToJVMBytecodeCompiler.compileBunchOfSources(environment, jar, outputDir, friendPaths, arguments.includeRuntime)
+                KotlinToJVMBytecodeCompiler.compileBunchOfSources(environment)
+
+                compileJavaFilesIfNeeded(environment, arguments).let {
+                    if (!it) return COMPILATION_ERROR
+                }
             }
 
-            if (arguments.reportPerf) {
-                reportGCTime(environment.configuration)
-                reportCompilationTime(environment.configuration)
-                PerformanceCounter.report { s -> reportPerf(environment.configuration, s) }
-            }
             return OK
-        }
-        catch (e: CompilationException) {
-            messageSeverityCollector.report(CompilerMessageSeverity.EXCEPTION, OutputMessageUtil.renderException(e), MessageUtil.psiElementToMessageLocation(e.element))
+        } catch (e: CompilationException) {
+            messageCollector.report(
+                EXCEPTION,
+                OutputMessageUtil.renderException(e),
+                MessageUtil.psiElementToMessageLocation(e.element)
+            )
             return INTERNAL_ERROR
         }
-
     }
 
-    private fun createCoreEnvironment(rootDisposable: Disposable, configuration: CompilerConfiguration): KotlinCoreEnvironment {
-        val result = KotlinCoreEnvironment.createForProduction(rootDisposable, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES)
+    override fun getPerformanceManager(): CommonCompilerPerformanceManager = performanceManager
 
-        if (initStartNanos != 0L) {
-            val initNanos = System.nanoTime() - initStartNanos
-            reportPerf(configuration, "INIT: Compiler initialized in " + TimeUnit.NANOSECONDS.toMillis(initNanos) + " ms")
-            initStartNanos = 0L
+    private fun loadPlugins(arguments: K2JVMCompilerArguments, configuration: CompilerConfiguration): ExitCode {
+        var pluginClasspaths: Iterable<String> = arguments.pluginClasspaths?.asIterable() ?: emptyList()
+        val pluginOptions = arguments.pluginOptions?.toMutableList() ?: ArrayList()
+
+        if (!arguments.disableDefaultScriptingPlugin) {
+            val explicitOrLoadedScriptingPlugin =
+                pluginClasspaths.any { File(it).name.startsWith(PathUtil.KOTLIN_SCRIPTING_COMPILER_PLUGIN_NAME) } ||
+                        try {
+                            PluginCliParser::class.java.classLoader.loadClass("org.jetbrains.kotlin.extensions.ScriptingCompilerConfigurationExtension")
+                            true
+                        } catch (_: Throwable) {
+                            false
+                        }
+            // if scripting plugin is not enabled explicitly (probably from another path) and not in the classpath already,
+            // try to find and enable it implicitly
+            if (!explicitOrLoadedScriptingPlugin) {
+                val libPath = PathUtil.kotlinPathsForCompiler.libPath.takeIf { it.exists() && it.isDirectory } ?: File(".")
+                with(PathUtil) {
+                    val jars = arrayOf(
+                        KOTLIN_SCRIPTING_COMPILER_PLUGIN_JAR, KOTLIN_SCRIPTING_COMMON_JAR,
+                        KOTLIN_SCRIPTING_JVM_JAR
+                    ).mapNotNull { File(libPath, it).takeIf { it.exists() }?.canonicalPath }
+                    if (jars.size == 3) {
+                        pluginClasspaths = jars + pluginClasspaths
+                    }
+                }
+            }
+            if (arguments.scriptTemplates?.isNotEmpty() == true) {
+                pluginOptions.add("plugin:kotlin.scripting:script-templates=${arguments.scriptTemplates!!.joinToString(",")}")
+            }
+            if (arguments.scriptResolverEnvironment?.isNotEmpty() == true) {
+                pluginOptions.add(
+                    "plugin:kotlin.scripting:script-resolver-environment=${arguments.scriptResolverEnvironment!!.joinToString(
+                        ","
+                    )}"
+                )
+            }
+        } else {
+            pluginOptions.add("plugin:kotlin.scripting:disable=true")
         }
-        return result
+        return PluginCliParser.loadPluginsSafe(pluginClasspaths, pluginOptions, configuration)
     }
 
-    /**
-     * Allow derived classes to add additional command line arguments
-     */
-    override fun createArguments(): K2JVMCompilerArguments {
-        val result = K2JVMCompilerArguments()
+    private fun registerJavacIfNeeded(
+        environment: KotlinCoreEnvironment,
+        arguments: K2JVMCompilerArguments
+    ): Boolean {
+        if (arguments.useJavac) {
+            environment.configuration.put(JVMConfigurationKeys.USE_JAVAC, true)
+            if (arguments.compileJava) {
+                environment.configuration.put(JVMConfigurationKeys.COMPILE_JAVA, true)
+            }
+            return environment.registerJavac(arguments = arguments.javacArguments)
+        }
+
+        return true
+    }
+
+    private fun compileJavaFilesIfNeeded(
+        environment: KotlinCoreEnvironment,
+        arguments: K2JVMCompilerArguments
+    ): Boolean {
+        if (arguments.compileJava) {
+            return JavacWrapper.getInstance(environment.project).use { it.compile() }
+        }
+        return true
+    }
+
+    private fun createCoreEnvironment(
+        rootDisposable: Disposable,
+        configuration: CompilerConfiguration,
+        messageCollector: MessageCollector
+    ): KotlinCoreEnvironment? {
+        if (messageCollector.hasErrors()) return null
+
+        val environment = KotlinCoreEnvironment.createForProduction(rootDisposable, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES)
+
+        performanceManager.notifyCompilerInitialized()
+
+        return if (messageCollector.hasErrors()) null else environment
+    }
+
+    override fun setupPlatformSpecificArgumentsAndServices(
+        configuration: CompilerConfiguration, arguments: K2JVMCompilerArguments, services: Services
+    ) {
+        if (IncrementalCompilation.isEnabledForJvm()) {
+            services[LookupTracker::class.java]?.let {
+                configuration.put(CommonConfigurationKeys.LOOKUP_TRACKER, it)
+            }
+
+            services[ExpectActualTracker::class.java]?.let {
+                configuration.put(CommonConfigurationKeys.EXPECT_ACTUAL_TRACKER, it)
+            }
+
+            services[IncrementalCompilationComponents::class.java]?.let {
+                configuration.put(JVMConfigurationKeys.INCREMENTAL_COMPILATION_COMPONENTS, it)
+            }
+
+            services[JavaClassesTracker::class.java]?.let {
+                configuration.put(JVMConfigurationKeys.JAVA_CLASSES_TRACKER, it)
+            }
+        }
+
+        arguments.additionalJavaModules?.let { additionalJavaModules ->
+            configuration.addAll(JVMConfigurationKeys.ADDITIONAL_JAVA_MODULES, additionalJavaModules.toList())
+        }
+    }
+
+    override fun createArguments(): K2JVMCompilerArguments = K2JVMCompilerArguments().apply {
         if (System.getenv("KOTLIN_REPORT_PERF") != null) {
-            result.reportPerf = true
+            reportPerf = true
         }
-        return result
     }
+
+    override fun executableScriptFileName(): String = "kotlinc-jvm"
+
+    override fun createMetadataVersion(versionArray: IntArray): BinaryVersion = JvmMetadataVersion(*versionArray)
+
+    private class K2JVMCompilerPerformanceManager : CommonCompilerPerformanceManager("Kotlin to JVM Compiler")
 
     companion object {
-        private var initStartNanos = System.nanoTime()
-        // allows to track GC time for each run when repeated compilation is used
-        private val elapsedGCTime = hashMapOf<String, Long>()
-        private var elapsedJITTime = 0L
-
-        fun resetInitStartTime() {
-            if (initStartNanos == 0L) {
-                initStartNanos = System.nanoTime()
-            }
-        }
-
-        @JvmStatic fun main(args: Array<String>) {
-            CLICompiler.doMain(K2JVMCompiler(), args)
-        }
-
-        fun reportPerf(configuration: CompilerConfiguration, message: String) {
-            if (!configuration.get(CLIConfigurationKeys.REPORT_PERF, false)) {
-                return
-            }
-
-            val collector = configuration[CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY]!!
-            collector.report(CompilerMessageSeverity.INFO, "PERF: " + message, CompilerMessageLocation.NO_LOCATION)
-        }
-
-        fun reportGCTime(configuration: CompilerConfiguration) {
-            ManagementFactory.getGarbageCollectorMXBeans().forEach {
-                val currentTime = it.collectionTime
-                val elapsedTime = elapsedGCTime.getOrElse(it.name) { 0 }
-                val time = currentTime - elapsedTime
-                reportPerf(configuration, "GC time for ${it.name} is $time ms")
-                elapsedGCTime[it.name] = currentTime
-            }
-        }
-
-        fun reportCompilationTime(configuration: CompilerConfiguration) {
-            val bean = ManagementFactory.getCompilationMXBean() ?: return
-            val currentTime = bean.totalCompilationTime
-            reportPerf(configuration, "JIT time is ${currentTime - elapsedJITTime} ms")
-            elapsedJITTime = currentTime
+        @JvmStatic
+        fun main(args: Array<String>) {
+            CLITool.doMain(K2JVMCompiler(), args)
         }
 
         private fun putAdvancedOptions(configuration: CompilerConfiguration, arguments: K2JVMCompilerArguments) {
+            configuration.put(JVMConfigurationKeys.IR, arguments.useIR)
             configuration.put(JVMConfigurationKeys.DISABLE_CALL_ASSERTIONS, arguments.noCallAssertions)
+            configuration.put(JVMConfigurationKeys.DISABLE_RECEIVER_ASSERTIONS, arguments.noReceiverAssertions)
             configuration.put(JVMConfigurationKeys.DISABLE_PARAM_ASSERTIONS, arguments.noParamAssertions)
-            configuration.put(JVMConfigurationKeys.DISABLE_INLINE, arguments.noInline)
+            configuration.put(
+                JVMConfigurationKeys.NO_EXCEPTION_ON_EXPLICIT_EQUALS_FOR_BOXED_NULL,
+                arguments.noExceptionOnExplicitEqualsForBoxedNull
+            )
             configuration.put(JVMConfigurationKeys.DISABLE_OPTIMIZATION, arguments.noOptimize)
-            configuration.put(JVMConfigurationKeys.MULTIFILE_FACADES_OPEN, arguments.multifileFacadesOpen);
-            configuration.put(CLIConfigurationKeys.ALLOW_KOTLIN_PACKAGE, arguments.allowKotlinPackage);
-            configuration.put(CLIConfigurationKeys.REPORT_PERF, arguments.reportPerf);
+
+            if (!JVMConstructorCallNormalizationMode.isSupportedValue(arguments.constructorCallNormalizationMode)) {
+                configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY).report(
+                    ERROR,
+                    "Unknown constructor call normalization mode: ${arguments.constructorCallNormalizationMode}, " +
+                            "supported modes: ${JVMConstructorCallNormalizationMode.values().map { it.description }}"
+                )
+            }
+
+            val constructorCallNormalizationMode =
+                JVMConstructorCallNormalizationMode.fromStringOrNull(arguments.constructorCallNormalizationMode)
+            if (constructorCallNormalizationMode != null) {
+                configuration.put(
+                    JVMConfigurationKeys.CONSTRUCTOR_CALL_NORMALIZATION_MODE,
+                    constructorCallNormalizationMode
+                )
+            }
+
+            val assertionsMode =
+                JVMAssertionsMode.fromStringOrNull(arguments.assertionsMode)
+            if (assertionsMode == null) {
+                configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY).report(
+                    ERROR,
+                    "Unknown assertions mode: ${arguments.assertionsMode}, " +
+                            "supported modes: ${JVMAssertionsMode.values().map { it.description }}"
+                )
+            }
+            configuration.put(
+                JVMConfigurationKeys.ASSERTIONS_MODE,
+                assertionsMode ?: JVMAssertionsMode.DEFAULT
+            )
+
+            configuration.put(JVMConfigurationKeys.INHERIT_MULTIFILE_PARTS, arguments.inheritMultifileParts)
+            configuration.put(JVMConfigurationKeys.USE_TYPE_TABLE, arguments.useTypeTable)
+            configuration.put(JVMConfigurationKeys.SKIP_RUNTIME_VERSION_CHECK, arguments.skipRuntimeVersionCheck)
+            configuration.put(JVMConfigurationKeys.USE_FAST_CLASS_FILES_READING, !arguments.useOldClassFilesReading)
+
+            if (arguments.useOldClassFilesReading) {
+                configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
+                    .report(INFO, "Using the old java class files reading implementation")
+            }
+
+            configuration.put(CLIConfigurationKeys.ALLOW_KOTLIN_PACKAGE, arguments.allowKotlinPackage)
+            configuration.put(JVMConfigurationKeys.USE_SINGLE_MODULE, arguments.singleModule)
+            configuration.put(JVMConfigurationKeys.ADD_BUILT_INS_FROM_COMPILER_TO_DEPENDENCIES, arguments.addCompilerBuiltIns)
+            configuration.put(JVMConfigurationKeys.CREATE_BUILT_INS_FROM_MODULE_DEPENDENCIES, arguments.loadBuiltInsFromDependencies)
+
+            arguments.declarationsOutputPath?.let { configuration.put(JVMConfigurationKeys.DECLARATIONS_JSON_PATH, it) }
         }
 
-        private fun getClasspath(paths: KotlinPaths, arguments: K2JVMCompilerArguments): List<File> {
-            val classpath = arrayListOf<File>()
-            if (arguments.classpath != null) {
-                classpath.addAll(arguments.classpath.split(File.pathSeparatorChar).map { File(it) })
+        private fun configureContentRoots(paths: KotlinPaths?, arguments: K2JVMCompilerArguments, configuration: CompilerConfiguration) {
+            val messageCollector = configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
+            for (path in arguments.classpath?.split(File.pathSeparatorChar).orEmpty()) {
+                configuration.add(CLIConfigurationKeys.CONTENT_ROOTS, JvmClasspathRoot(File(path)))
             }
+
+            for (modularRoot in arguments.javaModulePath?.split(File.pathSeparatorChar).orEmpty()) {
+                configuration.add(CLIConfigurationKeys.CONTENT_ROOTS, JvmModulePathRoot(File(modularRoot)))
+            }
+
+            val isModularJava = configuration.get(JVMConfigurationKeys.JDK_HOME).let { it != null && CoreJrtFileSystem.isModularJdk(it) }
+            fun addRoot(moduleName: String, libraryName: String, getLibrary: (KotlinPaths) -> File, noLibraryArgument: String) {
+                val file = getLibraryFromHome(paths, getLibrary, libraryName, messageCollector, noLibraryArgument) ?: return
+                if (isModularJava) {
+                    configuration.add(CLIConfigurationKeys.CONTENT_ROOTS, JvmModulePathRoot(file))
+                    configuration.add(JVMConfigurationKeys.ADDITIONAL_JAVA_MODULES, moduleName)
+                } else {
+                    configuration.add(CLIConfigurationKeys.CONTENT_ROOTS, JvmClasspathRoot(file))
+                }
+            }
+
             if (!arguments.noStdlib) {
-                classpath.add(paths.runtimePath)
+                addRoot("kotlin.stdlib", PathUtil.KOTLIN_JAVA_STDLIB_JAR, KotlinPaths::getStdlibPath, "'-no-stdlib'")
+                addRoot("kotlin.script.runtime", PathUtil.KOTLIN_JAVA_SCRIPT_RUNTIME_JAR, KotlinPaths::getScriptRuntimePath, "'-no-stdlib'")
             }
-            return classpath
+            // "-no-stdlib" implies "-no-reflect": otherwise we would be able to transitively read stdlib classes through kotlin-reflect,
+            // which is likely not what user wants since s/he manually provided "-no-stdlib"
+            if (!arguments.noReflect && !arguments.noStdlib) {
+                addRoot("kotlin.reflect", PathUtil.KOTLIN_JAVA_REFLECT_JAR, KotlinPaths::getReflectPath, "'-no-reflect' or '-no-stdlib'")
+            }
+        }
+
+        private fun configureJdkHome(
+            arguments: K2JVMCompilerArguments,
+            configuration: CompilerConfiguration,
+            messageCollector: MessageCollector
+        ): ExitCode {
+            if (arguments.noJdk) {
+                configuration.put(JVMConfigurationKeys.NO_JDK, true)
+
+                if (arguments.jdkHome != null) {
+                    messageCollector.report(STRONG_WARNING, "The '-jdk-home' option is ignored because '-no-jdk' is specified")
+                }
+                return OK
+            }
+
+            if (arguments.jdkHome != null) {
+                val jdkHome = File(arguments.jdkHome)
+                if (!jdkHome.exists()) {
+                    messageCollector.report(ERROR, "JDK home directory does not exist: $jdkHome")
+                    return COMPILATION_ERROR
+                }
+
+                messageCollector.report(LOGGING, "Using JDK home directory $jdkHome")
+
+                configuration.put(JVMConfigurationKeys.JDK_HOME, jdkHome)
+            }
+
+            return OK
         }
     }
 }

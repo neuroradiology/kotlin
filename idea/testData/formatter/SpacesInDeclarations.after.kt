@@ -7,16 +7,14 @@ data class FooClass2
 
 //-----------------------
 
-public fun fooFun1() {
-}
+public fun fooFun1() {}
 
 public
 fun fooFun2() {
 }
 
 //-----------------------
-public fun Int.extFun1() {
-}
+public fun Int.extFun1() {}
 
 public
 fun Int.extFun2() {
@@ -47,8 +45,7 @@ public var varWithAccessors1: Int
     get() {
         return 1
     }
-    set  (value: Int) {
-        /**/
+    set  (value: Int) { /**/
     }
 
 public var varWithAccessors2: Int
@@ -60,11 +57,22 @@ public var varWithAccessors2: Int
     }
 }
 //-----------------------
+val <T> some1 = 1
+val <T> some2 = 1
+val
+        <T> some3 = 1
+
+//-----------------------
 annotation class A1
 
 annotation class A2
 
-private @[A1 A2 A1] @A1 @A2 @[A1 A2 A2] @[A1] val fooProp1 = 1
+private @[A1 A2 A1]
+@A1
+@A2
+@[A1 A2 A2]
+@[A1]
+val fooProp1 = 1
 
 private @[
 
@@ -72,17 +80,23 @@ private @[
 A1
 
 
-A2 A1] @A1 @A2 @[A1
+A2 A1]
+@A1
+@A2
+@[A1
 A2
 
 
 A2
 
-] @[A1] val fooProp1 = 1
+]
+@[A1]
+val fooProp1 = 1
 
 private @A1
 
-@A2 val
+@A2
+val
         fooProp2 = 1
 
 
@@ -95,4 +109,12 @@ public object FooObject1 {
 public
 object FooObject2 {
 
+}
+
+fun <T> foo_1() {}
+fun <T> foo_2() {}
+
+fun
+        <T>
+        foo_3() {
 }

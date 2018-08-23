@@ -41,28 +41,37 @@ import org.jetbrains.kotlin.idea.findUsages.dialogs.KotlinFindFunctionUsagesDial
 import org.jetbrains.kotlin.idea.findUsages.dialogs.KotlinFindPropertyUsagesDialog
 import org.jetbrains.kotlin.idea.search.declarationsSearch.HierarchySearchRequest
 import org.jetbrains.kotlin.idea.search.declarationsSearch.searchOverriders
+import org.jetbrains.kotlin.idea.search.excludeKotlinSources
 import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinReadWriteAccessDetector
 import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinReferencesSearchOptions
 import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinReferencesSearchParameters
+import org.jetbrains.kotlin.idea.search.isOnlyKotlinSearch
+import org.jetbrains.kotlin.idea.search.usagesSearch.dataClassComponentFunction
 import org.jetbrains.kotlin.idea.search.usagesSearch.isImportUsage
 import org.jetbrains.kotlin.idea.util.application.runReadAction
-import org.jetbrains.kotlin.psi.KtCallableDeclaration
-import org.jetbrains.kotlin.psi.KtFunction
-import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.resolve.findOriginalTopMostOverriddenDescriptors
 import org.jetbrains.kotlin.resolve.source.getPsi
 
-abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
-    protected constructor(declaration: T, elementsToSearch: Collection<PsiElement>, factory: KotlinFindUsagesHandlerFactory)
-    : KotlinFindUsagesHandler<T>(declaration, elementsToSearch, factory) {
+abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration> protected constructor(
+    declaration: T,
+    elementsToSearch: Collection<PsiElement>,
+    factory: KotlinFindUsagesHandlerFactory
+) : KotlinFindUsagesHandler<T>(declaration, elementsToSearch, factory) {
 
-    private class Function(declaration: KtFunction,
-                           elementsToSearch: Collection<PsiElement>,
-                           factory: KotlinFindUsagesHandlerFactory) : KotlinFindMemberUsagesHandler<KtFunction>(declaration, elementsToSearch, factory) {
+    private class Function(
+        declaration: KtFunction,
+        elementsToSearch: Collection<PsiElement>,
+        factory: KotlinFindUsagesHandlerFactory
+    ) : KotlinFindMemberUsagesHandler<KtFunction>(declaration, elementsToSearch, factory) {
 
         override fun getFindUsagesOptions(dataContext: DataContext?): FindUsagesOptions = factory.findFunctionOptions
 
-        override fun getFindUsagesDialog(isSingleFile: Boolean, toShowInNewTab: Boolean, mustOpenInNewTab: Boolean): AbstractFindUsagesDialog {
+        override fun getFindUsagesDialog(
+            isSingleFile: Boolean,
+            toShowInNewTab: Boolean,
+            mustOpenInNewTab: Boolean
+        ): AbstractFindUsagesDialog {
             val options = factory.findFunctionOptions
             val lightMethod = getElement().toLightMethods().firstOrNull()
             if (lightMethod != null) {
@@ -74,9 +83,12 @@ abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
 
         override fun createKotlinReferencesSearchOptions(options: FindUsagesOptions): KotlinReferencesSearchOptions {
             val kotlinOptions = options as KotlinFunctionFindUsagesOptions
-            return KotlinReferencesSearchOptions(true,
-                                                 kotlinOptions.isIncludeOverloadUsages,
-                                                 kotlinOptions.isIncludeOverloadUsages)
+            return KotlinReferencesSearchOptions(
+                acceptCallableOverrides = true,
+                acceptOverloads = kotlinOptions.isIncludeOverloadUsages,
+                acceptExtensionsOfDeclarationClass = kotlinOptions.isIncludeOverloadUsages,
+                searchForExpectedUsages = kotlinOptions.searchExpected
+            )
         }
 
         override fun applyQueryFilters(element: PsiElement, options: FindUsagesOptions, query: Query<PsiReference>): Query<PsiReference> {
@@ -86,23 +98,38 @@ abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
         }
     }
 
-    private class Property(declaration: KtNamedDeclaration, elementsToSearch: Collection<PsiElement>, factory: KotlinFindUsagesHandlerFactory) : KotlinFindMemberUsagesHandler<KtNamedDeclaration>(declaration, elementsToSearch, factory) {
+    private class Property(
+        declaration: KtNamedDeclaration,
+        elementsToSearch: Collection<PsiElement>,
+        factory: KotlinFindUsagesHandlerFactory
+    ) : KotlinFindMemberUsagesHandler<KtNamedDeclaration>(declaration, elementsToSearch, factory) {
 
         override fun getFindUsagesOptions(dataContext: DataContext?): FindUsagesOptions = factory.findPropertyOptions
 
-        override fun getFindUsagesDialog(isSingleFile: Boolean, toShowInNewTab: Boolean, mustOpenInNewTab: Boolean): AbstractFindUsagesDialog {
-            return KotlinFindPropertyUsagesDialog(getElement(), project, factory.findPropertyOptions, toShowInNewTab, mustOpenInNewTab, isSingleFile, this)
+        override fun getFindUsagesDialog(
+            isSingleFile: Boolean,
+            toShowInNewTab: Boolean,
+            mustOpenInNewTab: Boolean
+        ): AbstractFindUsagesDialog {
+            return KotlinFindPropertyUsagesDialog(
+                getElement(),
+                project,
+                factory.findPropertyOptions,
+                toShowInNewTab,
+                mustOpenInNewTab,
+                isSingleFile,
+                this
+            )
         }
 
         override fun applyQueryFilters(element: PsiElement, options: FindUsagesOptions, query: Query<PsiReference>): Query<PsiReference> {
-            var kotlinOptions = options as KotlinPropertyFindUsagesOptions
+            val kotlinOptions = options as KotlinPropertyFindUsagesOptions
 
             if (!kotlinOptions.isReadAccess && !kotlinOptions.isWriteAccess) {
                 return EmptyQuery()
             }
 
-            val result = query
-                    .applyFilter(kotlinOptions.isSkipImportStatements) { !it.isImportUsage() }
+            val result = query.applyFilter(kotlinOptions.isSkipImportStatements) { !it.isImportUsage() }
 
             if (!kotlinOptions.isReadAccess || !kotlinOptions.isWriteAccess) {
                 val detector = KotlinReadWriteAccessDetector()
@@ -112,7 +139,7 @@ abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
                     when (access) {
                         ReadWriteAccessDetector.Access.Read -> kotlinOptions.isReadAccess
                         ReadWriteAccessDetector.Access.Write -> kotlinOptions.isWriteAccess
-                        ReadWriteAccessDetector.Access.ReadWrite -> true
+                        ReadWriteAccessDetector.Access.ReadWrite -> kotlinOptions.isReadWriteAccess
                     }
                 }
             }
@@ -120,55 +147,87 @@ abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
         }
 
         override fun createKotlinReferencesSearchOptions(options: FindUsagesOptions): KotlinReferencesSearchOptions {
-            return KotlinReferencesSearchOptions(true, false, false)
+            val kotlinOptions = options as KotlinPropertyFindUsagesOptions
+            return KotlinReferencesSearchOptions(
+                acceptCallableOverrides = true,
+                acceptOverloads = false,
+                acceptExtensionsOfDeclarationClass = false,
+                searchForExpectedUsages = kotlinOptions.searchExpected
+            )
         }
     }
 
-    override fun searchReferences(element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions): Boolean {
-        val kotlinOptions = options as KotlinCallableFindUsagesOptions
+    override fun createSearcher(element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions): Searcher {
+        return MySearcher(element, processor, options)
+    }
 
-        val referenceProcessor = KotlinFindUsagesHandler.createReferenceProcessor(processor)
-        val uniqueProcessor = CommonProcessors.UniqueProcessor(processor)
+    private inner class MySearcher(
+        element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions
+    ) : Searcher(element, processor, options) {
 
-        if (options.isUsages) {
-            val searchParameters = KotlinReferencesSearchParameters(element,
-                                                                    scope = options.searchScope,
-                                                                    kotlinOptions = createKotlinReferencesSearchOptions(options))
+        private val kotlinOptions = options as KotlinCallableFindUsagesOptions
 
-            with(applyQueryFilters(element, options, ReferencesSearch.search(searchParameters))) {
-                if (!forEach(referenceProcessor)) return false
-            }
+        override fun buildTaskList(): Boolean {
+            val referenceProcessor = KotlinFindUsagesHandler.createReferenceProcessor(processor)
+            val uniqueProcessor = CommonProcessors.UniqueProcessor(processor)
 
-            for (psiMethod in runReadAction { element.toLightMethods() }) {
-                with(applyQueryFilters(element, options, MethodReferencesSearch.search(psiMethod, options.searchScope, true))) {
-                    if (!forEach(referenceProcessor)) return false
+            if (options.isUsages) {
+                val kotlinSearchOptions = createKotlinReferencesSearchOptions(options)
+                val searchParameters = KotlinReferencesSearchParameters(element, options.searchScope, kotlinOptions = kotlinSearchOptions)
+
+                addTask { applyQueryFilters(element, options, ReferencesSearch.search(searchParameters)).forEach(referenceProcessor) }
+
+                if (element is KtElement && !isOnlyKotlinSearch(options.searchScope)) {
+                    // TODO: very bad code!! ReferencesSearch does not work correctly for constructors and annotation parameters
+                    val psiMethodScopeSearch = when {
+                        element is KtNamedFunction || element is KtParameter && element.dataClassComponentFunction() != null ->
+                            options.searchScope.excludeKotlinSources()
+                        else -> options.searchScope
+                    }
+
+                    for (psiMethod in element.toLightMethods()) {
+                        addTask {
+                            applyQueryFilters(
+                                element,
+                                options,
+                                MethodReferencesSearch.search(psiMethod, psiMethodScopeSearch, true)
+                            ).forEach(referenceProcessor)
+                        }
+                    }
                 }
             }
-        }
 
-        if (kotlinOptions.searchOverrides) {
-            for (method in HierarchySearchRequest(element, options.searchScope, true).searchOverriders()) {
-                if (!KotlinFindUsagesHandler.processUsage(uniqueProcessor, method.navigationElement)) break
+            if (kotlinOptions.searchOverrides) {
+                addTask {
+                    val overriders = HierarchySearchRequest(element, options.searchScope, true).searchOverriders()
+                    overriders.all {
+                        val element = runReadAction { it.takeIf { it.isValid }?.navigationElement } ?: return@all true
+                        KotlinFindUsagesHandler.processUsage(uniqueProcessor, element)
+                    }
+                }
             }
-        }
 
-        return true
+            return true
+        }
     }
 
     protected abstract fun createKotlinReferencesSearchOptions(options: FindUsagesOptions): KotlinReferencesSearchOptions
 
-    protected abstract fun applyQueryFilters(element: PsiElement,
-                                             options: FindUsagesOptions,
-                                             query: Query<PsiReference>): Query<PsiReference>
+    protected abstract fun applyQueryFilters(
+        element: PsiElement,
+        options: FindUsagesOptions,
+        query: Query<PsiReference>
+    ): Query<PsiReference>
 
-    override fun isSearchForTextOccurencesAvailable(psiElement: PsiElement, isSingleFile: Boolean): Boolean = !isSingleFile
+    override fun isSearchForTextOccurrencesAvailable(psiElement: PsiElement, isSingleFile: Boolean): Boolean =
+        !isSingleFile && psiElement !is KtParameter
 
     override fun findReferencesToHighlight(target: PsiElement, searchScope: SearchScope): Collection<PsiReference> {
         val callableDescriptor = (target as? KtCallableDeclaration)?.resolveToDescriptorIfAny() as? CallableDescriptor
         val descriptorsToHighlight = if (callableDescriptor is ParameterDescriptor)
             listOf(callableDescriptor)
         else
-            callableDescriptor?.findOriginalTopMostOverriddenDescriptors() ?: emptyList<CallableDescriptor>()
+            callableDescriptor?.findOriginalTopMostOverriddenDescriptors() ?: emptyList()
 
         val baseDeclarations = descriptorsToHighlight.map { it.source.getPsi() }.filter { it != null && it != target }
 
@@ -177,17 +236,18 @@ abstract class KotlinFindMemberUsagesHandler<T : KtNamedDeclaration>
                 val handler = (FindManager.getInstance(project) as FindManagerImpl).findUsagesManager.getFindUsagesHandler(it!!, true)
                 handler?.findReferencesToHighlight(it, searchScope) ?: emptyList()
             }
-        }
-        else {
+        } else {
             super.findReferencesToHighlight(target, searchScope)
         }
     }
 
     companion object {
 
-        fun getInstance(declaration: KtNamedDeclaration,
-                               elementsToSearch: Collection<PsiElement> = emptyList(),
-                               factory: KotlinFindUsagesHandlerFactory): KotlinFindMemberUsagesHandler<out KtNamedDeclaration> {
+        fun getInstance(
+            declaration: KtNamedDeclaration,
+            elementsToSearch: Collection<PsiElement> = emptyList(),
+            factory: KotlinFindUsagesHandlerFactory
+        ): KotlinFindMemberUsagesHandler<out KtNamedDeclaration> {
             return if (declaration is KtFunction)
                 Function(declaration, elementsToSearch, factory)
             else

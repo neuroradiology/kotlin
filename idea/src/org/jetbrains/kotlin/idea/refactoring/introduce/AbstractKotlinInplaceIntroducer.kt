@@ -29,6 +29,8 @@ import org.jetbrains.kotlin.idea.util.application.executeWriteCommand
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
 import org.jetbrains.kotlin.psi.psiUtil.getParentOfTypeAndBranch
+import org.jetbrains.kotlin.psi.psiUtil.isIdentifier
+import org.jetbrains.kotlin.psi.psiUtil.quoteIfNeeded
 import java.awt.BorderLayout
 
 abstract class AbstractKotlinInplaceIntroducer<D: KtNamedDeclaration>(
@@ -59,6 +61,13 @@ abstract class AbstractKotlinInplaceIntroducer<D: KtNamedDeclaration>(
         }
         finally {
             myEditor.putUserData(InplaceRefactoring.INTRODUCE_RESTART, false)
+        }
+    }
+
+    protected fun updateVariableName() {
+        val currentName = inputName.quoteIfNeeded()
+        if (currentName.isIdentifier()) {
+            localVariable.setName(currentName)
         }
     }
 

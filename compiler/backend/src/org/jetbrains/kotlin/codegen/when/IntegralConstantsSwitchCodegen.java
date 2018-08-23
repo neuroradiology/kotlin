@@ -29,7 +29,7 @@ public class IntegralConstantsSwitchCodegen extends SwitchCodegen {
             boolean isExhaustive,
             @NotNull ExpressionCodegen codegen
     ) {
-        super(expression, isStatement, isExhaustive, codegen);
+        super(expression, isStatement, isExhaustive, codegen, null);
     }
 
     @Override
@@ -40,5 +40,10 @@ public class IntegralConstantsSwitchCodegen extends SwitchCodegen {
                     : ((Character) constant.getValue()).charValue();
 
         putTransitionOnce(value, entryLabel);
+    }
+
+    @Override
+    protected void generateSubjectValueToIndex() {
+        // Do nothing: subject is an int value
     }
 }

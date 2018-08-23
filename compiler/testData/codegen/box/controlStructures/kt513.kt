@@ -1,4 +1,5 @@
-import java.util.*
+// IGNORE_BACKEND: JS_IR
+// WITH_RUNTIME
 
 class A() {
     infix fun <T> ArrayList<T>.add3(el: T) = add(el)
@@ -19,6 +20,6 @@ fun box() : String{
       list add2 i
     }
     A().test(list)
-    System.out?.println(list)
+    println(list)
     return "OK"
 }

@@ -1,11 +1,11 @@
 operator fun Any.get(a: Int) {
     if (a > 0) {
-        <lineMarker descr="Recursive call">this[a - 1]</lineMarker>
+        <lineMarker descr="Recursive call">this</lineMarker>[a - 1]
     }
 }
 
 class A {
-    override fun <lineMarker descr="Overrides function in 'Any'"></lineMarker>equals(other: Any?): Boolean {
+    override fun <lineMarker descr="Overrides function in 'Any'">equals</lineMarker>(other: Any?): Boolean {
         this <lineMarker descr="Recursive call">==</lineMarker> other
         return true
     }

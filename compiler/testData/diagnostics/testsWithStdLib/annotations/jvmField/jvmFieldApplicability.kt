@@ -1,8 +1,12 @@
+// !LANGUAGE: +NestedClassesInAnnotations
 // !DIAGNOSTICS: -UNUSED_PARAMETER -UNUSED_VARIABLE
+
 <!WRONG_ANNOTATION_TARGET!>@kotlin.jvm.JvmField<!>
 fun foo() {
     <!WRONG_ANNOTATION_TARGET!>@kotlin.jvm.JvmField<!> val x = "A"
 }
+
+annotation class DemoAnnotation
 
 <!WRONG_ANNOTATION_TARGET!>@JvmField<!>
 abstract class C : I{
@@ -22,6 +26,22 @@ abstract class C : I{
     <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
     val customGetter: String = ""
         get() = field
+
+    <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
+    val explicitDefaultGetter: String = ""
+        get
+
+    <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
+    var explicitDefaultSetter: String = ""
+        set
+
+    <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
+    val explicitDefaultAnnotatedGetter: String = ""
+        <!ANNOTATION_TARGETS_NON_EXISTENT_ACCESSOR!>@DemoAnnotation<!> get
+
+    <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
+    var explicitDefaultAnnotatedSetter: String = ""
+        <!ANNOTATION_TARGETS_NON_EXISTENT_ACCESSOR!>@DemoAnnotation<!> set
 
     <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
     var customSetter: String = ""
@@ -75,6 +95,8 @@ interface K {
     companion object {
         <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
         var c = 3
+
+        var x = 3
     }
 }
 
@@ -90,6 +112,13 @@ open class KKK : K {
     override val i: Int = 0
     <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
     override final val j: Int = 0
+}
+
+annotation class L {
+    companion object {
+        <!INAPPLICABLE_JVM_FIELD!>@JvmField<!>
+        var c = 3
+    }
 }
 
 object O {

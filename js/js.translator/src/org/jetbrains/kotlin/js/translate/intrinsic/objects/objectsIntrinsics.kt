@@ -16,48 +16,44 @@
 
 package org.jetbrains.kotlin.js.translate.intrinsic.objects
 
-import com.google.dart.compiler.backend.js.ast.JsArrayAccess
-import com.google.dart.compiler.backend.js.ast.JsExpression
 import org.jetbrains.kotlin.builtins.CompanionObjectMapping
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.js.config.LibrarySourcesConfig
-import org.jetbrains.kotlin.js.resolve.JsPlatform
+import org.jetbrains.kotlin.js.backend.ast.JsExpression
 import org.jetbrains.kotlin.js.translate.context.TranslationContext
-import org.jetbrains.kotlin.js.translate.utils.JsAstUtils
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
 
-class DefaultClassObjectIntrinsic(val fqName: FqName, val moduleName: String): ObjectIntrinsic {
-    override fun apply(context: TranslationContext): JsExpression {
-        val nameRef = context.getQualifiedReference(fqName)
-        return JsAstUtils.replaceRootReference(
-                nameRef,
-                JsArrayAccess(context.namer().kotlin("modules"), context.program().getStringLiteral(moduleName)))
-    }
+class DefaultClassObjectIntrinsic( val fqName: FqName): ObjectIntrinsic {
+    override fun apply(context: TranslationContext) = context.getReferenceToIntrinsic(fqName.asString())
 }
 
 class ObjectIntrinsics {
-    private val companionObjectMapping = CompanionObjectMapping(JsPlatform.builtIns)
+    private val cache = mutableMapOf<ClassDescriptor, ObjectIntrinsic?>()
 
-    fun getIntrinsic(classDescriptor: ClassDescriptor): ObjectIntrinsic {
-        if (!companionObjectMapping.hasMappingToObject(classDescriptor)) return NO_OBJECT_INTRINSIC
+    fun getIntrinsic(classDescriptor: ClassDescriptor): ObjectIntrinsic? {
+        if (classDescriptor in cache) return cache[classDescriptor]
+
+        return createIntrinsic(classDescriptor).also {
+            cache[classDescriptor] = it
+        }
+    }
+
+    private fun createIntrinsic(classDescriptor: ClassDescriptor): ObjectIntrinsic? {
+        if (classDescriptor.fqNameUnsafe == KotlinBuiltIns.FQ_NAMES._enum ||
+            !CompanionObjectMapping.isMappedIntrinsicCompanionObject(classDescriptor)
+        ) {
+            return null
+        }
 
         val containingDeclaration = classDescriptor.containingDeclaration
         val name = Name.identifier(containingDeclaration.name.asString() + "CompanionObject")
 
-        return DefaultClassObjectIntrinsic(FqName("kotlin.js.internal").child(name), LibrarySourcesConfig.STDLIB_JS_MODULE_NAME)
+        return DefaultClassObjectIntrinsic(FqName("kotlin.js.internal").child(name))
     }
 }
 
 interface ObjectIntrinsic {
     fun apply(context: TranslationContext): JsExpression
-    fun exists(): Boolean = true
-}
-
-object NO_OBJECT_INTRINSIC : ObjectIntrinsic {
-    override fun apply(context: TranslationContext): JsExpression =
-            throw UnsupportedOperationException("ObjectIntrinsic#NO_OBJECT_INTRINSIC_#apply")
-
-    override fun exists(): Boolean = false
 }

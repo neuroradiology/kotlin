@@ -20,9 +20,16 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiElement
 import com.intellij.psi.stubs.StubElement
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
-import org.jetbrains.kotlin.idea.decompiler.stubBuilder.FlagsToModifiers.*
+import org.jetbrains.kotlin.builtins.isNumberedFunctionClassFqName
+import org.jetbrains.kotlin.descriptors.SourceElement
+import org.jetbrains.kotlin.idea.decompiler.stubBuilder.flags.*
 import org.jetbrains.kotlin.lexer.KtModifierKeywordToken
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.deserialization.Flags
+import org.jetbrains.kotlin.metadata.deserialization.NameResolver
+import org.jetbrains.kotlin.metadata.deserialization.TypeTable
+import org.jetbrains.kotlin.metadata.deserialization.supertypes
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.psi.KtClassBody
 import org.jetbrains.kotlin.psi.KtSuperTypeEntry
@@ -33,30 +40,37 @@ import org.jetbrains.kotlin.psi.stubs.impl.KotlinClassStubImpl
 import org.jetbrains.kotlin.psi.stubs.impl.KotlinModifierListStubImpl
 import org.jetbrains.kotlin.psi.stubs.impl.KotlinObjectStubImpl
 import org.jetbrains.kotlin.psi.stubs.impl.KotlinPlaceHolderStubImpl
-import org.jetbrains.kotlin.serialization.Flags
-import org.jetbrains.kotlin.serialization.ProtoBuf
-import org.jetbrains.kotlin.serialization.deserialization.*
+import org.jetbrains.kotlin.serialization.deserialization.ProtoContainer
+import org.jetbrains.kotlin.serialization.deserialization.getClassId
+import org.jetbrains.kotlin.serialization.deserialization.getName
 
 fun createClassStub(
         parent: StubElement<out PsiElement>,
         classProto: ProtoBuf.Class,
         nameResolver: NameResolver,
         classId: ClassId,
+        source: SourceElement?,
         context: ClsStubBuilderContext
 ) {
-    ClassClsStubBuilder(parent, classProto, nameResolver, classId, context).build()
+    ClassClsStubBuilder(parent, classProto, nameResolver, classId, source, context).build()
 }
 
 private class ClassClsStubBuilder(
         private val parentStub: StubElement<out PsiElement>,
         private val classProto: ProtoBuf.Class,
-        private val nameResolver: NameResolver,
+        nameResolver: NameResolver,
         private val classId: ClassId,
-        private val outerContext: ClsStubBuilderContext
+        source: SourceElement?,
+        outerContext: ClsStubBuilderContext
 ) {
-    private val classKind = Flags.CLASS_KIND[classProto.flags]
-    private val c = outerContext.child(classProto.typeParameterList, classKind, classId.shortClassName, nameResolver,
-                                       TypeTable(classProto.typeTable))
+    private val thisAsProtoContainer = ProtoContainer.Class(
+            classProto, nameResolver, TypeTable(classProto.typeTable), source, outerContext.protoContainer
+    )
+    private val classKind = thisAsProtoContainer.kind
+
+    private val c = outerContext.child(
+            classProto.typeParameterList, classId.shortClassName, nameResolver, thisAsProtoContainer.typeTable, thisAsProtoContainer
+    )
     private val typeStubBuilder = TypeClsStubBuilder(c)
     private val supertypeIds = run {
         val supertypeIds = classProto.supertypes(c.typeTable).map { c.nameResolver.getClassId(it.className) }
@@ -72,9 +86,6 @@ private class ClassClsStubBuilder(
     private val companionObjectName =
             if (classProto.hasCompanionObjectName()) c.nameResolver.getName(classProto.companionObjectName) else null
 
-    private val thisAsProtoContainer =
-            ProtoContainer.Class(classProto, c.nameResolver, c.typeTable, outerContext.classKind?.let { Deserialization.classKind(it) })
-
     private val classOrObjectStub = createClassOrObjectStubAndModifierListStub()
 
     fun build() {
@@ -89,13 +100,14 @@ private class ClassClsStubBuilder(
         val classOrObjectStub = doCreateClassOrObjectStub()
         val modifierList = createModifierListForClass(classOrObjectStub)
         if (Flags.HAS_ANNOTATIONS.get(classProto.flags)) {
-            createAnnotationStubs(c.components.annotationLoader.loadClassAnnotations(classProto, c.nameResolver), modifierList)
+            createAnnotationStubs(c.components.annotationLoader.loadClassAnnotations(thisAsProtoContainer), modifierList)
         }
         return classOrObjectStub
     }
 
     private fun createModifierListForClass(parent: StubElement<out PsiElement>): KotlinModifierListStubImpl {
         val relevantFlags = arrayListOf(VISIBILITY)
+        relevantFlags.add(EXTERNAL_CLASS)
         if (isClass()) {
             relevantFlags.add(INNER)
             relevantFlags.add(DATA)
@@ -116,7 +128,7 @@ private class ClassClsStubBuilder(
         val shortName = fqName.shortName().ref()
         val superTypeRefs = supertypeIds.filterNot {
             //TODO: filtering function types should go away
-            KotlinBuiltIns.isNumberedFunctionClassFqName(it.asSingleFqName().toUnsafe())
+            isNumberedFunctionClassFqName(it.asSingleFqName().toUnsafe())
         }.map { it.shortClassName.ref() }.toTypedArray()
         return when (classKind) {
             ProtoBuf.Class.Kind.OBJECT, ProtoBuf.Class.Kind.COMPANION_OBJECT -> {
@@ -135,7 +147,7 @@ private class ClassClsStubBuilder(
                         fqName.ref(),
                         shortName,
                         superTypeRefs,
-                        isTrait = classKind == ProtoBuf.Class.Kind.INTERFACE,
+                        isInterface = classKind == ProtoBuf.Class.Kind.INTERFACE,
                         isEnumEntry = classKind == ProtoBuf.Class.Kind.ENUM_ENTRY,
                         isLocal = false,
                         isTopLevel = !classId.isNestedClass
@@ -196,7 +208,7 @@ private class ClassClsStubBuilder(
                     qualifiedName = c.containerFqName.child(name).ref(),
                     name = name.ref(),
                     superNames = arrayOf(),
-                    isTrait = false,
+                    isInterface = false,
                     isEnumEntry = true,
                     isLocal = false,
                     isTopLevel = false
@@ -214,7 +226,8 @@ private class ClassClsStubBuilder(
             }
         }
 
-        createCallableStubs(classBody, c, thisAsProtoContainer, classProto.functionList, classProto.propertyList)
+        createDeclarationsStubs(
+                classBody, c, thisAsProtoContainer, classProto.functionList, classProto.propertyList, classProto.typeAliasList)
     }
 
     private fun isClass(): Boolean {
@@ -234,21 +247,21 @@ private class ClassClsStubBuilder(
     }
 
     private fun createNestedClassStub(classBody: StubElement<out PsiElement>, nestedClassId: ClassId) {
-        val classDataWithSource = c.components.classDataFinder.findClassData(nestedClassId)
-        if (classDataWithSource == null) {
-            val rootFile = c.components.virtualFileForDebug
-            LOG.error(
-                    "Could not find class data for nested class $nestedClassId of class ${nestedClassId.outerClassId}\n" +
-                    "Root file: ${rootFile.canonicalPath}\n" +
-                    "Dir: ${rootFile.parent.canonicalPath}\n" +
-                    "Children:\n" +
-                    "${rootFile.parent.children.sortedBy { it.name }.joinToString(separator = "\n") {
-                        it.name + " (valid: ${it.isValid})"
-                    } }")
-            return
-        }
-        val (nameResolver, classProto) = classDataWithSource.classData
-        createClassStub(classBody, classProto, nameResolver, nestedClassId, c)
+        val (nameResolver, classProto, _, sourceElement) =
+                c.components.classDataFinder.findClassData(nestedClassId)
+                        ?: c.components.virtualFileForDebug.let { rootFile ->
+                            LOG.error(
+                                "Could not find class data for nested class $nestedClassId of class ${nestedClassId.outerClassId}\n" +
+                                        "Root file: ${rootFile.canonicalPath}\n" +
+                                        "Dir: ${rootFile.parent.canonicalPath}\n" +
+                                        "Children:\n" +
+                                        rootFile.parent.children.sortedBy { it.name }.joinToString(separator = "\n") {
+                                            "${it.name} (valid: ${it.isValid})"
+                                        }
+                            )
+                            return
+                        }
+        createClassStub(classBody, classProto, nameResolver, nestedClassId, sourceElement, c)
     }
 
     companion object {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,41 +16,39 @@
 
 package org.jetbrains.kotlin.types;
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import kotlin.Unit;
 import kotlin.collections.CollectionsKt;
-import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.builtins.BuiltinsPackageFragment;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
+import org.jetbrains.kotlin.container.ComponentProvider;
+import org.jetbrains.kotlin.container.DslKt;
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor;
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor;
 import org.jetbrains.kotlin.descriptors.annotations.Annotations;
-import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl;
 import org.jetbrains.kotlin.descriptors.impl.TypeParameterDescriptorImpl;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtPsiFactoryKt;
 import org.jetbrains.kotlin.psi.KtTypeProjection;
 import org.jetbrains.kotlin.psi.KtTypeReference;
 import org.jetbrains.kotlin.resolve.TypeResolver;
+import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil;
 import org.jetbrains.kotlin.resolve.scopes.*;
 import org.jetbrains.kotlin.resolve.scopes.utils.ScopeUtilsKt;
 import org.jetbrains.kotlin.test.ConfigurationKind;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
-import org.jetbrains.kotlin.tests.di.InjectionKt;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-public class TypeUnifierTest extends KotlinLiteFixture {
+public class TypeUnifierTest extends KotlinTestWithEnvironment {
     private Set<TypeConstructor> variables;
 
-    private KotlinBuiltIns builtIns;
+    private ModuleDescriptor module;
     private ImportingScope builtinsImportingScope;
     private TypeResolver typeResolver;
     private TypeParameterDescriptor x;
@@ -65,18 +63,13 @@ public class TypeUnifierTest extends KotlinLiteFixture {
     public void setUp() throws Exception {
         super.setUp();
 
+        ComponentProvider container = JvmResolveUtil.createContainer(getEnvironment());
+        module = DslKt.getService(container, ModuleDescriptor.class);
 
-        ModuleDescriptorImpl module = KotlinTestUtils.createEmptyModule();
-        builtIns = module.getBuiltIns();
         builtinsImportingScope = ScopeUtilsKt.chainImportingScopes(
-                // builtIns.builtinsPackageFragments.map { it.memberScope.memberScopeAsImportingScope() }
-                CollectionsKt.map(builtIns.getBuiltinsPackageFragments(), new Function1<BuiltinsPackageFragment, ImportingScope>() {
-                    @Override
-                    public ImportingScope invoke(BuiltinsPackageFragment packageFragment) {
-                        return ScopeUtilsKt.memberScopeAsImportingScope(packageFragment.getMemberScope());
-                    }
-                }), null);
-        typeResolver = InjectionKt.createContainerForTests(getProject(), module).getTypeResolver();
+                CollectionsKt.map(KotlinBuiltIns.BUILT_INS_PACKAGE_FQ_NAMES,
+                                  fqName -> ScopeUtilsKt.memberScopeAsImportingScope(module.getPackage(fqName).getMemberScope())), null);
+        typeResolver = DslKt.getService(container, TypeResolver.class);
         x = createTypeVariable("X");
         y = createTypeVariable("Y");
         variables = Sets.newHashSet(x.getTypeConstructor(), y.getTypeConstructor());
@@ -84,8 +77,8 @@ public class TypeUnifierTest extends KotlinLiteFixture {
 
     private TypeParameterDescriptor createTypeVariable(String name) {
         return TypeParameterDescriptorImpl.createWithDefaultBound(
-                builtIns.getBuiltInsModule(), Annotations.Companion.getEMPTY(), false, Variance.INVARIANT,
-                Name.identifier(name), 0);
+                module, Annotations.Companion.getEMPTY(), false, Variance.INVARIANT, Name.identifier(name), 0
+        );
     }
 
     public void testNoVariables() throws Exception {
@@ -170,7 +163,7 @@ public class TypeUnifierTest extends KotlinLiteFixture {
     }
 
     private static Map<String, String> expect(boolean success, String... strs) {
-        Map<String, String> map = Maps.newHashMap();
+        Map<String, String> map = new HashMap<>();
         putResult(map, success);
         for (int i = 0; i < strs.length; i += 2) {
             String key = strs[i];
@@ -181,22 +174,13 @@ public class TypeUnifierTest extends KotlinLiteFixture {
     }
 
     private void doTest(String known, String withVariables, @NotNull Map<String, String> expected) {
-        TypeUnifier.UnificationResult map = TypeUnifier.unify(
-                makeType(known),
-                makeType(withVariables),
-                new Predicate<TypeConstructor>() {
-                    @Override
-                    public boolean apply(TypeConstructor tc) {
-                        return variables.contains(tc);
-                    }
-                }
-        );
+        TypeUnifier.UnificationResult map = TypeUnifier.unify(makeType(known), makeType(withVariables), variables::contains);
         assertEquals(expected, toStrings(map));
     }
 
     @Nullable
     private static Map<String, String> toStrings(TypeUnifier.UnificationResult map) {
-        Map<String, String> result = Maps.newHashMap();
+        Map<String, String> result = new HashMap<>();
         putResult(result, map.isSuccess());
         for (Map.Entry<TypeConstructor, TypeProjection> entry : map.getSubstitution().entrySet()) {
             result.put(entry.getKey().toString(), entry.getValue().toString());
@@ -209,16 +193,15 @@ public class TypeUnifierTest extends KotlinLiteFixture {
     }
 
     private TypeProjection makeType(String typeStr) {
-        LexicalScope withX = new LexicalScopeImpl(builtinsImportingScope, builtIns.getBuiltInsModule(),
-                                                  false, null, LexicalScopeKind.SYNTHETIC, RedeclarationHandler.DO_NOTHING,
-                                                  new Function1<LexicalScopeImpl.InitializeHandler, Unit>() {
-                                                      @Override
-                                                      public Unit invoke(LexicalScopeImpl.InitializeHandler handler) {
-                                                          handler.addClassifierDescriptor(x);
-                                                          handler.addClassifierDescriptor(y);
-                                                          return Unit.INSTANCE;
-                                                      }
-                                                  });
+        LexicalScope withX = new LexicalScopeImpl(
+                builtinsImportingScope, module,
+                false, null, LexicalScopeKind.SYNTHETIC, LocalRedeclarationChecker.DO_NOTHING.INSTANCE,
+                handler -> {
+                    handler.addClassifierDescriptor(x);
+                    handler.addClassifierDescriptor(y);
+                    return Unit.INSTANCE;
+                }
+        );
 
         KtTypeProjection projection = KtPsiFactoryKt
                 .KtPsiFactory(getProject()).createTypeArguments("<" + typeStr + ">").getArguments().get(0);

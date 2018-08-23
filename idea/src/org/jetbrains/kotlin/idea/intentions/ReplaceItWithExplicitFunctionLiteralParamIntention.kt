@@ -19,8 +19,8 @@ package org.jetbrains.kotlin.idea.intentions
 import com.intellij.codeInsight.intention.LowPriorityAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.refactoring.rename.inplace.VariableInplaceRenameHandler
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.idea.refactoring.rename.KotlinVariableInplaceRenameHandler
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
 import org.jetbrains.kotlin.psi.KtLambdaExpression
@@ -28,7 +28,7 @@ import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
 
-class ReplaceItWithExplicitFunctionLiteralParamIntention() : SelfTargetingOffsetIndependentIntention<KtNameReferenceExpression> (
+class ReplaceItWithExplicitFunctionLiteralParamIntention : SelfTargetingOffsetIndependentIntention<KtNameReferenceExpression> (
         KtNameReferenceExpression::class.java, "Replace 'it' with explicit parameter"
 ), LowPriorityAction {
     override fun isApplicableTo(element: KtNameReferenceExpression)
@@ -49,6 +49,6 @@ class ReplaceItWithExplicitFunctionLiteralParamIntention() : SelfTargetingOffset
 
         val paramToRename = functionLiteral.valueParameters.single()
         editor.caretModel.moveToOffset(element.textOffset)
-        VariableInplaceRenameHandler().doRename(paramToRename, editor, null)
+        KotlinVariableInplaceRenameHandler().doRename(paramToRename, editor, null)
     }
 }

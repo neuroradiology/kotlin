@@ -28,18 +28,17 @@ class KotlinFileStubForIde(
         jetFile: KtFile?,
         packageName: StringRef,
         isScript: Boolean,
-        val facadeSimpleName: StringRef?,
+        private val facadeFqNameRef: StringRef?,
         val partSimpleName: StringRef?,
         val facadePartSimpleNames: List<StringRef?>?
 ) : KotlinFileStubImpl(jetFile, packageName, isScript), KotlinFileStub, PsiClassHolderFileStub<KtFile> {
 
     private fun StringRef.relativeToPackage() = getPackageFqName().child(Name.identifier(this.string))
 
-    val facadeFqName: FqName?
-        get() = facadeSimpleName?.relativeToPackage()
-
     val partFqName: FqName?
         get() = partSimpleName?.relativeToPackage()
+    val facadeFqName: FqName?
+        get() = facadeFqNameRef?.let { FqName(it.string) }
 
     constructor(jetFile: KtFile?, packageName: String, isScript: Boolean)
     : this(jetFile, StringRef.fromString(packageName)!!, isScript, null, null, null)
@@ -48,26 +47,26 @@ class KotlinFileStubForIde(
         fun forFile(packageFqName: FqName, isScript: Boolean): KotlinFileStubImpl =
                 KotlinFileStubForIde(jetFile = null,
                                      packageName = StringRef.fromString(packageFqName.asString())!!,
-                                     facadeSimpleName = null,
+                                     facadeFqNameRef = null,
                                      partSimpleName = null,
                                      facadePartSimpleNames = null,
                                      isScript = isScript)
 
-        fun forFileFacadeStub(facadeFqName: FqName, isScript: Boolean): KotlinFileStubImpl =
+        fun forFileFacadeStub(facadeFqName: FqName): KotlinFileStubImpl =
                 KotlinFileStubForIde(jetFile = null,
                                      packageName = facadeFqName.parent().stringRef(),
-                                     facadeSimpleName = facadeFqName.shortName().stringRef(),
+                                     facadeFqNameRef = facadeFqName.stringRef(),
                                      partSimpleName = facadeFqName.shortName().stringRef(),
                                      facadePartSimpleNames = null,
-                                     isScript = isScript)
+                                     isScript = false)
 
-        fun forMultifileClassStub(facadeFqName: FqName, partNames: List<String>?, isScript: Boolean): KotlinFileStubImpl =
+        fun forMultifileClassStub(facadeFqName: FqName, partNames: List<String>?): KotlinFileStubImpl =
                 KotlinFileStubForIde(jetFile = null,
                                      packageName = facadeFqName.parent().stringRef(),
-                                     facadeSimpleName = facadeFqName.shortName().stringRef(),
+                                     facadeFqNameRef = facadeFqName.stringRef(),
                                      partSimpleName = null,
                                      facadePartSimpleNames = partNames?.map { StringRef.fromString(it) },
-                                     isScript = isScript)
+                                     isScript = false)
 
         private fun FqName.stringRef() = StringRef.fromString(asString())!!
         private fun Name.stringRef() = StringRef.fromString(asString())!!

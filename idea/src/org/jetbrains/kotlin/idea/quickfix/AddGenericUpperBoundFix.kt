@@ -19,12 +19,11 @@ package org.jetbrains.kotlin.idea.quickfix
 import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiFile
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.diagnostics.Errors
+import org.jetbrains.kotlin.idea.core.ShortenReferences
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
-import org.jetbrains.kotlin.idea.util.ShortenReferences
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.KtTypeParameter
@@ -35,7 +34,6 @@ import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.Constrain
 import org.jetbrains.kotlin.resolve.calls.inference.filterConstraintsOut
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.Variance
-import org.jetbrains.kotlin.utils.singletonOrEmptyList
 
 class AddGenericUpperBoundFix(
         typeParameter: KtTypeParameter,
@@ -43,16 +41,17 @@ class AddGenericUpperBoundFix(
 ) : KotlinQuickFixAction<KtTypeParameter>(typeParameter) {
     private val renderedUpperBound: String = IdeDescriptorRenderers.SOURCE_CODE.renderType(upperBound)
 
-    override fun getText() = "Add '$renderedUpperBound' as upper bound for ${element.name}"
+    override fun getText() = element?.let { "Add '$renderedUpperBound' as upper bound for ${it.name}" } ?: ""
     override fun getFamilyName() = "Add generic upper bound"
 
-    override fun isAvailable(project: Project, editor: Editor?, file: PsiFile): Boolean {
-        if (!super.isAvailable(project, editor, file)) return false
+    override fun isAvailable(project: Project, editor: Editor?, file: KtFile): Boolean {
+        val element = element ?: return false
         // TODO: replacing existing upper bounds
         return (element.name != null && element.extendsBound == null)
     }
 
     override fun invoke(project: Project, editor: Editor?, file: KtFile) {
+        val element = element ?: return
         assert(element.extendsBound == null) { "Don't know what to do with existing bounds" }
 
         val typeReference = KtPsiFactory(project).createType(renderedUpperBound)
@@ -66,7 +65,7 @@ class AddGenericUpperBoundFix(
             return when (diagnostic.factory) {
                 Errors.UPPER_BOUND_VIOLATED -> {
                     val upperBoundViolated = Errors.UPPER_BOUND_VIOLATED.cast(diagnostic)
-                    createAction(upperBoundViolated.b, upperBoundViolated.a).singletonOrEmptyList()
+                    listOfNotNull(createAction(upperBoundViolated.b, upperBoundViolated.a))
                 }
                 Errors.TYPE_INFERENCE_UPPER_BOUND_VIOLATED -> {
                     val inferenceData = Errors.TYPE_INFERENCE_UPPER_BOUND_VIOLATED.cast(diagnostic).a

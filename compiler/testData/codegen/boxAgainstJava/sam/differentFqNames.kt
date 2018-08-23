@@ -1,3 +1,14 @@
+// IGNORE_BACKEND: JVM_IR
+// FILE: Custom.java
+
+class Custom {
+    public interface Runnable {
+        void run2();
+    }
+}
+
+// FILE: 1.kt
+
 fun box(): String {
     val f = { }
     val class1 = Runnable(f).javaClass

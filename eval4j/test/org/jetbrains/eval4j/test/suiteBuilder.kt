@@ -37,21 +37,20 @@ fun buildTestSuite(
     val suite = TestSuite()
 
     val ownerClass = TestData::class.java
-    val inputStream = ownerClass.classLoader!!.getResourceAsStream(ownerClass.getInternalName() + ".class")!!
-
-    ClassReader(inputStream).accept(object : ClassVisitor(ASM5) {
-
-        override fun visitMethod(access: Int, name: String, desc: String, signature: String?, exceptions: Array<out String>?): MethodVisitor? {
-            return object : MethodNode(ASM5, access, name, desc, signature, exceptions) {
-                override fun visitEnd() {
-                    val testCase = buildTestCase(ownerClass, this, create)
-                    if (testCase != null) {
-                        suite.addTest(testCase)
+    ownerClass.classLoader!!.getResourceAsStream(ownerClass.getInternalName() + ".class")!!.use { inputStream ->
+        ClassReader(inputStream).accept(object : ClassVisitor(ASM5) {
+            override fun visitMethod(access: Int, name: String, desc: String, signature: String?, exceptions: Array<out String>?): MethodVisitor? {
+                return object : MethodNode(ASM5, access, name, desc, signature, exceptions) {
+                    override fun visitEnd() {
+                        val testCase = buildTestCase(ownerClass, this, create)
+                        if (testCase != null) {
+                            suite.addTest(testCase)
+                        }
                     }
                 }
             }
-        }
-    }, 0)
+        }, 0)
+    }
 
     return suite
 }
@@ -81,7 +80,7 @@ private fun buildTestCase(ownerClass: Class<TestData>,
                 }
                 catch (e: Throwable) {
                     val cause = e.cause ?: e
-                    expected = ExceptionThrown(objectToValue(cause, Type.getType(cause.javaClass)) as ObjectValue, ExceptionThrown.ExceptionKind.FROM_EVALUATOR)
+                    expected = ExceptionThrown(objectToValue(cause, Type.getType(cause::class.java)) as ObjectValue, ExceptionThrown.ExceptionKind.FROM_EVALUATOR)
                 }
             }
         }

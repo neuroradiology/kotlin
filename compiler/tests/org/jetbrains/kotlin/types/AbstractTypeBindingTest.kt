@@ -16,27 +16,29 @@
 
 package org.jetbrains.kotlin.types
 
-import org.jetbrains.kotlin.test.KotlinLiteFixture
-import org.jetbrains.kotlin.test.ConfigurationKind
-import java.io.File
-import org.jetbrains.kotlin.resolve.typeBinding.*
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
-import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil
 import org.jetbrains.kotlin.psi.KtCallableDeclaration
-import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.utils.Printer
 import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.test.KotlinTestUtils.*
+import org.jetbrains.kotlin.renderer.DescriptorRenderer
+import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil
+import org.jetbrains.kotlin.resolve.typeBinding.TypeArgumentBinding
+import org.jetbrains.kotlin.resolve.typeBinding.TypeBinding
+import org.jetbrains.kotlin.resolve.typeBinding.createTypeBindingForReturnType
+import org.jetbrains.kotlin.test.ConfigurationKind
+import org.jetbrains.kotlin.test.KotlinTestUtils.assertEqualsToFile
+import org.jetbrains.kotlin.test.KotlinTestUtils.loadJetFile
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
+import org.jetbrains.kotlin.utils.Printer
+import java.io.File
 
-abstract class AbstractTypeBindingTest : KotlinLiteFixture() {
+abstract class AbstractTypeBindingTest : KotlinTestWithEnvironment() {
     override fun createEnvironment() = createEnvironmentWithMockJdk(ConfigurationKind.ALL)
 
     protected fun doTest(path: String) {
         val testFile = File(path)
         val testKtFile = loadJetFile(project, testFile)
 
-        val analyzeResult = JvmResolveUtil.analyzeFilesWithJavaIntegration(project, listOf(testKtFile), environment)
+        val analyzeResult = JvmResolveUtil.analyze(testKtFile, environment)
 
         val testDeclaration = testKtFile.declarations.last()!! as KtCallableDeclaration
 
@@ -73,9 +75,9 @@ abstract class AbstractTypeBindingTest : KotlinLiteFixture() {
                 println("null")
                 return this
             }
-            println("typeParameter: ${argument.typeParameterDescriptor.render()}")
+            println("typeParameter: ${argument.typeParameter.render()}")
 
-            val projection = argument.typeProjection.projectionKind.label.let {
+            val projection = argument.projection.projectionKind.label.let {
                 if (it.isNotEmpty())
                     "$it "
                 else
@@ -83,10 +85,10 @@ abstract class AbstractTypeBindingTest : KotlinLiteFixture() {
             }
 
             print("typeProjection: ")
-            if (argument.typeProjection.isStarProjection)
+            if (argument.projection.isStarProjection)
                 printlnWithNoIndent("*")
-            else printlnWithNoIndent("${projection}${argument.typeProjection.type.render()}")
-            print(argument.typeBinding)
+            else printlnWithNoIndent("${projection}${argument.projection.type.render()}")
+            print(argument.binding)
             return this
         }
 
@@ -97,9 +99,9 @@ abstract class AbstractTypeBindingTest : KotlinLiteFixture() {
             }
 
             println("psi: ${binding.psiElement.text}")
-            println("type: ${binding.kotlinType.render()}")
+            println("type: ${binding.type.render()}")
 
-            printCollection(binding.getArgumentBindings()) {
+            printCollection(binding.arguments) {
                 print(it)
             }
             return this
@@ -116,7 +118,5 @@ abstract class AbstractTypeBindingTest : KotlinLiteFixture() {
             }
             popIndent()
         }
-
-        override fun toString(): String = out.toString()
     }
 }

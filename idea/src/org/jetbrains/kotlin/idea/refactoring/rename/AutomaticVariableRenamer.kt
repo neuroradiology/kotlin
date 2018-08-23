@@ -21,6 +21,8 @@ import com.intellij.openapi.util.text.StringUtil
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiNamedElement
+import com.intellij.psi.PsiVariable
+import com.intellij.psi.codeStyle.JavaCodeStyleManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.refactoring.JavaRefactoringSettings
 import com.intellij.refactoring.RefactoringBundle
@@ -28,10 +30,12 @@ import com.intellij.refactoring.rename.naming.AutomaticRenamer
 import com.intellij.refactoring.rename.naming.AutomaticRenamerFactory
 import com.intellij.usageView.UsageInfo
 import org.jetbrains.kotlin.asJava.toLightClass
+import org.jetbrains.kotlin.asJava.toLightElements
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
-import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.unsafeResolveToDescriptor
+import org.jetbrains.kotlin.idea.core.unquote
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.isAncestor
 import org.jetbrains.kotlin.resolve.DescriptorUtils
@@ -39,6 +43,7 @@ import org.jetbrains.kotlin.resolve.descriptorUtil.builtIns
 import org.jetbrains.kotlin.resolve.lazy.NoDescriptorForDeclarationException
 import org.jetbrains.kotlin.resolve.source.PsiSourceElement
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 import java.util.*
 
 class AutomaticVariableRenamer(
@@ -61,7 +66,7 @@ class AutomaticVariableRenamer(
             if (parameterOrVariable.typeReference?.isAncestor(usageElement) != true) continue
 
             val descriptor = try {
-                parameterOrVariable.resolveToDescriptor()
+                parameterOrVariable.unsafeResolveToDescriptor()
             } catch(e: NoDescriptorForDeclarationException) {
                 LOG.error(e)
                 continue
@@ -75,7 +80,7 @@ class AutomaticVariableRenamer(
             myElements.add(parameterOrVariable)
         }
 
-        suggestAllNames(klass.name, newClassName)
+        suggestAllNames(klass.name?.unquote(), newClassName.unquote())
     }
 
     override fun getDialogTitle() = RefactoringBundle.message("rename.variables.title")
@@ -85,19 +90,37 @@ class AutomaticVariableRenamer(
     override fun entityName() = RefactoringBundle.message("entity.name.variable")
 
     override fun nameToCanonicalName(name: String, element: PsiNamedElement): String? {
+        if (element !is KtNamedDeclaration) return name
+
+        val psiVariable = element.toLightElements().firstIsInstanceOrNull<PsiVariable>()
+        val propertyName = if (psiVariable != null) {
+            val codeStyleManager = JavaCodeStyleManager.getInstance(psiVariable.project)
+            codeStyleManager.variableNameToPropertyName(name, codeStyleManager.getVariableKind(psiVariable))
+        }
+        else name
+
         if (element in toUnpluralize) {
-            val singular = StringUtil.unpluralize(name)
+            val singular = StringUtil.unpluralize(propertyName)
             if (singular != null) return singular
             toUnpluralize.remove(element)
         }
-        return name
+        return propertyName
     }
 
     override fun canonicalNameToName(canonicalName: String, element: PsiNamedElement): String? {
+        if (element !is KtNamedDeclaration) return canonicalName
+
+        val psiVariable = element.toLightElements().firstIsInstanceOrNull<PsiVariable>()
+        val varName = if (psiVariable != null) {
+            val codeStyleManager = JavaCodeStyleManager.getInstance(psiVariable.project)
+            codeStyleManager.propertyNameToVariableName(canonicalName, codeStyleManager.getVariableKind(psiVariable))
+        }
+        else canonicalName
+
         return if (element in toUnpluralize)
-            StringUtil.pluralize(canonicalName)
+            StringUtil.pluralize(varName)
         else
-            canonicalName
+            varName
     }
 
     companion object {
@@ -117,7 +140,7 @@ private fun KotlinType.isCollectionLikeOf(classPsiElement: PsiNamedElement): Boo
 
 
 open class AutomaticVariableRenamerFactory: AutomaticRenamerFactory {
-    override fun isApplicable(element: PsiElement) = element is KtClass
+    override fun isApplicable(element: PsiElement) = element is KtClass || element is KtTypeAlias
 
     override fun createRenamer(element: PsiElement, newName: String, usages: Collection<UsageInfo>) =
             AutomaticVariableRenamer(element as PsiNamedElement, newName, usages)

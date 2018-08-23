@@ -16,40 +16,37 @@
 
 package org.jetbrains.kotlin.idea.codeInsight
 
-import com.intellij.analysis.AnalysisScope
-import com.intellij.codeInspection.InspectionManager
-import com.intellij.codeInspection.LocalInspectionTool
 import com.intellij.codeInspection.ex.EntryPointsManagerBase
-import com.intellij.codeInspection.ex.InspectionManagerEx
-import com.intellij.codeInspection.ex.LocalInspectionToolWrapper
 import com.intellij.openapi.command.CommandProcessor
+import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.psi.PsiFile
-import com.intellij.testFramework.IdeaTestUtil
-import com.intellij.testFramework.InspectionTestUtil
-import com.intellij.testFramework.LightProjectDescriptor
-import com.intellij.testFramework.fixtures.impl.CodeInsightTestFixtureImpl
-import org.jetbrains.kotlin.idea.test.ConfigLibraryUtil
-import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase
-import org.jetbrains.kotlin.idea.test.KotlinLightProjectDescriptor
-import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
+import com.intellij.testFramework.TestLoggerFactory
+import org.jdom.Document
+import org.jdom.input.SAXBuilder
+import org.jetbrains.kotlin.idea.inspections.runInspection
+import org.jetbrains.kotlin.idea.test.*
 import org.jetbrains.kotlin.idea.util.application.runWriteAction
+import org.jetbrains.kotlin.idea.versions.bundledRuntimeVersion
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.plugins.groovy.GroovyFileType
 import java.io.File
-import kotlin.test.assertFalse
-import java.util.*
 
 abstract class AbstractInspectionTest : KotlinLightCodeInsightFixtureTestCase() {
     companion object {
-        val ENTRY_POINT_ANNOTATION = "test.anno.EntryPoint"
+        const val ENTRY_POINT_ANNOTATION = "test.anno.EntryPoint"
     }
 
-    override fun getProjectDescriptor(): LightProjectDescriptor = KotlinLightProjectDescriptor.INSTANCE
-
     override fun setUp() {
-        super.setUp()
-        EntryPointsManagerBase.getInstance(project).ADDITIONAL_ANNOTATIONS.add(ENTRY_POINT_ANNOTATION)
+        try {
+            super.setUp()
+            EntryPointsManagerBase.getInstance(project).ADDITIONAL_ANNOTATIONS.add(ENTRY_POINT_ANNOTATION)
+            runWriteAction { FileTypeManager.getInstance().associateExtension(GroovyFileType.GROOVY_FILE_TYPE, "gradle") }
+        } catch (e: Throwable) {
+            TestLoggerFactory.onTestFinished(false)
+            throw e
+        }
     }
 
     override fun tearDown() {
@@ -57,73 +54,81 @@ abstract class AbstractInspectionTest : KotlinLightCodeInsightFixtureTestCase() 
         super.tearDown()
     }
 
+    protected open fun configExtra(psiFiles: List<PsiFile>, options: String) {
+
+    }
+
+    protected open val forceUsePackageFolder: Boolean = false //workaround for IDEA-176033
+
     protected fun doTest(path: String) {
         val optionsFile = File(path)
         val options = FileUtil.loadFile(optionsFile, true)
 
         val inspectionClass = Class.forName(InTextDirectivesUtils.findStringWithPrefixes(options, "// INSPECTION_CLASS: ")!!)
-        val toolWrapper = LocalInspectionToolWrapper(inspectionClass.newInstance() as LocalInspectionTool)
+
+        val fixtureClasses = InTextDirectivesUtils.findListWithPrefixes(options, "// FIXTURE_CLASS: ")
 
         val inspectionsTestDir = optionsFile.parentFile!!
         val srcDir = inspectionsTestDir.parentFile!!
 
+        val settingsFile = File(inspectionsTestDir, "settings.xml")
+        val settingsElement = if (settingsFile.exists()) {
+            (SAXBuilder().build(settingsFile) as Document).rootElement
+        } else {
+            null
+        }
+
         with(myFixture) {
             testDataPath = "${KotlinTestUtils.getHomeDirectory()}/$srcDir"
 
-            val afterFiles = srcDir.listFiles { it -> it.name == "inspectionData" }?.single()?.listFiles { it -> it.extension == "after" } ?: emptyArray()
-            val psiFiles = srcDir.walkTopDown().onEnter { it.name != "inspectionData" }.mapNotNull {
-                file ->
-                if (file.isDirectory) {
-                     null
-                }
-                else if (file.extension != "kt") {
-                    val filePath = file.relativeTo(srcDir).invariantSeparatorsPath
-                    configureByFile(filePath)
-                }
-                else {
-                    val text = FileUtil.loadFile(file, true)
-                    val fileText =
+            val afterFiles = srcDir.listFiles { it -> it.name == "inspectionData" }?.single()?.listFiles { it -> it.extension == "after" }
+                    ?: emptyArray()
+            val psiFiles = srcDir.walkTopDown().onEnter { it.name != "inspectionData" }.mapNotNull { file ->
+                when {
+                    file.isDirectory -> null
+                    file.extension == "kt" -> {
+                        val text = FileUtil.loadFile(file, true)
+                        val fileText =
                             if (text.startsWith("package"))
                                 text
                             else
                                 "package ${file.nameWithoutExtension};$text"
-                    configureByText(file.name, fileText)!!
+                        if (forceUsePackageFolder) {
+                            val packageName = fileText.substring(
+                                "package".length,
+                                fileText.indexOfAny(charArrayOf(';', '\n'))
+                            ).trim()
+                            val projectFileName = packageName.replace('.', '/') + "/" + file.name
+                            addFileToProject(projectFileName, fileText)
+                        } else {
+                            configureByText(file.name, fileText)!!
+                        }
+                    }
+                    file.extension == "gradle" -> {
+                        val text = FileUtil.loadFile(file, true)
+                        val fileText = text.replace("\$PLUGIN_VERSION", bundledRuntimeVersion())
+                        configureByText(file.name, fileText)!!
+                    }
+                    else -> {
+                        val filePath = file.relativeTo(srcDir).invariantSeparatorsPath
+                        configureByFile(filePath)
+                    }
                 }
             }.toList()
 
-            val isJs = srcDir.endsWith("js")
-
-            val isWithRuntime = psiFiles.any { InTextDirectivesUtils.findStringWithPrefixes(it.text, "// WITH_RUNTIME") != null }
-            val fullJdk = psiFiles.any { InTextDirectivesUtils.findStringWithPrefixes(it.text, "// FULL_JDK") != null }
-
-            if (isJs) {
-                assertFalse(isWithRuntime)
-                assertFalse(fullJdk)
-            }
-
             try {
-                if (isJs) {
-                    ConfigLibraryUtil.configureKotlinJsRuntime(myFixture.module)
-                }
-                if (isWithRuntime) {
-                    ConfigLibraryUtil.configureKotlinRuntimeAndSdk(
-                            myFixture.module,
-                            if (fullJdk) PluginTestCaseBase.fullJdk() else PluginTestCaseBase.mockJdk()
-                    )
-                }
+                fixtureClasses.forEach { TestFixtureExtension.loadFixture(it, myFixture.module) }
 
-                val scope = AnalysisScope(project, psiFiles.map { it.virtualFile!! })
-                scope.invalidate()
+                configExtra(psiFiles, options)
 
-                val inspectionManager = (InspectionManager.getInstance(project) as InspectionManagerEx)
-                val globalContext = CodeInsightTestFixtureImpl.createGlobalContextForTool(scope, project, inspectionManager, toolWrapper)
-
-                InspectionTestUtil.runTool(toolWrapper, scope, globalContext)
-                InspectionTestUtil.compareToolResults(globalContext, toolWrapper, false, inspectionsTestDir.path)
+                val presentation = runInspection(
+                    inspectionClass, project,
+                    settings = settingsElement,
+                    files = psiFiles.map { it.virtualFile!! }, withTestDir = inspectionsTestDir.path
+                )
 
                 if (afterFiles.isNotEmpty()) {
-                    globalContext.getPresentation(toolWrapper).problemDescriptors.forEach {
-                        problem ->
+                    presentation.problemDescriptors.forEach { problem ->
                         problem.fixes?.forEach {
                             CommandProcessor.getInstance().executeCommand(project, {
                                 runWriteAction { it.applyFix(project, problem) }
@@ -137,14 +142,8 @@ abstract class AbstractInspectionTest : KotlinLightCodeInsightFixtureTestCase() 
                     }
                 }
 
-            }
-            finally {
-                if (isWithRuntime) {
-                    ConfigLibraryUtil.unConfigureKotlinRuntimeAndSdk(myFixture.module, IdeaTestUtil.getMockJdk17())
-                }
-                if (isJs) {
-                    ConfigLibraryUtil.unConfigureKotlinJsRuntimeAndSdk(myFixture.module, IdeaTestUtil.getMockJdk17())
-                }
+            } finally {
+                fixtureClasses.forEach { TestFixtureExtension.unloadFixture(it) }
             }
         }
     }

@@ -16,18 +16,17 @@
 
 package org.jetbrains.kotlin.serialization.jvm
 
-import com.intellij.testFramework.UsefulTestCase
-import com.intellij.testFramework.UsefulTestCase.assertEquals
-import org.jetbrains.kotlin.load.kotlin.JvmNameResolver
+import org.jetbrains.kotlin.metadata.jvm.JvmProtoBuf
+import org.jetbrains.kotlin.metadata.jvm.JvmProtoBuf.StringTableTypes.Record
+import org.jetbrains.kotlin.metadata.jvm.JvmProtoBuf.StringTableTypes.Record.Operation.*
+import org.jetbrains.kotlin.metadata.jvm.deserialization.JvmNameResolver
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBuf.StringTableTypes.Record
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBuf.StringTableTypes.Record.Operation.DESC_TO_CLASS_ID
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBuf.StringTableTypes.Record.Operation.INTERNAL_TO_CLASS_ID
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBuf.StringTableTypes.Record.Operation.NONE
+import org.jetbrains.kotlin.serialization.deserialization.getClassId
+import org.jetbrains.kotlin.test.testFramework.KtUsefulTestCase
 import java.util.*
 
-class JvmNameResolverTest : UsefulTestCase() {
+class JvmNameResolverTest : KtUsefulTestCase() {
     private class Context {
         val types = JvmProtoBuf.StringTableTypes.newBuilder()
         val strings = ArrayList<String>()

@@ -6,4 +6,5 @@ class KotlinPackageClassUsedFromJava {
     }
 }
 
-//INFO: [light_idea_test_case] testing...
+//INFO: <div class='definition'><pre>testing<br>public final class <b>testing.KotlinPackageClassUsedFromJava_DataKt</b>
+//INFO: extends <a href="psi_element://java.lang.Object"><code>Object</code></a></pre></div><table class='sections'></table>

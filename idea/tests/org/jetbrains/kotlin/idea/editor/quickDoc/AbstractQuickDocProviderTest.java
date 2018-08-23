@@ -17,32 +17,33 @@
 package org.jetbrains.kotlin.idea.editor.quickDoc;
 
 import com.intellij.codeInsight.documentation.DocumentationManager;
-import com.intellij.codeInsight.navigation.CtrlMouseHandler;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.psi.PsiElement;
 import com.intellij.rt.execution.junit.FileComparisonFailure;
 import com.intellij.testFramework.LightProjectDescriptor;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.kotlin.idea.completion.test.IdeaTestUtilsKt;
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase;
 import org.jetbrains.kotlin.idea.test.ProjectDescriptorWithStdlibSources;
 import org.jetbrains.kotlin.test.InTextDirectivesUtils;
-import org.jetbrains.kotlin.test.util.JetTestUtilsKt;
 
 import java.io.File;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public abstract class AbstractQuickDocProviderTest extends KotlinLightCodeInsightFixtureTestCase {
     public void doTest(@NotNull String path) throws Exception {
-        JetTestUtilsKt.configureWithExtraFileAbs(myFixture, path, "_Data");
+        IdeaTestUtilsKt.configureWithExtraFile(myFixture, path, "_Data");
 
         PsiElement element = myFixture.getFile().findElementAt(myFixture.getEditor().getCaretModel().getOffset());
         assertNotNull("Can't find element at caret in file: " + path, element);
 
         DocumentationManager documentationManager = DocumentationManager.getInstance(myFixture.getProject());
         PsiElement targetElement = documentationManager.findTargetElement(myFixture.getEditor(), myFixture.getFile());
+        PsiElement originalElement = DocumentationManager.getOriginalElement(targetElement);
 
-        String info = CtrlMouseHandler.getInfo(targetElement, element);
+        String info = DocumentationManager.getProviderFromElement(targetElement).generateDoc(targetElement, originalElement);
         if (info != null) {
             info = StringUtil.convertLineSeparators(info);
         }
@@ -52,7 +53,7 @@ public abstract class AbstractQuickDocProviderTest extends KotlinLightCodeInsigh
 
         File testDataFile = new File(path);
         String textData = FileUtil.loadFile(testDataFile, true);
-        List<String> directives = InTextDirectivesUtils.findLinesWithPrefixesRemoved(textData, "INFO:");
+        List<String> directives = InTextDirectivesUtils.findLinesWithPrefixesRemoved(textData, false, "INFO:");
 
         if (directives.isEmpty()) {
             throw new FileComparisonFailure(
@@ -68,25 +69,32 @@ public abstract class AbstractQuickDocProviderTest extends KotlinLightCodeInsigh
             }
             String expectedInfo = expectedInfoBuilder.toString();
 
+            String cleanedInfo = info == null ? "" : StringUtil.join(
+                    StringUtil.split(info, "\n", false)
+                            .stream()
+                            .map(s -> StringUtil.isEmptyOrSpaces(s) ? "\n" : s)
+                            .collect(Collectors.toList()),
+                    "");
+
             if (expectedInfo.endsWith("...\n")) {
-                if (!info.startsWith(StringUtil.trimEnd(expectedInfo, "...\n"))) {
-                    wrapToFileComparisonFailure(info, path, textData);
+                if (!cleanedInfo.startsWith(StringUtil.trimEnd(expectedInfo, "...\n"))) {
+                    wrapToFileComparisonFailure(cleanedInfo, path, textData);
                 }
             }
-            else if (!expectedInfo.equals(info)) {
-                wrapToFileComparisonFailure(info, path, textData);
+            else if (!expectedInfo.equals(cleanedInfo)) {
+                wrapToFileComparisonFailure(cleanedInfo, path, textData);
             }
         }
     }
 
-    private static void wrapToFileComparisonFailure(String info, String filePath, String fileData) {
-        List<String> infoLines = StringUtil.split(info, "\n");
+    public static void wrapToFileComparisonFailure(String info, String filePath, String fileData) {
+        List<String> infoLines = StringUtil.split(info, "\n", false);
         StringBuilder infoBuilder = new StringBuilder();
         for (String line : infoLines) {
-            infoBuilder.append("//INFO: ").append(line).append("\n");
+            infoBuilder.append("//INFO: ").append(line);
         }
 
-        String correctedFileText = fileData.replaceAll("//\\s?INFO: .*\n?", "") + infoBuilder.toString();
+        String correctedFileText = fileData.replaceAll("//\\s?INFO:\\s?.*\n?", "") + infoBuilder.toString();
         throw new FileComparisonFailure("Unexpected info", fileData, correctedFileText, new File(filePath).getAbsolutePath());
     }
 

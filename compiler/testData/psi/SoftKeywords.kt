@@ -16,6 +16,7 @@ public
 internal
 in
 out
+suspend
  class Bar<abstract, abstract enum : T, out open,
     public protected private internal abstract
     open
@@ -60,6 +61,8 @@ out
     val setparam
     val lateinit
     val const
+    val suspend
+    val coroutine
       get() = a
       set(S : s) {}
 

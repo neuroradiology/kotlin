@@ -14,7 +14,7 @@
     class MyChildClass : MyGenericClass<Int>() {}
     class MyChildClass1<T> : MyGenericClass<T>() {}
     class MyChildClass2<T> : MyGenericClass<T>() {
-        <error>fun foo(t: T)</error> = t
+        fun <error>foo</error>(t: T) = t
         override fun bar(t: T) = t
     }
 
@@ -30,6 +30,6 @@
     <error>class MyIllegalClass1</error> : MyTrait<Int>, MyAbstractClass<String>() {}
 
     <error>class MyIllegalClass2</error><T> : MyTrait<Int>, MyAbstractClass<Int>() {
-        fun foo(t: T) = t
-        fun bar(t: T) = t
+        <error>fun foo(t: T)</error> = t
+        <error>fun bar(t: T)</error> = t
     }

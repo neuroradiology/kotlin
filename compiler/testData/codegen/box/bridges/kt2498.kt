@@ -1,4 +1,5 @@
-import java.util.ArrayList
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: NATIVE
 
 open class BaseStringList: ArrayList<String>() {
 }

@@ -17,10 +17,33 @@
 package org.jetbrains.kotlin.compiler.plugin
 
 import org.jetbrains.kotlin.config.CompilerConfiguration
+import org.jetbrains.kotlin.config.CompilerConfigurationKey
 
 interface CommandLineProcessor {
     val pluginId: String
     val pluginOptions: Collection<CliOption>
 
     @Throws(CliOptionProcessingException::class) fun processOption(option: CliOption, value: String, configuration: CompilerConfiguration)
+
+    fun <T> CompilerConfiguration.appendList(option: CompilerConfigurationKey<List<T>>, value: T) {
+        val paths = getList(option).toMutableList()
+        paths.add(value)
+        put(option, paths)
+    }
+
+    fun <T> CompilerConfiguration.appendList(option: CompilerConfigurationKey<List<T>>, values: List<T>) {
+        val paths = getList(option).toMutableList()
+        paths.addAll(values)
+        put(option, paths)
+    }
+
+    fun CompilerConfiguration.applyOptionsFrom(map: Map<String, List<String>>, pluginOptions: Collection<CliOption>) {
+        for ((key, values) in map) {
+            val option = pluginOptions.firstOrNull { it.name == key } ?: continue
+
+            for (value in values) {
+                processOption(option, value, this)
+            }
+        }
+    }
 }

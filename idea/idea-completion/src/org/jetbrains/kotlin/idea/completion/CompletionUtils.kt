@@ -16,30 +16,35 @@
 
 package org.jetbrains.kotlin.idea.completion
 
-import com.intellij.codeInsight.completion.*
+import com.intellij.codeInsight.completion.InsertionContext
+import com.intellij.codeInsight.completion.OffsetKey
+import com.intellij.codeInsight.completion.OffsetMap
+import com.intellij.codeInsight.completion.PrefixMatcher
 import com.intellij.codeInsight.lookup.*
-import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.util.Key
 import com.intellij.patterns.ElementPattern
 import com.intellij.patterns.StandardPatterns
 import com.intellij.psi.PsiDocumentManager
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.idea.KotlinIcons
 import org.jetbrains.kotlin.idea.completion.handlers.CastReceiverInsertHandler
 import org.jetbrains.kotlin.idea.completion.handlers.WithTailInsertHandler
+import org.jetbrains.kotlin.idea.core.ImportableFqNameClassifier
+import org.jetbrains.kotlin.idea.core.ShortenReferences
 import org.jetbrains.kotlin.idea.imports.importableFqName
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.idea.util.*
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.parentsWithSelf
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.renderer.render
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.inline.InlineUtil
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.isError
 import org.jetbrains.kotlin.types.typeUtil.TypeNullability
 import org.jetbrains.kotlin.types.typeUtil.nullability
 import java.util.*
@@ -54,26 +59,27 @@ tailrec fun <T : Any> LookupElement.putUserDataDeep(key: Key<T>, value: T?) {
 }
 
 tailrec fun <T : Any> LookupElement.getUserDataDeep(key: Key<T>): T? {
-    if (this is LookupElementDecorator<*>) {
-        return getDelegate().getUserDataDeep(key)
+    return if (this is LookupElementDecorator<*>) {
+        getDelegate().getUserDataDeep(key)
     }
     else {
-        return getUserData(key)
+        getUserData(key)
     }
 }
 
 enum class ItemPriority {
     SUPER_METHOD_WITH_ARGUMENTS,
     FROM_UNRESOLVED_NAME_SUGGESTION,
+    GET_OPERATOR,
     DEFAULT,
     IMPLEMENT,
     OVERRIDE,
-    NAMED_PARAMETER,
     STATIC_MEMBER_FROM_IMPORTS,
     STATIC_MEMBER
 }
 
 val ITEM_PRIORITY_KEY = Key<ItemPriority>("ITEM_PRIORITY_KEY")
+var LookupElement.isDslMember: Boolean? by UserDataProperty(Key.create("DSL_LOOKUP_ITEM"))
 
 fun LookupElement.assignPriority(priority: ItemPriority): LookupElement {
     putUserData(ITEM_PRIORITY_KEY, priority)
@@ -102,31 +108,18 @@ fun LookupElement.keepOldArgumentListOnTab(): LookupElement {
     return this
 }
 
-fun rethrowWithCancelIndicator(exception: ProcessCanceledException): ProcessCanceledException {
-    val indicator = CompletionService.getCompletionService().currentCompletion as CompletionProgressIndicator
-
-    // Force cancel to avoid deadlock in CompletionThreading.delegateWeighing()
-    if (!indicator.isCanceled) {
-        indicator.cancel()
-    }
-
-    return exception
+fun PrefixMatcher.asNameFilter(): (Name) -> Boolean {
+    return { name -> !name.isSpecial && prefixMatches(name.identifier) }
 }
 
-fun PrefixMatcher.asNameFilter() = { name: Name ->
-    if (name.isSpecial) {
-        false
-    }
-    else {
-        val identifier = name.identifier
-        if (prefix.startsWith("$")) { // we need properties from scope for backing field completion
-            prefixMatches("$" + identifier)
-        }
-        else {
-            prefixMatches(identifier)
-        }
-    }
+fun PrefixMatcher.asStringNameFilter() = { name: String -> prefixMatches(name) }
+
+fun ((String) -> Boolean).toNameFilter(): (Name) -> Boolean {
+    return { name -> !name.isSpecial && this(name.identifier) }
 }
+
+infix fun <T> ((T) -> Boolean).or(otherFilter: (T) -> Boolean): (T) -> Boolean
+        = { this(it) || otherFilter(it) }
 
 fun LookupElementPresentation.prependTailText(text: String, grayed: Boolean) {
     val tails = tailFragments
@@ -135,7 +128,7 @@ fun LookupElementPresentation.prependTailText(text: String, grayed: Boolean) {
     tails.forEach { appendTailText(it.text, it.isGrayed) }
 }
 
-enum class CallableWeight {
+enum class CallableWeightEnum {
     local, // local non-extension
     thisClassMember,
     baseClassMember,
@@ -144,6 +137,14 @@ enum class CallableWeight {
     globalOrStatic, // global non-extension
     typeParameterExtension,
     receiverCastRequired
+}
+
+class CallableWeight(val enum: CallableWeightEnum, val receiverIndex: Int?) {
+    companion object {
+        val local = CallableWeight(CallableWeightEnum.local, null)
+        val globalOrStatic = CallableWeight(CallableWeightEnum.globalOrStatic, null)
+        val receiverCastRequired = CallableWeight(CallableWeightEnum.receiverCastRequired, null)
+    }
 }
 
 val CALLABLE_WEIGHT_KEY = Key<CallableWeight>("CALLABLE_WEIGHT_KEY")
@@ -171,7 +172,7 @@ fun shouldCompleteThisItems(prefixMatcher: PrefixMatcher): Boolean {
 class ThisItemLookupObject(val receiverParameter: ReceiverParameterDescriptor, val labelName: Name?) : KeywordLookupObject()
 
 fun ThisItemLookupObject.createLookupElement() = createKeywordElement("this", labelName.labelNameToTail(), lookupObject = this)
-        .withTypeText(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(receiverParameter.type))
+        .withTypeText(BasicLookupElementFactory.SHORT_NAMES_RENDERER.renderType(receiverParameter.type))
 
 fun thisExpressionItems(bindingContext: BindingContext, position: KtExpression, prefix: String, resolutionFacade: ResolutionFacade): Collection<ThisItemLookupObject> {
     val scope = position.getResolutionScope(bindingContext, resolutionFacade)
@@ -283,7 +284,7 @@ fun breakOrContinueExpressionItems(position: KtElement, breakOrContinue: String)
                     result.add(createKeywordElement(breakOrContinue))
                 }
 
-                val label = (parent.getParent() as? KtLabeledExpression)?.getLabelNameAsName()
+                val label = (parent.parent as? KtLabeledExpression)?.getLabelNameAsName()
                 if (label != null) {
                     result.add(createKeywordElement(breakOrContinue, tail = label.labelNameToTail()))
                 }
@@ -298,16 +299,16 @@ fun breakOrContinueExpressionItems(position: KtElement, breakOrContinue: String)
 fun BasicLookupElementFactory.createLookupElementForType(type: KotlinType): LookupElement? {
     if (type.isError) return null
 
-    if (KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(type)) {
-        val text = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.renderType(type)
+    return if (type.isFunctionType) {
+        val text = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.renderType(type)
         val baseLookupElement = LookupElementBuilder.create(text).withIcon(KotlinIcons.LAMBDA)
-        return BaseTypeLookupElement(type, baseLookupElement)
+        BaseTypeLookupElement(type, baseLookupElement)
     }
     else {
         val classifier = type.constructor.declarationDescriptor ?: return null
         val baseLookupElement = createLookupElement(classifier, qualifyNestedClasses = true, includeClassTypeArguments = false)
 
-        val itemText = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.renderType(type)
+        val itemText = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.renderType(type)
 
         val typeLookupElement = object : BaseTypeLookupElement(type, baseLookupElement) {
             override fun renderElement(presentation: LookupElementPresentation) {
@@ -317,7 +318,7 @@ fun BasicLookupElementFactory.createLookupElementForType(type: KotlinType): Look
         }
 
         // if type is simply classifier without anything else, use classifier's lookup element to avoid duplicates (works after "as" in basic completion)
-        return if (typeLookupElement.fullText == IdeDescriptorRenderers.SOURCE_CODE.renderClassifierName(classifier))
+        if (typeLookupElement.fullText == IdeDescriptorRenderers.SOURCE_CODE.renderClassifierName(classifier))
             baseLookupElement
         else
             typeLookupElement
@@ -356,14 +357,14 @@ fun LookupElement.decorateAsStaticMember(
         memberDescriptor: DeclarationDescriptor,
         classNameAsLookupString: Boolean
 ): LookupElement? {
-    var container = memberDescriptor.containingDeclaration as? ClassDescriptor ?: return null
-    var classDescriptor = if (container.isCompanionObject)
+    val container = memberDescriptor.containingDeclaration as? ClassDescriptor ?: return null
+    val classDescriptor = if (container.isCompanionObject)
         container.containingDeclaration as? ClassDescriptor ?: return null
     else
         container
 
+    val containerFqName = container.importableFqName ?: return null
     val qualifierPresentation = classDescriptor.name.asString()
-    val qualifierText = IdeDescriptorRenderers.SOURCE_CODE.renderClassifierName(classDescriptor)
 
     return object: LookupElementDecorator<LookupElement>(this) {
         override fun getAllLookupStrings(): Set<String> {
@@ -384,7 +385,7 @@ fun LookupElement.decorateAsStaticMember(
             }
 
             if (presentation.typeText.isNullOrEmpty()) {
-                presentation.typeText = DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(classDescriptor.defaultType)
+                presentation.typeText = BasicLookupElementFactory.SHORT_NAMES_RENDERER.renderType(classDescriptor.defaultType)
             }
         }
 
@@ -392,32 +393,36 @@ fun LookupElement.decorateAsStaticMember(
             val psiDocumentManager = PsiDocumentManager.getInstance(context.project)
             val file = context.file as KtFile
 
-            val classImportableFqName = container.importableFqName
-            val useImport = classImportableFqName != null && file.importDirectives.any {
-                !it.isAllUnder && it.importPath?.fqnPart()?.parent() == classImportableFqName
-            }
+            val addMemberImport = file.importDirectives.any { !it.isAllUnder && it.importPath?.fqName?.parent() == containerFqName }
 
-            var insertQualifier = true
-            if (useImport) {
+            if (addMemberImport) {
                 psiDocumentManager.commitAllDocuments()
-                if (ImportInsertHelper.getInstance(context.project).importDescriptor(file, memberDescriptor) != ImportDescriptorResult.FAIL) {
-                    insertQualifier = false
-                }
+                ImportInsertHelper.getInstance(context.project).importDescriptor(file, memberDescriptor)
+                psiDocumentManager.doPostponedOperationsAndUnblockDocument(context.document)
             }
 
-            if (insertQualifier) {
-                val prefix = qualifierText + "."
-
-                val offset = context.startOffset
-                context.document.insertString(offset, prefix)
-                context.offsetMap.addOffset(CompletionInitializationContext.START_OFFSET, offset + prefix.length)
-
-                shortenReferences(context, offset, offset + prefix.length)
-
-            }
-
-            psiDocumentManager.doPostponedOperationsAndUnblockDocument(context.document)
             super.handleInsert(context)
         }
     }
 }
+
+fun ImportableFqNameClassifier.isImportableDescriptorImported(descriptor: DeclarationDescriptor): Boolean {
+    val classification = classify(descriptor.importableFqName!!, false)
+    return classification != ImportableFqNameClassifier.Classification.notImported
+           && classification != ImportableFqNameClassifier.Classification.siblingImported
+}
+
+fun OffsetMap.tryGetOffset(key: OffsetKey): Int? {
+    try {
+        if (!containsOffset(key)) return null
+        return getOffset(key).takeIf { it != -1 } // prior to IDEA 2016.3 getOffset() returned -1 if not found, now it throws exception
+    }
+    catch(e: Exception) {
+        return null
+    }
+}
+
+var KtCodeFragment.extraCompletionFilter: ((LookupElement) -> Boolean)? by CopyablePsiUserDataProperty(Key.create("EXTRA_COMPLETION_FILTER"))
+
+val DeclarationDescriptor.isArtificialImportAliasedDescriptor: Boolean
+    get() = original.name != name

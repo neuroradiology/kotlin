@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,12 +20,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor;
-import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.resolve.descriptorUtil.DescriptorUtilsKt;
 import org.jetbrains.kotlin.types.*;
 
-import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 
 import static org.jetbrains.kotlin.types.Variance.*;
@@ -68,7 +65,8 @@ public class TypeCheckingProcedure {
         if (type1 == type2) return true;
         if (FlexibleTypesKt.isFlexible(type1)) {
             if (FlexibleTypesKt.isFlexible(type2)) {
-                return !type1.isError() && !type2.isError() && isSubtypeOf(type1, type2) && isSubtypeOf(type2, type1);
+                return !KotlinTypeKt.isError(type1) && !KotlinTypeKt.isError(type2) &&
+                       isSubtypeOf(type1, type2) && isSubtypeOf(type2, type1);
             }
             return heterogeneousEquivalence(type2, type1);
         }
@@ -124,8 +122,8 @@ public class TypeCheckingProcedure {
     protected boolean heterogeneousEquivalence(KotlinType inflexibleType, KotlinType flexibleType) {
         // This is to account for the case when we have Collection<X> vs (Mutable)Collection<X>! or K(java.util.Collection<? extends X>)
         assert !FlexibleTypesKt.isFlexible(inflexibleType) : "Only inflexible types are allowed here: " + inflexibleType;
-        return isSubtypeOf(FlexibleTypesKt.flexibility(flexibleType).getLowerBound(), inflexibleType)
-               && isSubtypeOf(inflexibleType, FlexibleTypesKt.flexibility(flexibleType).getUpperBound());
+        return isSubtypeOf(FlexibleTypesKt.asFlexibleType(flexibleType).getLowerBound(), inflexibleType)
+               && isSubtypeOf(inflexibleType, FlexibleTypesKt.asFlexibleType(flexibleType).getUpperBound());
     }
 
     public enum EnrichedProjectionKind {
@@ -197,7 +195,7 @@ public class TypeCheckingProcedure {
     }
 
     private boolean isSubtypeOfForRepresentatives(KotlinType subtype, KotlinType supertype) {
-        if (subtype.isError() || supertype.isError()) {
+        if (KotlinTypeKt.isError(subtype) || KotlinTypeKt.isError(supertype)) {
             return true;
         }
 
@@ -223,7 +221,9 @@ public class TypeCheckingProcedure {
 
     private boolean checkSubtypeForTheSameConstructor(@NotNull KotlinType subtype, @NotNull KotlinType supertype) {
         TypeConstructor constructor = subtype.getConstructor();
-        assert constraints.assertEqualTypeConstructors(constructor, supertype.getConstructor()) : constructor + " is not " + supertype.getConstructor();
+
+        // this assert was moved to checker/utils.kt
+        //assert constraints.assertEqualTypeConstructors(constructor, supertype.getConstructor()) : constructor + " is not " + supertype.getConstructor();
 
         List<TypeProjection> subArguments = subtype.getArguments();
         List<TypeProjection> superArguments = supertype.getArguments();
@@ -240,7 +240,7 @@ public class TypeCheckingProcedure {
 
             if (capture(subArgument, superArgument, parameter)) continue;
 
-            boolean argumentIsErrorType = subArgument.getType().isError() || superArgument.getType().isError();
+            boolean argumentIsErrorType = KotlinTypeKt.isError(subArgument.getType()) || KotlinTypeKt.isError(superArgument.getType());
             if (!argumentIsErrorType && parameter.getVariance() == INVARIANT &&
                 subArgument.getProjectionKind() == INVARIANT && superArgument.getProjectionKind() == INVARIANT) {
                 if (!constraints.assertEqualTypes(subArgument.getType(), superArgument.getType(), this)) return false;
@@ -265,22 +265,19 @@ public class TypeCheckingProcedure {
     }
 
     private boolean capture(
-            @NotNull TypeProjection firstProjection,
-            @NotNull TypeProjection secondProjection,
+            @NotNull TypeProjection subtypeArgumentProjection,
+            @NotNull TypeProjection supertypeArgumentProjection,
             @NotNull TypeParameterDescriptor parameter
     ) {
         // Capturing makes sense only for invariant classes
         if (parameter.getVariance() != INVARIANT) return false;
 
         // Now, both subtype and supertype relations transform to equality constraints on type arguments:
-        // Array<T> is a subtype, supertype or equal to Array<out Int> then T captures a type that extends Int: 'Captured(out Int)'
-        // Array<T> is a subtype, supertype or equal to Array<in Int> then T captures a type that extends Int: 'Captured(in Int)'
+        // Array<out Int> is a subtype or equal to Array<T> then T captures a type that extends Int: 'Captured(out Int)'
+        // Array<in Int> is a subtype or equal to Array<T> then T captures a type that extends Int: 'Captured(in Int)'
 
-        if (firstProjection.getProjectionKind() == INVARIANT && secondProjection.getProjectionKind() != INVARIANT) {
-            return constraints.capture(firstProjection.getType(), secondProjection);
-        }
-        if (firstProjection.getProjectionKind() != INVARIANT && secondProjection.getProjectionKind() == INVARIANT) {
-            return constraints.capture(secondProjection.getType(), firstProjection);
+        if (subtypeArgumentProjection.getProjectionKind() != INVARIANT && supertypeArgumentProjection.getProjectionKind() == INVARIANT) {
+            return constraints.capture(supertypeArgumentProjection.getType(), subtypeArgumentProjection);
         }
         return false;
     }

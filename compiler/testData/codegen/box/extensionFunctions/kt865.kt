@@ -1,5 +1,4 @@
-import java.util.*
-
+// IGNORE_BACKEND: JS_IR
 class Template() {
     val collected = ArrayList<String>()
 

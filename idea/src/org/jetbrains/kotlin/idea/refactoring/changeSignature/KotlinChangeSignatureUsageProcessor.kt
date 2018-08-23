@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,18 +35,25 @@ import com.intellij.refactoring.util.TextOccurrencesUtil
 import com.intellij.usageView.UsageInfo
 import com.intellij.util.containers.HashSet
 import com.intellij.util.containers.MultiMap
-import org.jetbrains.kotlin.asJava.KtLightMethod
+import org.jetbrains.kotlin.asJava.elements.KtLightMethod
 import org.jetbrains.kotlin.asJava.namedUnwrappedElement
 import org.jetbrains.kotlin.asJava.toLightMethods
 import org.jetbrains.kotlin.asJava.unwrapped
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.idea.analysis.analyzeInContext
+import org.jetbrains.kotlin.idea.caches.project.getModuleInfo
+import org.jetbrains.kotlin.idea.caches.project.forcedModuleInfo
 import org.jetbrains.kotlin.idea.caches.resolve.*
+import org.jetbrains.kotlin.idea.caches.resolve.util.getJavaMethodDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.util.getJavaOrKotlinMemberDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.util.javaResolutionFacade
 import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
-import org.jetbrains.kotlin.idea.codeInsight.KotlinFileReferencesResolver
 import org.jetbrains.kotlin.idea.core.compareDescriptors
 import org.jetbrains.kotlin.idea.refactoring.*
 import org.jetbrains.kotlin.idea.refactoring.changeSignature.usages.*
+import org.jetbrains.kotlin.idea.refactoring.rename.noReceivers
+import org.jetbrains.kotlin.idea.references.KtArrayAccessReference
+import org.jetbrains.kotlin.idea.references.KtInvokeFunctionReference
 import org.jetbrains.kotlin.idea.references.KtSimpleNameReference
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.idea.search.ideaExtensions.KotlinReferencesSearchOptions
@@ -100,8 +107,8 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
 
         result.add(OriginalJavaMethodDescriptorWrapper(info.method))
 
-        if (info is KotlinChangeInfo) {
-            findAllMethodUsages(info, result)
+        if (info is KotlinChangeInfoWrapper) {
+            findAllMethodUsages(info.delegate!!, result)
         }
         else {
             findSAMUsages(info, result)
@@ -189,7 +196,7 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
                             result.add(
                                     object : UnresolvableCollisionUsageInfo(callElement, null) {
                                         override fun getDescription(): String {
-                                            val signature = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.render(callerDescriptor)
+                                            val signature = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.render(callerDescriptor)
                                             return "There is already a variable '$currentName' in $signature. It will conflict with the new parameter."
                                         }
                                     }
@@ -227,26 +234,30 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
         val functionPsi = functionUsageInfo.element ?: return
 
         for (reference in findReferences(functionPsi)) {
-            val element = reference.element
+            val element = reference.element ?: continue
 
-            if (functionPsi is KtClass && reference.resolve() !== functionPsi) continue
+            when {
+                reference is KtInvokeFunctionReference || reference is KtArrayAccessReference -> {
+                    result.add(KotlinByConventionCallUsage(element as KtExpression, functionUsageInfo))
+                }
 
-            if (element is KtReferenceExpression) {
-                var parent = element.parent
+                element is KtReferenceExpression -> {
+                    var parent = element.parent
 
-                when {
-                    parent is KtCallExpression ->
-                        result.add(KotlinFunctionCallUsage(parent, functionUsageInfo))
+                    when {
+                        parent is KtCallExpression ->
+                            result.add(KotlinFunctionCallUsage(parent, functionUsageInfo))
 
-                    parent is KtUserType && parent.parent is KtTypeReference -> {
-                        parent = parent.parent.parent
+                        parent is KtUserType && parent.parent is KtTypeReference -> {
+                            parent = parent.parent.parent
 
-                        if (parent is KtConstructorCalleeExpression && parent.parent is KtSuperTypeCallEntry)
-                            result.add(KotlinFunctionCallUsage(parent.parent as KtSuperTypeCallEntry, functionUsageInfo))
+                            if (parent is KtConstructorCalleeExpression && parent.parent is KtSuperTypeCallEntry)
+                                result.add(KotlinFunctionCallUsage(parent.parent as KtSuperTypeCallEntry, functionUsageInfo))
+                        }
+
+                        element is KtSimpleNameExpression && (functionPsi is KtProperty || functionPsi is KtParameter) ->
+                            result.add(KotlinPropertyCallUsage(element))
                     }
-
-                    element is KtSimpleNameExpression && (functionPsi is KtProperty || functionPsi is KtParameter) ->
-                        result.add(KotlinPropertyCallUsage(element))
                 }
             }
         }
@@ -290,11 +301,11 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             }
         }
 
-        if (isDataClass) {
+        if (isDataClass && !changeInfo.hasAppendedParametersOnly()) {
             (functionPsi as KtPrimaryConstructor).valueParameters.firstOrNull()?.let {
                 ReferencesSearch.search(it).mapNotNullTo(result) {
-                    val destructuringDeclaration = it.element as? KtDestructuringDeclaration ?: return@mapNotNullTo null
-                    KotlinComponentUsageInDestructuring(destructuringDeclaration)
+                    val destructuringEntry = it.element as? KtDestructuringDeclarationEntry ?: return@mapNotNullTo null
+                    KotlinComponentUsageInDestructuring(destructuringEntry)
                 }
             }
         }
@@ -305,7 +316,7 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
 
         if (functionPsi is KtClass && functionPsi.isEnum()) {
             for (declaration in functionPsi.declarations) {
-                if (declaration is KtEnumEntry && declaration.getSuperTypeListEntries().isEmpty()) {
+                if (declaration is KtEnumEntry && declaration.superTypeListEntries.isEmpty()) {
                     result.add(KotlinEnumEntryWithoutSuperCallUsage(declaration))
                 }
             }
@@ -401,7 +412,7 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
         if (method.containingClass == null) return
 
         val containingDescriptor = method.getJavaMethodDescriptor()?.containingDeclaration as? JavaClassDescriptor ?: return
-        if (containingDescriptor.functionTypeForSamInterface == null) return
+        if (containingDescriptor.defaultFunctionTypeForSamInterface == null) return
         val samClass = method.containingClass ?: return
 
         for (ref in ReferencesSearch.search(samClass)) {
@@ -431,12 +442,15 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
 
     private fun findKotlinOverrides(changeInfo: ChangeInfo, result: MutableSet<UsageInfo>) {
         val method = changeInfo.method as? PsiMethod ?: return
+        val methodDescriptor = method.getJavaMethodDescriptor() ?: return
+
+        val baseFunctionInfo = KotlinCallableDefinitionUsage<PsiElement>(method, methodDescriptor, null, null)
 
         for (overridingMethod in OverridingMethodsSearch.search(method)) {
             val unwrappedElement = overridingMethod.namedUnwrappedElement as? KtNamedFunction ?: continue
-            val functionDescriptor = unwrappedElement.resolveToDescriptorIfAny() as? FunctionDescriptor ?: continue
+            val functionDescriptor = unwrappedElement.resolveToDescriptorIfAny() ?: continue
             result.add(DeferredJavaMethodOverrideOrSAMUsage(unwrappedElement, functionDescriptor, null))
-            findDeferredUsagesOfParameters(changeInfo, result, unwrappedElement, functionDescriptor)
+            findDeferredUsagesOfParameters(changeInfo, result, unwrappedElement, functionDescriptor, baseFunctionInfo)
         }
     }
 
@@ -463,8 +477,9 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             changeInfo: ChangeInfo,
             result: MutableSet<UsageInfo>,
             function: KtNamedFunction,
-            functionDescriptor: FunctionDescriptor) {
-        val functionInfoForParameters = KotlinCallableDefinitionUsage<PsiElement>(function, functionDescriptor, null, null)
+            functionDescriptor: FunctionDescriptor,
+            baseFunctionInfo: KotlinCallableDefinitionUsage<PsiElement>) {
+        val functionInfoForParameters = KotlinCallableDefinitionUsage<PsiElement>(function, functionDescriptor, baseFunctionInfo, null)
         val oldParameters = function.valueParameters
         val parameters = changeInfo.newParameters
         for ((paramIndex, parameterInfo) in parameters.withIndex()) {
@@ -507,13 +522,14 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             refUsages.set(adjustedUsages.toTypedArray())
         }
 
-        if (info !is KotlinChangeInfo) return result
+        if (info !is KotlinChangeInfoWrapper) return result
+
+        val ktChangeInfo = info.delegate!!
 
         val parameterNames = HashSet<String>()
         val function = info.method
-        val element = function
-        val bindingContext = (element as KtElement).analyze(BodyResolveMode.FULL)
-        val oldDescriptor = info.originalBaseFunctionDescriptor
+        val bindingContext = (function as KtElement).analyze(BodyResolveMode.FULL)
+        val oldDescriptor = ktChangeInfo.originalBaseFunctionDescriptor
         val containingDeclaration = oldDescriptor.containingDeclaration
 
         val parametersScope = when {
@@ -527,32 +543,35 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
 
         val callableScope = oldDescriptor.getContainingScope()
 
-        val kind = info.kind
+        val kind = ktChangeInfo.kind
         if (!kind.isConstructor && callableScope != null && !info.newName.isEmpty()) {
             val newName = Name.identifier(info.newName)
             val conflicts = if (oldDescriptor is FunctionDescriptor)
                 callableScope.getAllAccessibleFunctions(newName)
             else
                 callableScope.getAllAccessibleVariables(newName)
+            val newTypes = info.newParameters.map { it.currentTypeInfo.type }
             for (conflict in conflicts) {
                 if (conflict === oldDescriptor) continue
 
                 val conflictElement = DescriptorToSourceUtils.descriptorToDeclaration(conflict)
                 if (conflictElement === info.method) continue
 
-                if (conflict.valueParameters.map { it.type } == oldDescriptor.valueParameters.map { it.type }) {
+                val candidateTypes = listOfNotNull(conflict.extensionReceiverParameter?.type) + conflict.valueParameters.map { it.type }
+
+                if (candidateTypes == newTypes) {
                     result.putValue(conflictElement, "Function already exists: '" + DescriptorRenderer.SHORT_NAMES_IN_TYPES.render(conflict) + "'")
                     break
                 }
             }
         }
 
-        for (parameter in info.getNonReceiverParameters()) {
+        for (parameter in ktChangeInfo.getNonReceiverParameters()) {
             val valOrVar = parameter.valOrVar
             val parameterName = parameter.name
 
             if (!parameterNames.add(parameterName)) {
-                result.putValue(element, "Duplicating parameter '$parameterName'")
+                result.putValue(function, "Duplicating parameter '$parameterName'")
             }
 
             if (parametersScope != null) {
@@ -575,19 +594,19 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             }
         }
 
-        val newReceiverInfo = info.receiverParameterInfo
-        val originalReceiverInfo = info.methodDescriptor.receiver
+        val newReceiverInfo = ktChangeInfo.receiverParameterInfo
+        val originalReceiverInfo = ktChangeInfo.methodDescriptor.receiver
         if (function is KtCallableDeclaration && newReceiverInfo != originalReceiverInfo) {
             findReceiverIntroducingConflicts(result, function, newReceiverInfo)
             findInternalExplicitReceiverConflicts(refUsages.get(), result, originalReceiverInfo)
-            findReceiverToParameterInSafeCallsConflicts(refUsages.get(), result, info)
-            findThisLabelConflicts(refUsages, result, info, function)
+            findReceiverToParameterInSafeCallsConflicts(refUsages.get(), result, ktChangeInfo)
+            findThisLabelConflicts(refUsages, result, ktChangeInfo, function)
         }
 
         for (usageInfo in usageInfos) {
             if (usageInfo !is KotlinCallerUsage) continue
             val callerDescriptor = usageInfo.element?.resolveToDescriptorIfAny() ?: continue
-            findParameterDuplicationInCaller(result, info, usageInfo.element!!, callerDescriptor)
+            findParameterDuplicationInCaller(result, ktChangeInfo, usageInfo.element!!, callerDescriptor)
         }
 
         return result
@@ -600,7 +619,7 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             callerDescriptor: DeclarationDescriptor) {
         val valueParameters = caller.getValueParameters()
         val existingParameters = valueParameters.associateBy { it.name }
-        val signature = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.render(callerDescriptor)
+        val signature = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.render(callerDescriptor)
         for (parameterInfo in changeInfo.getNonReceiverParameters()) {
             if (!(parameterInfo.isNewParameter)) continue
 
@@ -658,16 +677,20 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
     ) {
         if (originalReceiverInfo != null) return
 
-        for (usageInfo in usages) {
-            if (!(usageInfo is KotlinFunctionCallUsage || usageInfo is KotlinPropertyCallUsage)) continue
+        loop@ for (usageInfo in usages) {
+            if (!(usageInfo is KotlinFunctionCallUsage || usageInfo is KotlinPropertyCallUsage || usageInfo is KotlinByConventionCallUsage)) continue
 
             val callElement = usageInfo.element as? KtElement ?: continue
-
             val parent = callElement.parent
-            if (parent is KtQualifiedExpression && parent.selectorExpression === callElement) {
-                val message = "Explicit receiver is already present in call element: " + CommonRefactoringUtil.htmlEmphasize(parent.text)
-                result.putValue(callElement, message)
+
+            val elementToReport = when {
+                usageInfo is KotlinByConventionCallUsage -> callElement
+                parent is KtQualifiedExpression && parent.selectorExpression === callElement -> parent
+                else -> continue@loop
             }
+
+            val message = "Explicit receiver is already present in call element: " + CommonRefactoringUtil.htmlEmphasize(elementToReport.text)
+            result.putValue(callElement, message)
         }
     }
 
@@ -698,9 +721,14 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
             callable: PsiElement,
             newReceiverInfo: KotlinParameterInfo?) {
         if (newReceiverInfo != null && (callable is KtNamedFunction) && callable.bodyExpression != null) {
-            val noReceiverRefToContext = KotlinFileReferencesResolver.resolve(callable, true, true).filter {
-                val resolvedCall = it.key.getResolvedCall(it.value)
-                resolvedCall != null && resolvedCall.dispatchReceiver == null && resolvedCall.extensionReceiver == null
+            val originalContext = callable.analyzeWithContent()
+
+            val noReceiverRefs = ArrayList<KtSimpleNameExpression>()
+            callable.forEachDescendantOfType<KtSimpleNameExpression> {
+                val resolvedCall = it.getResolvedCall(originalContext) ?: return@forEachDescendantOfType
+                if (resolvedCall.noReceivers()) {
+                    noReceiverRefs += it
+                }
             }
 
             val psiFactory = KtPsiFactory(callable.project)
@@ -712,7 +740,7 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
 
             val originalOffset = callable.bodyExpression!!.textOffset
             val newBody = functionWithReceiver.bodyExpression ?: return
-            for ((originalRef, originalContext) in noReceiverRefToContext.entries) {
+            for (originalRef in noReceiverRefs) {
                 val newRef = newBody
                         .findElementAt(originalRef.textOffset - originalOffset)
                         ?.getNonStrictParentOfType<KtReferenceExpression>()
@@ -815,9 +843,10 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
         val isJavaMethodUsage = isJavaMethodUsage(usageInfo)
 
         if (usageInfo is KotlinWrapperForJavaUsageInfos) {
-            val javaChangeInfos = (changeInfo as KotlinChangeInfo).getOrCreateJavaChangeInfos() ?: return true
+            val ktChangeInfo = (changeInfo as KotlinChangeInfoWrapper).delegate!!
+            val javaChangeInfos = ktChangeInfo.getOrCreateJavaChangeInfos() ?: return true
             javaChangeInfos.firstOrNull {
-                changeInfo.originalToCurrentMethods[usageInfo.javaChangeInfo.method] == it.method
+                ktChangeInfo.originalToCurrentMethods[usageInfo.javaChangeInfo.method] == it.method
             }?.let { javaChangeInfo ->
                 val nullabilityPropagator = NullabilityPropagator(javaChangeInfo.method)
                 val javaUsageInfos = usageInfo.javaUsageInfos
@@ -843,7 +872,11 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
         }
 
         if (beforeMethodChange) {
-            if (method !is PsiMethod || initializedOriginalDescriptor) return true
+            if (usageInfo is KotlinUsageInfo<*>) {
+                usageInfo.preprocessUsage()
+            }
+
+            if (method !is PsiMethod || initializedOriginalDescriptor) return false
 
             val descriptorWrapper = usages.firstIsInstanceOrNull<OriginalJavaMethodDescriptorWrapper>()
             if (descriptorWrapper == null || descriptorWrapper.originalJavaMethodDescriptor != null) return true
@@ -881,7 +914,8 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
                 val descriptorWrapper = usages.firstIsInstanceOrNull<OriginalJavaMethodDescriptorWrapper>()
                 val methodDescriptor = (descriptorWrapper?.originalJavaMethodDescriptor) ?: return true
 
-                val javaMethodChangeInfo = changeInfo.toJetChangeInfo(methodDescriptor)
+                val resolutionFacade = (methodDescriptor.method as? PsiMethod)?.javaResolutionFacade() ?: return false
+                val javaMethodChangeInfo = changeInfo.toJetChangeInfo(methodDescriptor, resolutionFacade)
                 for (info in usages) {
                     (info as? JavaMethodKotlinUsageWithDelegate<*>)?.javaMethodChangeInfo = javaMethodChangeInfo
                 }
@@ -902,25 +936,25 @@ class KotlinChangeSignatureUsageProcessor : ChangeSignatureUsageProcessor {
         }
 
         @Suppress("UNCHECKED_CAST")
-        return (usageInfo as? KotlinUsageInfo<PsiElement>)?.processUsage(changeInfo as KotlinChangeInfo, element, usages) ?: false
+        return (usageInfo as? KotlinUsageInfo<PsiElement>)?.processUsage((changeInfo as KotlinChangeInfoWrapper).delegate!!, element, usages) ?: false
     }
 
     override fun processPrimaryMethod(changeInfo: ChangeInfo): Boolean {
         val ktChangeInfo = when (changeInfo) {
-            is KotlinChangeInfo -> changeInfo
+            is KotlinChangeInfoWrapper -> changeInfo.delegate!!
             is JavaChangeInfo -> {
                 val method = changeInfo.method as? KtLightMethod ?: return false
-                var baseFunction = method.getOrigin() ?: return false
+                var baseFunction = method.kotlinOrigin ?: return false
                 if (baseFunction is KtClass) {
                     baseFunction = baseFunction.createPrimaryConstructorIfAbsent()
                 }
                 val resolutionFacade = baseFunction.getResolutionFacade()
-                val baseFunctionDescriptor = resolutionFacade.resolveToDescriptor(baseFunction) as FunctionDescriptor
+                val baseFunctionDescriptor = baseFunction.unsafeResolveToDescriptor() as FunctionDescriptor
                 val methodDescriptor = KotlinChangeSignatureData(baseFunctionDescriptor, baseFunction, listOf(baseFunctionDescriptor))
 
                 val dummyClass = JavaPsiFacade.getElementFactory(method.project).createClass("Dummy")
                 val dummyMethod = createJavaMethod(method, dummyClass)
-                dummyMethod.containingFile.moduleInfo = baseFunction.getModuleInfo()
+                dummyMethod.containingFile.forcedModuleInfo = baseFunction.getModuleInfo()
                 try {
                     changeInfo.updateMethod(dummyMethod)
                     JavaChangeSignatureUsageProcessor().processPrimaryMethod(changeInfo)

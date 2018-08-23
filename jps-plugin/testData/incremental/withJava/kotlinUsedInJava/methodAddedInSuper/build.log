@@ -1,12 +1,13 @@
 ================ Step #1 =================
 
 Cleaning output files:
+  out/production/module/META-INF/module.kotlin_module
   out/production/module/Super.class
 End of files
 Compiling files:
   src/Super.kt
 End of files
-Exit code: ADDITIONAL_PASS_REQUIRED
+Exit code: OK
 ------------------------------------------
 Cleaning output files:
   out/production/module/Sub.class
@@ -17,4 +18,5 @@ Compiling files:
   src/Sub.java
 End of files
 COMPILATION FAILED
-y() in Sub cannot override y() in Super; overridden method is final
+y() in Sub cannot override y() in Super
+  overridden method is final

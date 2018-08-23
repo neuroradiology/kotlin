@@ -1,19 +1,22 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 @file:kotlin.jvm.JvmMultifileClass
 @file:kotlin.jvm.JvmName("MapsKt")
 
 package kotlin.collections
-
-import java.util.*
 
 /**
  * Returns the value for the given key, or the implicit default value for this map.
  * By default no implicit value is provided for maps and a [NoSuchElementException] is thrown.
  * To create a map with implicit default value use [withDefault] method.
  *
- * @throws NoSuchElementException when the map doesn't contain value for the specified key and no implicit default was provided for that map.
+ * @throws NoSuchElementException when the map doesn't contain a value for the specified key and no implicit default was provided for that map.
  */
 @kotlin.jvm.JvmName("getOrImplicitDefaultNullable")
-@kotlin.internal.InlineExposed
+@PublishedApi
 internal fun <K, V> Map<K, V>.getOrImplicitDefault(key: K): V {
     if (this is MapWithDefault)
         return this.getOrImplicitDefault(key)
@@ -23,46 +26,45 @@ internal fun <K, V> Map<K, V>.getOrImplicitDefault(key: K): V {
 
 /**
  * Returns a wrapper of this read-only map, having the implicit default value provided with the specified function [defaultValue].
- * This implicit default value is used when properties are delegated to the returned map,
- * and that map doesn't contain value for the key specified.
  *
- * When this map already have an implicit default value provided with a former call to [withDefault], it is being replaced by this call.
+ * This implicit default value is used when the original map doesn't contain a value for the key specified
+ * and a value is obtained with [Map.getValue] function, for example when properties are delegated to the map.
+ *
+ * When this map already has an implicit default value provided with a former call to [withDefault], it is being replaced by this call.
  */
 public fun <K, V> Map<K, V>.withDefault(defaultValue: (key: K) -> V): Map<K, V> =
-        when (this) {
-            is MapWithDefault -> this.map.withDefault(defaultValue)
-            else -> MapWithDefaultImpl(this, defaultValue)
-        }
+    when (this) {
+        is MapWithDefault -> this.map.withDefault(defaultValue)
+        else -> MapWithDefaultImpl(this, defaultValue)
+    }
 
 /**
  * Returns a wrapper of this mutable map, having the implicit default value provided with the specified function [defaultValue].
- * This implicit default value is used when properties are delegated to the returned map,
- * and that map doesn't contain value for the key specified.
  *
- * When this map already have an implicit default value provided with a former call to [withDefault], it is being replaced by this call.
+ * This implicit default value is used when the original map doesn't contain a value for the key specified
+ * and a value is obtained with [Map.getValue] function, for example when properties are delegated to the map.
+ *
+ * When this map already has an implicit default value provided with a former call to [withDefault], it is being replaced by this call.
  */
 @kotlin.jvm.JvmName("withDefaultMutable")
 public fun <K, V> MutableMap<K, V>.withDefault(defaultValue: (key: K) -> V): MutableMap<K, V> =
-        when (this) {
-            is MutableMapWithDefault -> this.map.withDefault(defaultValue)
-            else -> MutableMapWithDefaultImpl(this, defaultValue)
-        }
+    when (this) {
+        is MutableMapWithDefault -> this.map.withDefault(defaultValue)
+        else -> MutableMapWithDefaultImpl(this, defaultValue)
+    }
 
 
-
-
-
-private interface MapWithDefault<K, out V>: Map<K, V> {
+private interface MapWithDefault<K, out V> : Map<K, V> {
     public val map: Map<K, V>
     public fun getOrImplicitDefault(key: K): V
 }
 
-private interface MutableMapWithDefault<K, V>: MutableMap<K, V>, MapWithDefault<K, V> {
+private interface MutableMapWithDefault<K, V> : MutableMap<K, V>, MapWithDefault<K, V> {
     public override val map: MutableMap<K, V>
 }
 
 
-private class MapWithDefaultImpl<K, out V>(public override val map: Map<K,V>, private val default: (key: K) -> V) : MapWithDefault<K, V> {
+private class MapWithDefaultImpl<K, out V>(public override val map: Map<K, V>, private val default: (key: K) -> V) : MapWithDefault<K, V> {
     override fun equals(other: Any?): Boolean = map.equals(other)
     override fun hashCode(): Int = map.hashCode()
     override fun toString(): String = map.toString()
@@ -78,7 +80,7 @@ private class MapWithDefaultImpl<K, out V>(public override val map: Map<K,V>, pr
     override fun getOrImplicitDefault(key: K): V = map.getOrElseNullable(key, { default(key) })
 }
 
-private class MutableMapWithDefaultImpl<K, V>(public override val map: MutableMap<K, V>, private val default: (key: K) -> V): MutableMapWithDefault<K, V> {
+private class MutableMapWithDefaultImpl<K, V>(public override val map: MutableMap<K, V>, private val default: (key: K) -> V) : MutableMapWithDefault<K, V> {
     override fun equals(other: Any?): Boolean = map.equals(other)
     override fun hashCode(): Int = map.hashCode()
     override fun toString(): String = map.toString()
@@ -93,7 +95,7 @@ private class MutableMapWithDefaultImpl<K, V>(public override val map: MutableMa
 
     override fun put(key: K, value: V): V? = map.put(key, value)
     override fun remove(key: K): V? = map.remove(key)
-    override fun putAll(m: Map<out K, V>) = map.putAll(m)
+    override fun putAll(from: Map<out K, V>) = map.putAll(from)
     override fun clear() = map.clear()
 
     override fun getOrImplicitDefault(key: K): V = map.getOrElseNullable(key, { default(key) })

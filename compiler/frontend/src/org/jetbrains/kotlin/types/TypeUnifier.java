@@ -16,14 +16,15 @@
 
 package org.jetbrains.kotlin.types;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.kotlin.utils.CollectionsKt;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 public class TypeUnifier {
 
@@ -100,7 +101,7 @@ public class TypeUnifier {
 
         // Foo ~ X  =>  x |-> Foo
         TypeConstructor maybeVariable = withVariables.getConstructor();
-        if (isVariable.apply(maybeVariable)) {
+        if (isVariable.test(maybeVariable)) {
             result.put(maybeVariable, new TypeProjectionImpl(knownProjectionKind, known));
             return;
         }
@@ -138,8 +139,8 @@ public class TypeUnifier {
 
     private static class UnificationResultImpl implements UnificationResult {
         private boolean success = true;
-        private final Map<TypeConstructor, TypeProjection> substitution = Maps.newHashMapWithExpectedSize(1);
-        private final Set<TypeConstructor> failedVariables = Sets.newHashSetWithExpectedSize(0);
+        private final Map<TypeConstructor, TypeProjection> substitution = CollectionsKt.newHashMapWithExpectedSize(1);
+        private final Set<TypeConstructor> failedVariables = CollectionsKt.newHashSetWithExpectedSize(0);
 
         @Override
         public boolean isSuccess() {

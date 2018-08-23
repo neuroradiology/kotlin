@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 open class A() {
   fun foo() {}
 }
@@ -35,7 +36,7 @@ fun f10(init : A?) {
   if (!(a is B)) {
     return;
   }
-  if (!(a is B)) {
+  if (!(<!USELESS_IS_CHECK!>a is B<!>)) {
     return;
   }
 }
@@ -57,7 +58,7 @@ fun f11(a : A?) {
     is B -> <!DEBUG_INFO_SMARTCAST!>a<!>.bar()
     is A -> <!DEBUG_INFO_SMARTCAST!>a<!>.foo()
     is Any -> <!DEBUG_INFO_SMARTCAST!>a<!>.foo()
-    is Any? -> a.<!UNRESOLVED_REFERENCE!>bar<!>()
+    <!USELESS_IS_CHECK!>is Any?<!> -> a.<!UNRESOLVED_REFERENCE!>bar<!>()
     else -> a?.foo()
   }
 }
@@ -67,12 +68,12 @@ fun f12(a : A?) {
     is B -> <!DEBUG_INFO_SMARTCAST!>a<!>.bar()
     is A -> <!DEBUG_INFO_SMARTCAST!>a<!>.foo()
     is Any -> <!DEBUG_INFO_SMARTCAST!>a<!>.foo();
-    is Any? -> a.<!UNRESOLVED_REFERENCE!>bar<!>()
+    <!USELESS_IS_CHECK!>is Any?<!> -> a.<!UNRESOLVED_REFERENCE!>bar<!>()
     is C -> <!DEBUG_INFO_SMARTCAST!>a<!>.bar()
     else -> a?.foo()
   }
 
-  if (a is Any?) {
+  if (<!USELESS_IS_CHECK!>a is Any?<!>) {
     a?.<!UNRESOLVED_REFERENCE!>bar<!>()
   }
   if (a is B) {
@@ -141,14 +142,14 @@ fun getStringLength(obj : Any) : Char? {
 }
 
 fun toInt(i: Int?): Int = if (i != null) <!DEBUG_INFO_SMARTCAST!>i<!> else 0
-fun illegalWhenBody(a: Any): Int = <!NO_ELSE_IN_WHEN!>when<!>(a) {
+fun illegalWhenBody(a: Any): Int = <!NI;TYPE_MISMATCH!><!NO_ELSE_IN_WHEN!>when<!>(a) {
     is Int -> <!DEBUG_INFO_SMARTCAST!>a<!>
-    is String -> <!TYPE_MISMATCH!>a<!>
-}
+    is String -> <!OI;TYPE_MISMATCH!>a<!>
+}<!>
 fun illegalWhenBlock(a: Any): Int {
     when(a) {
         is Int -> return <!DEBUG_INFO_SMARTCAST!>a<!>
-        is String -> return <!TYPE_MISMATCH!>a<!>
+        is String -> return <!NI;TYPE_MISMATCH, TYPE_MISMATCH!>a<!>
     }
 <!NO_RETURN_IN_FUNCTION_WITH_BLOCK_BODY!>}<!>
 fun declarations(a: Any?) {
@@ -182,7 +183,7 @@ fun returnFunctionLiteral(a: Any?): Function0<Int> {
 }
 
 fun returnFunctionLiteralExpressionBody(a: Any?): Function0<Int> =
-        if (a is Int) { -> <!DEBUG_INFO_SMARTCAST!>a<!> }
+        if (a is Int) { -> <!NI;TYPE_MISMATCH, NI;TYPE_MISMATCH, NI;TYPE_MISMATCH, NI;TYPE_MISMATCH, OI;DEBUG_INFO_SMARTCAST!>a<!> }
         else { -> 1 }
 
 
@@ -197,7 +198,7 @@ fun mergeSmartCasts(a: Any?) {
   when (a) {
     is String, is Any -> a.<!UNRESOLVED_REFERENCE!>compareTo<!>("")
   }
-  if (a is String && a is Any) {
+  if (a is String && <!USELESS_IS_CHECK!>a is Any<!>) {
     val <!UNUSED_VARIABLE!>i<!>: Int = <!DEBUG_INFO_SMARTCAST!>a<!>.compareTo("")
   }
   if (a is String && <!DEBUG_INFO_SMARTCAST!>a<!>.compareTo("") == 0) {}
@@ -221,7 +222,7 @@ fun f(): String {
 fun foo(aa: Any?): Int {
     var a = aa
     if (a is Int?) {
-        return <!TYPE_MISMATCH!>a<!>
+        return <!NI;TYPE_MISMATCH, TYPE_MISMATCH!>a<!>
     }
     return 1
 }

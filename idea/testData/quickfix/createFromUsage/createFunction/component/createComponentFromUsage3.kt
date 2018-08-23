@@ -1,14 +1,14 @@
-// "Create extension function 'component2'" "true"
+// "Create extension function 'Any.component2'" "true"
 // WITH_RUNTIME
 class FooIterator<T> {
     operator fun hasNext(): Boolean { return false }
     operator fun next(): Any {
-        throw UnsupportedOperationException("not implemented")
+        TODO("not implemented")
     }
 }
 class Foo<T> {
     operator fun iterator(): FooIterator<String> {
-        throw UnsupportedOperationException("not implemented")
+        TODO("not implemented")
     }
 }
 operator fun Any.component1(): Int {

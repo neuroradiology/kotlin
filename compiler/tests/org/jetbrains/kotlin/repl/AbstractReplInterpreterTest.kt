@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,18 @@
 package org.jetbrains.kotlin.repl
 
 import com.intellij.openapi.util.text.StringUtil
-import com.intellij.testFramework.UsefulTestCase
+import org.jetbrains.kotlin.cli.common.repl.ReplEvalResult
+import org.jetbrains.kotlin.cli.jvm.repl.configuration.ConsoleReplConfiguration
 import org.jetbrains.kotlin.cli.jvm.repl.ReplInterpreter
 import org.jetbrains.kotlin.test.ConfigurationKind
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.jetbrains.kotlin.test.TestJdkKind
+import org.jetbrains.kotlin.test.testFramework.KtUsefulTestCase
 import org.junit.Assert
 import java.io.File
 import java.io.PrintWriter
 import java.util.*
 import java.util.regex.Pattern
-import kotlin.text.Regex
 
 // Switch this flag to render bytecode after each line in the REPL test. Useful for debugging verify errors or other codegen problems
 private val DUMP_BYTECODE = false
@@ -37,8 +38,9 @@ private val INCOMPLETE_PATTERN = Pattern.compile("\\.\\.\\.( *)(.*)$")
 private val TRAILING_NEWLINE_REGEX = Regex("\n$")
 
 private val INCOMPLETE_LINE_MESSAGE = "incomplete line"
+private val HISTORY_MISMATCH_LINE_MESSAGE = "history mismatch"
 
-abstract class AbstractReplInterpreterTest : UsefulTestCase() {
+abstract class AbstractReplInterpreterTest : KtUsefulTestCase() {
     init {
         System.setProperty("java.awt.headless", "true")
     }
@@ -81,8 +83,8 @@ abstract class AbstractReplInterpreterTest : UsefulTestCase() {
     }
 
     protected fun doTest(path: String) {
-        val configuration = KotlinTestUtils.compilerConfigurationForTests(ConfigurationKind.ALL, TestJdkKind.MOCK_JDK)
-        val repl = ReplInterpreter(testRootDisposable!!, configuration, false, null)
+        val configuration = KotlinTestUtils.newConfiguration(ConfigurationKind.ALL, TestJdkKind.MOCK_JDK)
+        val repl = ReplInterpreter(testRootDisposable, configuration, ConsoleReplConfiguration())
 
         for ((code, expected) in loadLines(File(path))) {
             val lineResult = repl.eval(code)
@@ -91,11 +93,12 @@ abstract class AbstractReplInterpreterTest : UsefulTestCase() {
                 repl.dumpClasses(PrintWriter(System.out))
             }
 
-            val actual = when (lineResult.type) {
-                ReplInterpreter.LineResultType.SUCCESS -> if (!lineResult.isUnit) "${lineResult.value}" else ""
-                ReplInterpreter.LineResultType.RUNTIME_ERROR,
-                ReplInterpreter.LineResultType.COMPILE_ERROR -> lineResult.errorText
-                ReplInterpreter.LineResultType.INCOMPLETE -> INCOMPLETE_LINE_MESSAGE
+            val actual = when (lineResult) {
+                is ReplEvalResult.ValueResult -> lineResult.value.toString()
+                is ReplEvalResult.Error -> lineResult.message
+                is ReplEvalResult.Incomplete -> INCOMPLETE_LINE_MESSAGE
+                is ReplEvalResult.UnitResult -> ""
+                is ReplEvalResult.HistoryMismatch -> HISTORY_MISMATCH_LINE_MESSAGE
             }
 
             Assert.assertEquals(

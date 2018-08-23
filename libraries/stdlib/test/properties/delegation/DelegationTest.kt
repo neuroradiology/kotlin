@@ -1,11 +1,15 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package test.properties.delegation
 
-import org.junit.Test as test
 import kotlin.test.*
 import kotlin.properties.*
 
 class NotNullVarTest() {
-    @test fun doTest() {
+    @Test fun doTest() {
         NotNullVarTestGeneric("a", "b").doTest()
     }
 }
@@ -27,11 +31,12 @@ class ObservablePropertyTest {
 
     var b: Int by Delegates.observable(1, { property, old, new ->
         assertEquals("b", property.name)
+        if (!result) assertEquals(1, old)
         result = true
         assertEquals(new, b, "New value has already been set")
     })
 
-    @test fun doTest() {
+    @Test fun doTest() {
         b = 4
         assertTrue(b == 4, "fail: b != 4")
         assertTrue(result, "fail: result should be true")
@@ -49,7 +54,7 @@ class VetoablePropertyTest {
         result
     })
 
-    @test fun doTest() {
+    @Test fun doTest() {
         val firstValue = A(true)
         b = firstValue
         assertTrue(b == firstValue, "fail1: b should be firstValue = A(true)")

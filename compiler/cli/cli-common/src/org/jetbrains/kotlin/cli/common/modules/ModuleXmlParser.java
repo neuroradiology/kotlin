@@ -22,7 +22,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.cli.common.messages.MessageCollector;
 import org.jetbrains.kotlin.cli.common.messages.MessageCollectorUtil;
-import org.jetbrains.kotlin.cli.common.messages.OutputMessageUtil;
 import org.jetbrains.kotlin.modules.JavaRootPath;
 import org.jetbrains.kotlin.modules.Module;
 import org.xml.sax.Attributes;
@@ -35,7 +34,6 @@ import javax.xml.parsers.SAXParserFactory;
 import java.io.*;
 import java.util.List;
 
-import static org.jetbrains.kotlin.cli.common.messages.CompilerMessageLocation.NO_LOCATION;
 import static org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.ERROR;
 
 public class ModuleXmlParser {
@@ -49,13 +47,15 @@ public class ModuleXmlParser {
     public static final String OUTPUT_DIR = "outputDir";
     public static final String FRIEND_DIR = "friendDir";
     public static final String SOURCES = "sources";
+    public static final String COMMON_SOURCES = "commonSources";
     public static final String JAVA_SOURCE_ROOTS = "javaSourceRoots";
     public static final String JAVA_SOURCE_PACKAGE_PREFIX = "packagePrefix";
     public static final String PATH = "path";
     public static final String CLASSPATH = "classpath";
+    public static final String MODULAR_JDK_ROOT = "modularJdkRoot";
 
     @NotNull
-    public static ModuleScriptData parseModuleScript(
+    public static ModuleChunk parseModuleScript(
             @NotNull String xmlFile,
             @NotNull MessageCollector messageCollector
     ) {
@@ -67,7 +67,7 @@ public class ModuleXmlParser {
         }
         catch (FileNotFoundException e) {
             MessageCollectorUtil.reportException(messageCollector, e);
-            return ModuleScriptData.EMPTY;
+            return ModuleChunk.EMPTY;
         }
         finally {
             StreamUtil.closeStream(stream);
@@ -75,7 +75,7 @@ public class ModuleXmlParser {
     }
 
     private final MessageCollector messageCollector;
-    private final List<Module> modules = new SmartList<Module>();
+    private final List<Module> modules = new SmartList<>();
     private DefaultHandler currentState;
 
     private ModuleXmlParser(@NotNull MessageCollector messageCollector) {
@@ -86,7 +86,7 @@ public class ModuleXmlParser {
         this.currentState = currentState;
     }
 
-    private ModuleScriptData parse(@NotNull InputStream xml) {
+    private ModuleChunk parse(@NotNull InputStream xml) {
         try {
             setCurrentState(initial);
             SAXParser saxParser = SAXParserFactory.newInstance().newSAXParser();
@@ -97,18 +97,15 @@ public class ModuleXmlParser {
                     return currentState;
                 }
             });
-            return new ModuleScriptData(modules);
+            return new ModuleChunk(modules);
         }
-        catch (ParserConfigurationException e) {
+        catch (ParserConfigurationException | IOException e) {
             MessageCollectorUtil.reportException(messageCollector, e);
         }
         catch (SAXException e) {
-            messageCollector.report(ERROR, OutputMessageUtil.renderException(e), NO_LOCATION);
+            messageCollector.report(ERROR, "Build file does not have a valid XML: " + e, null);
         }
-        catch (IOException e) {
-            MessageCollectorUtil.reportException(messageCollector, e);
-        }
-        return ModuleScriptData.EMPTY;
+        return ModuleChunk.EMPTY;
     }
 
     private final DefaultHandler initial = new DefaultHandler() {
@@ -163,6 +160,10 @@ public class ModuleXmlParser {
                 String path = getAttribute(attributes, PATH, qName);
                 moduleBuilder.addSourceFiles(path);
             }
+            else if (COMMON_SOURCES.equalsIgnoreCase(qName)) {
+                String path = getAttribute(attributes, PATH, qName);
+                moduleBuilder.addCommonSourceFiles(path);
+            }
             else if (FRIEND_DIR.equalsIgnoreCase(qName)) {
                 String path = getAttribute(attributes, PATH, qName);
                 moduleBuilder.addFriendDir(path);
@@ -175,6 +176,10 @@ public class ModuleXmlParser {
                 String path = getAttribute(attributes, PATH, qName);
                 String packagePrefix = getNullableAttribute(attributes, JAVA_SOURCE_PACKAGE_PREFIX);
                 moduleBuilder.addJavaSourceRoot(new JavaRootPath(path, packagePrefix));
+            }
+            else if (MODULAR_JDK_ROOT.equalsIgnoreCase(qName)) {
+                String path = getAttribute(attributes, PATH, qName);
+                moduleBuilder.setModularJdkRoot(path);
             }
             else {
                 throw createError(qName);

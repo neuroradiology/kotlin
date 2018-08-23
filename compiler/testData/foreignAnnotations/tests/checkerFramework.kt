@@ -1,28 +1,26 @@
 // !DIAGNOSTICS: -UNUSED_VARIABLE -UNUSED_PARAMETER
 // FILE: A.java
 
-import org.checkerframework.checker.nullness.qual.*;
+import org.checkerframework.checker.nullness.compatqual.*;
 
-public class A<T> {
-    @Nullable public String field = null;
+public class A {
+    @NullableDecl public String field = null;
 
-    @Nullable
-    public String foo(@NonNull String x, @Nullable CharSequence y) {
+    @NullableDecl
+    public String foo(@NonNullDecl String x, @NullableDecl CharSequence y) {
         return "";
     }
 
-    @NonNull
+    @NonNullDecl
     public String bar() {
         return "";
     }
 
-    @Nullable
-    public T baz(@NonNull T x) { return x; }
 }
 
 // FILE: main.kt
 
-fun main(a: A<String>, a1: A<String?>) {
+fun main(a: A) {
     a.foo("", null)?.length
     a.foo("", null)<!UNSAFE_CALL!>.<!>length
     a.foo(<!NULL_FOR_NONNULL_TYPE!>null<!>, "")<!UNSAFE_CALL!>.<!>length
@@ -32,11 +30,4 @@ fun main(a: A<String>, a1: A<String?>) {
 
     a.field?.length
     a.field<!UNSAFE_CALL!>.<!>length
-
-    a.baz("")<!UNSAFE_CALL!>.<!>length
-    a.baz("")?.length
-    a.baz(<!NULL_FOR_NONNULL_TYPE!>null<!>)<!UNSAFE_CALL!>.<!>length
-
-    a1.baz("")!!.length
-    a1.baz(<!NULL_FOR_NONNULL_TYPE!>null<!>)!!.length
 }

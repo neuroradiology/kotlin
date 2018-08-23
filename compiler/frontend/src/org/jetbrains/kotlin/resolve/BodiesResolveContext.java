@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,11 @@
 
 package org.jetbrains.kotlin.resolve;
 
-import org.jetbrains.annotations.Mutable;
+import kotlin.annotations.jvm.Mutable;
+import kotlin.annotations.jvm.ReadOnly;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.annotations.ReadOnly;
-import org.jetbrains.kotlin.descriptors.ClassDescriptorWithResolutionScopes;
-import org.jetbrains.kotlin.descriptors.ConstructorDescriptor;
-import org.jetbrains.kotlin.descriptors.PropertyDescriptor;
-import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor;
+import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfo;
 import org.jetbrains.kotlin.resolve.lazy.descriptors.LazyScriptDescriptor;
@@ -41,7 +38,7 @@ public interface BodiesResolveContext {
     @Mutable
     Map<KtAnonymousInitializer, ClassDescriptorWithResolutionScopes> getAnonymousInitializers();
     @Mutable
-    Map<KtSecondaryConstructor, ConstructorDescriptor> getSecondaryConstructors();
+    Map<KtSecondaryConstructor, ClassConstructorDescriptor> getSecondaryConstructors();
     @Mutable
     Map<KtScript, LazyScriptDescriptor> getScripts();
 
@@ -49,6 +46,10 @@ public interface BodiesResolveContext {
     Map<KtProperty, PropertyDescriptor> getProperties();
     @Mutable
     Map<KtNamedFunction, SimpleFunctionDescriptor> getFunctions();
+    @Mutable
+    Map<KtTypeAlias, TypeAliasDescriptor> getTypeAliases();
+    @Mutable
+    Map<KtDestructuringDeclarationEntry, PropertyDescriptor> getDestructuringDeclarationEntries();
 
     @Nullable
     LexicalScope getDeclaringScope(@NotNull KtDeclaration declaration);

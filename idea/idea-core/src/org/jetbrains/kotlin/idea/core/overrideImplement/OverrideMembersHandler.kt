@@ -27,8 +27,7 @@ class OverrideMembersHandler(private val preferConstructorParameters: Boolean = 
     override fun collectMembersToGenerate(descriptor: ClassDescriptor, project: Project): Collection<OverrideMemberChooserObject> {
         val result = ArrayList<OverrideMemberChooserObject>()
         for (member in descriptor.unsubstitutedMemberScope.getContributedDescriptors()) {
-            if (member is CallableMemberDescriptor
-                && (member.kind == CallableMemberDescriptor.Kind.FAKE_OVERRIDE || member.kind == CallableMemberDescriptor.Kind.DELEGATION)) {
+            if (member is CallableMemberDescriptor && (member.kind != CallableMemberDescriptor.Kind.DECLARATION)) {
                 val overridden = member.overriddenDescriptors
                 if (overridden.any { it.modality == Modality.FINAL || Visibilities.isPrivate(it.visibility.normalize()) }) continue
 
@@ -46,13 +45,13 @@ class OverrideMembersHandler(private val preferConstructorParameters: Boolean = 
                     }
                 }
 
-                val realSupers = byOriginalRealSupers.values.map { it.realSuper }
+                val realSupers = byOriginalRealSupers.values.map(Data::realSuper)
                 val nonAbstractRealSupers = realSupers.filter { it.modality != Modality.ABSTRACT }
                 val realSupersToUse = if (nonAbstractRealSupers.isNotEmpty()) {
                     nonAbstractRealSupers
                 }
                 else {
-                    listOf(realSupers.first())
+                    listOf(realSupers.firstOrNull() ?: continue)
                 }
 
                 for (realSuper in realSupersToUse) {
@@ -66,12 +65,16 @@ class OverrideMembersHandler(private val preferConstructorParameters: Boolean = 
                         immediateSupers.singleOrNull { (it.containingDeclaration as? ClassDescriptor)?.kind == ClassKind.CLASS } ?: immediateSupers.first()
                     }
 
-                    val bodyType = if (immediateSuperToUse.modality == Modality.ABSTRACT)
-                        OverrideMemberChooserObject.BodyType.EMPTY
-                    else if (realSupersToUse.size == 1)
-                        OverrideMemberChooserObject.BodyType.SUPER
-                    else
-                        OverrideMemberChooserObject.BodyType.QUALIFIED_SUPER
+                    val bodyType = when {
+                        descriptor.kind == ClassKind.INTERFACE && realSuper.builtIns.isMemberOfAny(realSuper) ->
+                            OverrideMemberChooserObject.BodyType.NO_BODY
+                        immediateSuperToUse.modality == Modality.ABSTRACT ->
+                            OverrideMemberChooserObject.BodyType.EMPTY
+                        realSupersToUse.size == 1 ->
+                            OverrideMemberChooserObject.BodyType.SUPER
+                        else ->
+                            OverrideMemberChooserObject.BodyType.QUALIFIED_SUPER
+                    }
 
                     result.add(OverrideMemberChooserObject.create(project, realSuper, immediateSuperToUse, bodyType, preferConstructorParameters))
                 }

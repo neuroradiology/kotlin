@@ -21,13 +21,14 @@ import com.intellij.find.findUsages.FindUsagesOptions
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiReference
+import com.intellij.psi.impl.light.LightMemberReference
 import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.psi.search.LocalSearchScope
 import com.intellij.psi.search.SearchScope
 import com.intellij.usageView.UsageInfo
 import com.intellij.util.CommonProcessors
 import com.intellij.util.Processor
 import org.jetbrains.kotlin.idea.findUsages.KotlinFindUsagesHandlerFactory
+import org.jetbrains.kotlin.idea.findUsages.KotlinReferencePreservingUsageInfo
 import org.jetbrains.kotlin.idea.findUsages.KotlinReferenceUsageInfo
 import org.jetbrains.kotlin.idea.util.application.runReadAction
 import java.util.*
@@ -41,8 +42,7 @@ abstract class KotlinFindUsagesHandler<T : PsiElement>(psiElement: T,
         return psiElement as T
     }
 
-    constructor(psiElement: T, factory: KotlinFindUsagesHandlerFactory) : this(psiElement, emptyList(), factory) {
-    }
+    constructor(psiElement: T, factory: KotlinFindUsagesHandlerFactory) : this(psiElement, emptyList(), factory)
 
     override fun getPrimaryElements(): Array<PsiElement> {
         return if (elementsToSearch.isEmpty())
@@ -69,20 +69,22 @@ abstract class KotlinFindUsagesHandler<T : PsiElement>(psiElement: T,
         return searchReferences(element, processor, options) && searchTextOccurrences(element, processor, options)
     }
 
-    protected abstract fun searchReferences(element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions): Boolean
+    protected fun searchReferences(element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions): Boolean {
+        val searcher = createSearcher(element, processor, options)
+        if (!runReadAction { searcher.buildTaskList() }) return false
+        return searcher.executeTasks()
+    }
+
+    protected abstract fun createSearcher(element: PsiElement, processor: Processor<UsageInfo>, options: FindUsagesOptions): Searcher
 
     override fun findReferencesToHighlight(target: PsiElement, searchScope: SearchScope): Collection<PsiReference> {
         val results = Collections.synchronizedList(arrayListOf<PsiReference>())
         val options = findUsagesOptions.clone()
         options.searchScope = searchScope
-        val scopeContainingFile = (searchScope as? LocalSearchScope)?.scope?.get(0)?.containingFile
         searchReferences(target, object : Processor<UsageInfo> {
             override fun process(info: UsageInfo): Boolean {
                 val reference = info.reference
                 if (reference != null) {
-                    if (scopeContainingFile != null && reference.element.containingFile != scopeContainingFile) {
-                        LOG.error("findReferencesToHighight() found a reference from a different file: $reference")
-                    }
                     results.add(reference)
                 }
                 return true
@@ -91,11 +93,40 @@ abstract class KotlinFindUsagesHandler<T : PsiElement>(psiElement: T,
         return results
     }
 
+    protected abstract class Searcher(val element: PsiElement, val processor: Processor<UsageInfo>, val options: FindUsagesOptions) {
+        private val tasks = ArrayList<() -> Boolean>()
+
+        /**
+         * Adds a time-consuming operation to be executed outside read-action
+         */
+        protected fun addTask(task: () -> Boolean) {
+            tasks.add(task)
+        }
+
+        /**
+         * Invoked outside read-action
+         */
+        fun executeTasks(): Boolean {
+            return tasks.all { it() }
+        }
+
+        /**
+         * Invoked under read-action, should use [addTask] for all time-consuming operations
+         */
+        abstract fun buildTaskList(): Boolean
+    }
+
     companion object {
         val LOG = Logger.getInstance(KotlinFindUsagesHandler::class.java)
 
         internal fun processUsage(processor: Processor<UsageInfo>, ref: PsiReference): Boolean =
-            processor.processIfNotNull { if (ref.element.isValid) KotlinReferenceUsageInfo(ref) else null }
+            processor.processIfNotNull {
+                when {
+                    ref is LightMemberReference -> KotlinReferencePreservingUsageInfo(ref)
+                    ref.element.isValid -> KotlinReferenceUsageInfo(ref)
+                    else -> null
+                }
+            }
 
         internal fun processUsage(processor: Processor<UsageInfo>, element: PsiElement): Boolean =
             processor.processIfNotNull { if (element.isValid) UsageInfo(element) else null }

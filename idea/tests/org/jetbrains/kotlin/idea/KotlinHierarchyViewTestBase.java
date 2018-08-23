@@ -24,15 +24,15 @@ import org.jetbrains.kotlin.test.KotlinTestUtils;
 public abstract class KotlinHierarchyViewTestBase extends HierarchyViewTestBase {
     @Override
     protected void setUp() throws Exception {
-        super.setUp();
         VfsRootAccess.allowRootAccess(KotlinTestUtils.getHomeDirectory());
-        ConfigLibraryUtil.configureKotlinRuntime(myModule);
+        super.setUp();
+        ConfigLibraryUtil.INSTANCE.configureKotlinRuntime(myModule);
     }
 
     @Override
     protected void tearDown() throws Exception {
-        ConfigLibraryUtil.unConfigureKotlinRuntime(myModule);
-        VfsRootAccess.disallowRootAccess(KotlinTestUtils.getHomeDirectory());
+        ConfigLibraryUtil.INSTANCE.unConfigureKotlinRuntime(myModule);
         super.tearDown();
+        VfsRootAccess.disallowRootAccess(KotlinTestUtils.getHomeDirectory());
     }
 }

@@ -30,15 +30,19 @@ interface ValueResolveContext {
     fun resolve(registration: Type): ValueDescriptor?
 }
 
-class ComponentResolveContext(val container: StorageComponentContainer, val requestingDescriptor: ValueDescriptor) : ValueResolveContext {
-    override fun resolve(registration: Type): ValueDescriptor? = container.resolve(registration, this)
+class ComponentResolveContext(
+        val container: StorageComponentContainer,
+        val requestingDescriptor: ValueDescriptor,
+        val parentContext: ValueResolveContext? = null
+) : ValueResolveContext {
+    override fun resolve(registration: Type): ValueDescriptor? = container.resolve(registration, this) ?: parentContext?.resolve(registration)
 
     override fun toString(): String = "for $requestingDescriptor in $container"
 }
 
 class ConstructorBinding(val constructor: Constructor<*>, val argumentDescriptors: List<ValueDescriptor>)
 
-class MethodBinding(val method: Method, val argumentDescriptors: List<ValueDescriptor>) {
+class MethodBinding(val method: Method, private val argumentDescriptors: List<ValueDescriptor>) {
     fun invoke(instance: Any) {
         val arguments = computeArguments(argumentDescriptors).toTypedArray()
         method.invoke(instance, *arguments)
@@ -48,7 +52,7 @@ class MethodBinding(val method: Method, val argumentDescriptors: List<ValueDescr
 fun computeArguments(argumentDescriptors: List<ValueDescriptor>): List<Any> = argumentDescriptors.map { it.getValue() }
 
 fun Class<*>.bindToConstructor(context: ValueResolveContext): ConstructorBinding {
-    val constructorInfo = getInfo().constructorInfo!!
+    val constructorInfo = getInfo().constructorInfo ?: error("No constructor for $this: ${getInfo()}")
     val candidate = constructorInfo.constructor
     return ConstructorBinding(candidate, candidate.bindArguments(constructorInfo.parameters, context))
 }

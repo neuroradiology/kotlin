@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,18 +27,19 @@ import com.intellij.psi.search.searches.ReferencesSearch
 import org.jetbrains.kotlin.asJava.LightClassUtil
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
 import org.jetbrains.kotlin.diagnostics.Diagnostic
-import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
 import org.jetbrains.kotlin.idea.intentions.SelfTargetingIntention
 import org.jetbrains.kotlin.idea.search.allScope
 import org.jetbrains.kotlin.idea.search.usagesSearch.descriptor
+import org.jetbrains.kotlin.idea.util.findAnnotation
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.psi.KtAnnotationEntry
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtReferenceExpression
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
-import org.jetbrains.kotlin.resolve.BindingContext
-import org.jetbrains.kotlin.resolve.ConstModifierChecker
-import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
+import org.jetbrains.kotlin.resolve.checkers.ConstModifierChecker
 import org.jetbrains.kotlin.resolve.source.PsiSourceElement
 
 class AddConstModifierFix(val property: KtProperty) : AddModifierFix(property, KtTokens.CONST_KEYWORD), CleanupFix {
@@ -47,9 +48,12 @@ class AddConstModifierFix(val property: KtProperty) : AddModifierFix(property, K
     }
 
     companion object {
+        private val removeAnnotations = listOf(FqName("kotlin.jvm.JvmStatic"), FqName("kotlin.jvm.JvmField"))
+
         fun addConstModifier(property: KtProperty) {
             replaceReferencesToGetterByReferenceToField(property)
             property.addModifier(KtTokens.CONST_KEYWORD)
+            removeAnnotations.mapNotNull { property.findAnnotation(it) }.forEach(KtAnnotationEntry::delete)
         }
     }
 }
@@ -66,11 +70,12 @@ class AddConstModifierIntention : SelfTargetingIntention<KtProperty>(KtProperty:
     companion object {
         fun isApplicableTo(element: KtProperty): Boolean {
             if (element.isLocal || element.isVar || element.hasDelegate() || element.initializer == null
-                    || element.getter?.hasBody() == true || element.receiverTypeReference != null) {
+                || element.getter?.hasBody() == true || element.receiverTypeReference != null
+                || element.hasModifier(KtTokens.CONST_KEYWORD) || element.hasModifier(KtTokens.OVERRIDE_KEYWORD)) {
                 return false
             }
             val propertyDescriptor = element.descriptor as? VariableDescriptor ?: return false
-            return ConstModifierChecker.checkCanBeConst(element, element, propertyDescriptor) == null
+            return ConstModifierChecker.canBeConst(element, element, propertyDescriptor)
         }
     }
 }
@@ -79,10 +84,9 @@ class AddConstModifierIntention : SelfTargetingIntention<KtProperty>(KtProperty:
 object ConstFixFactory : KotlinSingleIntentionActionFactory() {
     override fun createAction(diagnostic: Diagnostic): IntentionAction? {
         val expr = diagnostic.psiElement as? KtReferenceExpression ?: return null
-        val bindingContext = expr.analyze(BodyResolveMode.PARTIAL)
-        val targetDescriptor = bindingContext.get(BindingContext.REFERENCE_TARGET, expr) as? VariableDescriptor ?: return null
+        val targetDescriptor = expr.resolveToCall()?.resultingDescriptor as? VariableDescriptor ?: return null
         val declaration = (targetDescriptor.source as? PsiSourceElement)?.psi as? KtProperty ?: return null
-        if (ConstModifierChecker.checkCanBeConst(declaration, declaration, targetDescriptor) == null) {
+        if (ConstModifierChecker.canBeConst(declaration, declaration, targetDescriptor)) {
             return AddConstModifierFix(declaration)
         }
         return null

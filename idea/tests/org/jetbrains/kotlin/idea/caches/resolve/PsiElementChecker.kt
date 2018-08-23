@@ -18,7 +18,8 @@ package org.jetbrains.kotlin.idea.caches.resolve
 
 import com.intellij.openapi.util.Key
 import com.intellij.psi.*
-import org.jetbrains.kotlin.asJava.KtLightElement
+import org.jetbrains.kotlin.asJava.elements.KtLightElement
+import org.jetbrains.kotlin.asJava.elements.KtLightModifierList
 import org.jetbrains.kotlin.idea.KotlinLanguage
 import org.junit.Assert
 
@@ -28,18 +29,18 @@ object PsiElementChecker {
     fun checkPsiElementStructure(lightClass: PsiClass) {
         checkPsiElement(lightClass)
 
-        lightClass.innerClasses.forEach { checkPsiElementStructure(it) }
-
         lightClass.methods.forEach {
             it.parameterList.parameters.forEach { checkPsiElement(it) }
             checkPsiElement(it)
         }
 
         lightClass.fields.forEach { checkPsiElement(it) }
+
+        lightClass.innerClasses.forEach { checkPsiElementStructure(it) }
     }
 
     private fun checkPsiElement(element: PsiElement) {
-        if (element !is KtLightElement<*, *>) return
+        if (element !is KtLightElement<*, *> && element !is KtLightModifierList<*>) return
 
         if (element is PsiModifierListOwner) {
             val modifierList = element.modifierList
@@ -87,7 +88,7 @@ object PsiElementChecker {
                 acceptChildren(PsiElementVisitor.EMPTY_VISITOR)
 
                 val copy = copy()
-                Assert.assertTrue(copy == null || copy.javaClass == this.javaClass)
+                Assert.assertTrue(copy == null || copy::class.java == this::class.java)
 
                 // Modify methods:
                 // add(this)
@@ -122,7 +123,7 @@ object PsiElementChecker {
                 Assert.assertTrue(isEquivalentTo(this))
             }
             catch (t: Throwable) {
-                throw AssertionErrorWithCause("Failed for ${this.javaClass} ${this}", t)
+                throw AssertionErrorWithCause("Failed for ${this::class.java} ${this}", t)
             }
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,21 +18,34 @@ package org.jetbrains.kotlin.idea.parameterInfo
 
 import com.intellij.codeInsight.hint.ShowParameterInfoContext
 import com.intellij.codeInsight.hint.ShowParameterInfoHandler
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiWhiteSpace
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.LightCodeInsightFixtureTestCase
+import com.intellij.util.PathUtil
 import org.jetbrains.kotlin.idea.KotlinLanguage
+import org.jetbrains.kotlin.idea.test.SdkAndMockLibraryProjectDescriptor
 import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
 import org.jetbrains.kotlin.idea.test.ProjectDescriptorWithStdlibSources
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.psiUtil.allChildren
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
+import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.junit.Assert
+import java.io.File
 
 abstract class AbstractParameterInfoTest : LightCodeInsightFixtureTestCase() {
-    override fun getProjectDescriptor() = ProjectDescriptorWithStdlibSources.INSTANCE
+    override fun getProjectDescriptor(): LightProjectDescriptor {
+        val root = KotlinTestUtils.getTestsRoot(this::class.java)
+        if (root.contains("Lib")) {
+            return SdkAndMockLibraryProjectDescriptor("$root/sharedLib", true, true, false, false)
+        }
+
+        return ProjectDescriptorWithStdlibSources.INSTANCE
+    }
 
     override fun setUp() {
         super.setUp()
@@ -40,10 +53,15 @@ abstract class AbstractParameterInfoTest : LightCodeInsightFixtureTestCase() {
     }
 
     protected fun doTest(fileName: String) {
+        val prefix = FileUtil.getNameWithoutExtension(PathUtil.getFileName(fileName))
+        val mainFile = File(FileUtil.toSystemDependentName(fileName))
+        mainFile.parentFile
+            .listFiles { dir, name -> name.startsWith("$prefix.") && name != mainFile.name }
+            .forEach { myFixture.configureByFile(FileUtil.toSystemIndependentName(it.path)) }
+
         myFixture.configureByFile(fileName)
 
         val file = myFixture.file as KtFile
-
         val lastChild = file.allChildren.filter { it !is PsiWhiteSpace }.last()
         val expectedResultText = when (lastChild.node.elementType) {
             KtTokens.BLOCK_COMMENT -> lastChild.text.substring(2, lastChild.text.length - 2).trim()
@@ -51,11 +69,11 @@ abstract class AbstractParameterInfoTest : LightCodeInsightFixtureTestCase() {
             else -> error("Unexpected last file child")
         }
 
-        val context = ShowParameterInfoContext(editor, project, file, editor.caretModel.offset, -1)
+        val context = ShowParameterInfoContext(editor, project, file, editor.caretModel.offset, -1, true)
 
         val handlers = ShowParameterInfoHandler.getHandlers(project, KotlinLanguage.INSTANCE)!!
         val handler = handlers.firstOrNull { it.findElementForParameterInfo(context) != null }
-            ?: error("Could not find parameter info handler")
+                      ?: error("Could not find parameter info handler")
 
         val mockCreateParameterInfoContext = MockCreateParameterInfoContext(file, myFixture)
         val parameterOwner = handler.findElementForParameterInfo(mockCreateParameterInfoContext) as PsiElement
@@ -75,9 +93,10 @@ abstract class AbstractParameterInfoTest : LightCodeInsightFixtureTestCase() {
 
         val parameterInfoUIContext = MockParameterInfoUIContext(parameterOwner, updateContext.currentParameter)
 
-        for (item in mockCreateParameterInfoContext.itemsToShow) {
-            handler.updateUI(item, parameterInfoUIContext)
+        mockCreateParameterInfoContext.itemsToShow?.forEach {
+            handler.updateUI(it, parameterInfoUIContext)
         }
+
         Assert.assertEquals(expectedResultText, parameterInfoUIContext.resultText)
     }
 }

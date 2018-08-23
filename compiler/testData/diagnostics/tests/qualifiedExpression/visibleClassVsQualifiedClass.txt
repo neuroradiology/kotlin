@@ -38,13 +38,6 @@ package some {
 // -- Module: <m3> --
 package
 
-package a {
-
-    public final class b {
-        // -- Module: <m1> --
-    }
-}
-
 package other {
     public fun test(/*0*/ a_: [ERROR : a.b]): kotlin.Unit
 
@@ -77,8 +70,4 @@ package other2 {
 
 package some {
     public fun test(/*0*/ _ab: some.a.b): kotlin.Unit
-
-    public final class a {
-        // -- Module: <m2> --
-    }
 }

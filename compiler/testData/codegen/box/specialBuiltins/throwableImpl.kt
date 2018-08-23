@@ -1,3 +1,4 @@
+// IGNORE_BACKEND: JS_IR
 class MyThrowable(message: String? = null, cause: Throwable? = null) : Throwable(message, cause) {
 
     override val message: String?
@@ -17,5 +18,5 @@ fun box(): String {
         return "OK"
     }
 
-    return "fail: MyThrowable wasn't catched."
+    return "fail: MyThrowable wasn't caught."
 }

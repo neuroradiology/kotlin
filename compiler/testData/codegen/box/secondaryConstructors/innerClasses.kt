@@ -1,6 +1,5 @@
-// TODO enable for JS backend too when KT-4124 will be fixed
-// TARGET_BACKEND: JVM
-
+// IGNORE_BACKEND: JVM_IR
+// IGNORE_BACKEND: JS_IR
 class Outer {
     val outerProp: String
     constructor(x: String) {

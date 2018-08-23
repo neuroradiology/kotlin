@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.jetbrains.kotlin.idea.quickfix;
+package org.jetbrains.kotlin.idea.quickfix
 
 import com.intellij.testFramework.TestDataPath
 import org.jetbrains.kotlin.idea.quickfix.replaceWith.DeprecatedSymbolUsageFix
@@ -32,7 +32,8 @@ import org.junit.runner.RunWith
 
 @TestMetadata("idea/testData/quickfix.special")
 @TestDataPath("\$PROJECT_ROOT")
-@RunWith(JUnit3RunnerWithInners::class) class DeprecatedSymbolUsageFixSpecialTest : KotlinLightCodeInsightFixtureTestCase() {
+@RunWith(JUnit3RunnerWithInners::class)
+class DeprecatedSymbolUsageFixSpecialTest : KotlinLightCodeInsightFixtureTestCase() {
     override fun getTestDataPath() = KotlinTestUtils.getHomeDirectory()
     override fun getProjectDescriptor() = ProjectDescriptorWithStdlibSources.INSTANCE
 

@@ -19,4 +19,13 @@ package org.jetbrains.kotlin.cli.common.arguments;
 public interface K2JsArgumentConstants {
     String CALL = "call";
     String NO_CALL = "noCall";
+
+    String MODULE_PLAIN = "plain";
+    String MODULE_AMD = "amd";
+    String MODULE_COMMONJS = "commonjs";
+    String MODULE_UMD = "umd";
+
+    String SOURCE_MAP_SOURCE_CONTENT_ALWAYS = "always";
+    String SOURCE_MAP_SOURCE_CONTENT_NEVER = "never";
+    String SOURCE_MAP_SOURCE_CONTENT_INLINING = "inlining";
 }

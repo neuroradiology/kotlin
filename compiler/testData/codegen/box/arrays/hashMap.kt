@@ -1,5 +1,4 @@
-import java.util.HashMap
-
+// IGNORE_BACKEND: JS_IR
 operator fun HashMap<String, Int?>.set(index: String, elem: Int?) {
     this.put(index, elem)
 }

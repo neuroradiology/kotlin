@@ -19,35 +19,22 @@ package org.jetbrains.kotlin.idea.refactoring
 import com.google.gson.JsonParser
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.io.FileUtil
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.refactoring.BaseRefactoringProcessor
 import com.intellij.refactoring.classMembers.MemberInfoBase
 import com.intellij.refactoring.util.CommonRefactoringUtil
 import com.intellij.testFramework.fixtures.JavaCodeInsightTestFixture
-import org.jetbrains.kotlin.idea.test.ConfigLibraryUtil
+import org.jetbrains.kotlin.idea.refactoring.memberInfo.KtPsiClassWrapper
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase
-import org.jetbrains.kotlin.idea.test.KotlinWithJdkAndRuntimeLightProjectDescriptor
-import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
 import org.jetbrains.kotlin.psi.NotNullableUserDataProperty
-import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.jetbrains.kotlin.test.util.findElementsByCommentPrefix
 import java.io.File
 
 abstract class AbstractMemberPullPushTest : KotlinLightCodeInsightFixtureTestCase() {
-    private data class ElementInfo(val checked: Boolean, val toAbstract: Boolean)
-
-    companion object {
-        private var PsiElement.elementInfo: ElementInfo
-                by NotNullableUserDataProperty(Key.create("ELEMENT_INFO"), ElementInfo(false, false))
-    }
-
-    override fun getProjectDescriptor() = KotlinWithJdkAndRuntimeLightProjectDescriptor.INSTANCE
-
     val fixture: JavaCodeInsightTestFixture get() = myFixture
-
-    override fun getTestDataPath() = PluginTestCaseBase.getTestDataPathBase()
 
     protected fun doTest(path: String, action: (mainFile: PsiFile) -> Unit) {
         val mainFile = File(path)
@@ -58,27 +45,22 @@ abstract class AbstractMemberPullPushTest : KotlinLightCodeInsightFixtureTestCas
 
         val mainFileName = mainFile.name
         val mainFileBaseName = FileUtil.getNameWithoutExtension(mainFileName)
-        val extraFiles = mainFile.parentFile.listFiles { file, name ->
+        val extraFiles = mainFile.parentFile.listFiles { _, name ->
             name != mainFileName && name.startsWith("$mainFileBaseName.") && (name.endsWith(".kt") || name.endsWith(".java"))
         }
         val extraFilesToPsi = extraFiles.associateBy { fixture.configureByFile(it.name) }
         val file = fixture.configureByFile(mainFileName)
 
-        val addKotlinRuntime = InTextDirectivesUtils.findStringWithPrefixes(file.text, "// WITH_RUNTIME") != null
-        if (addKotlinRuntime) {
-            ConfigLibraryUtil.configureKotlinRuntimeAndSdk(myModule, PluginTestCaseBase.mockJdk())
-        }
-
         try {
-            for ((element, info) in file.findElementsByCommentPrefix("// INFO: ")) {
-                val parsedInfo = JsonParser().parse(info).asJsonObject
-                element.elementInfo = ElementInfo(parsedInfo["checked"]?.asBoolean ?: false,
-                                                  parsedInfo["toAbstract"]?.asBoolean ?: false)
-            }
+            markMembersInfo(file)
+            extraFilesToPsi.keys.forEach(::markMembersInfo)
 
             action(file)
 
             assert(!conflictFile.exists()) { "Conflict file $conflictFile should not exist" }
+
+            PsiDocumentManager.getInstance(project).commitAllDocuments()
+
             KotlinTestUtils.assertEqualsToFile(afterFile, file.text!!)
             for ((extraPsiFile, extraFile) in extraFilesToPsi) {
                 KotlinTestUtils.assertEqualsToFile(File("${extraFile.path}.after"), extraPsiFile.text)
@@ -92,19 +74,27 @@ abstract class AbstractMemberPullPushTest : KotlinLightCodeInsightFixtureTestCas
             }
             KotlinTestUtils.assertEqualsToFile(conflictFile, message)
         }
-        finally {
-            if (addKotlinRuntime) {
-                ConfigLibraryUtil.unConfigureKotlinRuntimeAndSdk(myModule, PluginTestCaseBase.mockJdk())
-            }
-        }
     }
+}
 
-    protected fun <T : MemberInfoBase<*>> chooseMembers(members: List<T>): List<T> {
-        members.forEach {
-            val info = it.member.elementInfo
-            it.isChecked = info.checked
-            it.isToAbstract = info.toAbstract
-        }
-        return members.filter { it.isChecked }
+internal fun markMembersInfo(file: PsiFile) {
+    for ((element, info) in file.findElementsByCommentPrefix("// INFO: ")) {
+        val parsedInfo = JsonParser().parse(info).asJsonObject
+        element.elementInfo = ElementInfo(parsedInfo["checked"]?.asBoolean ?: false,
+                                          parsedInfo["toAbstract"]?.asBoolean ?: false)
     }
+}
+
+internal data class ElementInfo(val checked: Boolean, val toAbstract: Boolean)
+
+internal var PsiElement.elementInfo: ElementInfo by NotNullableUserDataProperty(Key.create("ELEMENT_INFO"), ElementInfo(false, false))
+
+internal fun <T : MemberInfoBase<*>> chooseMembers(members: List<T>): List<T> {
+    members.forEach {
+        val memberPsi = it.member.let { if (it is KtPsiClassWrapper) it.psiClass else it }
+        val info = memberPsi.elementInfo
+        it.isChecked = info.checked
+        it.isToAbstract = info.toAbstract
+    }
+    return members.filter { it.isChecked }
 }

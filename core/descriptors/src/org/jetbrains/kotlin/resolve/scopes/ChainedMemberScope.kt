@@ -17,11 +17,11 @@
 package org.jetbrains.kotlin.resolve.scopes
 
 import org.jetbrains.kotlin.descriptors.ClassifierDescriptor
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
+import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor
 import org.jetbrains.kotlin.incremental.components.LookupLocation
 import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.util.collectionUtils.getFirstMatch
+import org.jetbrains.kotlin.util.collectionUtils.getFirstClassifierDiscriminateHeaders
 import org.jetbrains.kotlin.util.collectionUtils.getFromAllScopes
 import org.jetbrains.kotlin.utils.Printer
 
@@ -30,21 +30,29 @@ class ChainedMemberScope(
         private val scopes: List<MemberScope>
 ) : MemberScope {
     override fun getContributedClassifier(name: Name, location: LookupLocation): ClassifierDescriptor?
-            = getFirstMatch(scopes) { it.getContributedClassifier(name, location) }
+            = getFirstClassifierDiscriminateHeaders(scopes) { it.getContributedClassifier(name, location) }
 
     override fun getContributedVariables(name: Name, location: LookupLocation): Collection<PropertyDescriptor>
             = getFromAllScopes(scopes) { it.getContributedVariables(name, location) }
 
-    override fun getContributedFunctions(name: Name, location: LookupLocation): Collection<FunctionDescriptor>
+    override fun getContributedFunctions(name: Name, location: LookupLocation): Collection<SimpleFunctionDescriptor>
             = getFromAllScopes(scopes) { it.getContributedFunctions(name, location) }
 
     override fun getContributedDescriptors(kindFilter: DescriptorKindFilter, nameFilter: (Name) -> Boolean)
             = getFromAllScopes(scopes) { it.getContributedDescriptors(kindFilter, nameFilter) }
 
+    override fun getFunctionNames() = scopes.flatMapTo(mutableSetOf()) { it.getFunctionNames() }
+    override fun getVariableNames() = scopes.flatMapTo(mutableSetOf()) { it.getVariableNames() }
+    override fun getClassifierNames(): Set<Name>? = scopes.flatMapClassifierNamesOrNull()
+
+    override fun recordLookup(name: Name, location: LookupLocation) {
+        scopes.forEach { it.recordLookup(name, location) }
+    }
+
     override fun toString() = debugName
 
     override fun printScopeStructure(p: Printer) {
-        p.println(javaClass.simpleName, ": ", debugName, " {")
+        p.println(this::class.java.simpleName, ": ", debugName, " {")
         p.pushIndent()
 
         for (scope in scopes) {
@@ -53,5 +61,15 @@ class ChainedMemberScope(
 
         p.popIndent()
         p.println("}")
+    }
+
+    companion object {
+        fun create(debugName: String, scopes: List<MemberScope>): MemberScope {
+            return when (scopes.size) {
+                0 -> MemberScope.Empty
+                1 -> scopes.single()
+                else -> ChainedMemberScope(debugName, scopes)
+            }
+        }
     }
 }

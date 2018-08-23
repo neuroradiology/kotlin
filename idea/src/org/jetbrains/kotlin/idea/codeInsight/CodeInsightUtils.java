@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,14 +25,14 @@ import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtilCore;
 import com.intellij.refactoring.util.CommonRefactoringUtil;
 import com.intellij.util.text.CharArrayUtil;
+import kotlin.collections.ArraysKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.ClassKind;
-import org.jetbrains.kotlin.descriptors.ClassifierDescriptor;
 import org.jetbrains.kotlin.idea.caches.resolve.ResolutionUtils;
 import org.jetbrains.kotlin.lexer.KtTokens;
 import org.jetbrains.kotlin.psi.*;
+import org.jetbrains.kotlin.psi.psiUtil.KtPsiUtilKt;
 import org.jetbrains.kotlin.resolve.BindingContext;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ClassQualifier;
 import org.jetbrains.kotlin.resolve.scopes.receivers.Qualifier;
@@ -47,8 +47,29 @@ import static org.jetbrains.kotlin.builtins.KotlinBuiltIns.*;
 public class CodeInsightUtils {
 
     @Nullable
-    public static KtExpression findExpression(@NotNull PsiFile file, int startOffset, int endOffset) {
-        KtExpression element = findElementOfClassAtRange(file, startOffset, endOffset, KtExpression.class);
+    public static PsiElement findElement(
+            @NotNull PsiFile file,
+            int startOffset,
+            int endOffset,
+            @NotNull CodeInsightUtils.ElementKind elementKind
+    ) {
+        Class<? extends KtElement> elementClass;
+        switch (elementKind) {
+            case EXPRESSION: elementClass = KtExpression.class;
+                break;
+            case TYPE_ELEMENT: elementClass = KtTypeElement.class;
+                break;
+            case TYPE_CONSTRUCTOR: elementClass = KtSimpleNameExpression.class;
+                break;
+            default: throw new IllegalArgumentException(elementKind.name());
+        }
+        PsiElement element = findElementOfClassAtRange(file, startOffset, endOffset, elementClass);
+
+        if (elementKind == ElementKind.TYPE_ELEMENT) return element;
+
+        if (elementKind == ElementKind.TYPE_CONSTRUCTOR) {
+            return element != null && KtPsiUtilKt.isTypeConstructorReference(element) ? element : null;
+        }
 
         if (element instanceof KtScriptInitializer) {
             element = ((KtScriptInitializer) element).getBody();
@@ -78,24 +99,27 @@ public class CodeInsightUtils {
             }
         }
 
-        KtExpression expression = element;
+        KtExpression expression = (KtExpression) element;
 
         BindingContext context = ResolutionUtils.analyze(expression);
 
         Qualifier qualifier = context.get(BindingContext.QUALIFIER, expression);
         if (qualifier != null) {
             if (!(qualifier instanceof ClassQualifier)) return null;
-            ClassifierDescriptor classifier = ((ClassQualifier) qualifier).getClassifier();
-            if (!(classifier instanceof ClassDescriptor) || ((ClassDescriptor) classifier).getKind() != ClassKind.OBJECT) {
-                return null;
-            }
+            if (((ClassQualifier) qualifier).getDescriptor().getKind() != ClassKind.OBJECT) return null;
         }
 
         return expression;
     }
 
+    public enum ElementKind {
+        EXPRESSION,
+        TYPE_ELEMENT,
+        TYPE_CONSTRUCTOR
+    }
+
     @NotNull
-    public static PsiElement[] findStatements(@NotNull PsiFile file, int startOffset, int endOffset) {
+    public static PsiElement[] findElements(@NotNull PsiFile file, int startOffset, int endOffset, @NotNull ElementKind kind) {
         PsiElement element1 = getElementAtOffsetIgnoreWhitespaceBefore(file, startOffset);
         PsiElement element2 = getElementAtOffsetIgnoreWhitespaceAfter(file, endOffset);
 
@@ -129,7 +153,10 @@ public class CodeInsightUtils {
         }
 
         for (PsiElement element : array) {
-            if (!(element instanceof KtExpression
+            boolean correctType = kind == ElementKind.EXPRESSION && element instanceof KtExpression
+                                  || kind == ElementKind.TYPE_ELEMENT && element instanceof KtTypeElement
+                                  || kind == ElementKind.TYPE_CONSTRUCTOR && KtPsiUtilKt.isTypeConstructorReference(element);
+            if (!(correctType
                   || element.getNode().getElementType() == KtTokens.SEMICOLON
                   || element instanceof PsiWhiteSpace
                   || element instanceof PsiComment)) {
@@ -266,7 +293,7 @@ public class CodeInsightUtils {
             @NotNull String message, @NotNull String title,
             @Nullable String helpId
     ) {
-        if (ApplicationManager.getApplication().isUnitTestMode()) throw new RuntimeException(message);
+        if (ApplicationManager.getApplication().isUnitTestMode()) throw new CommonRefactoringUtil.RefactoringErrorHintException(message);
         CommonRefactoringUtil.showErrorHint(project, editor, message, title, helpId);
     }
 
@@ -299,7 +326,7 @@ public class CodeInsightUtils {
         return CharArrayUtil.shiftBackward(document.getCharsSequence(), lineStartOffset, " \t");
     }
 
-    @Nullable
+    @NotNull
     public static PsiElement getTopmostElementAtOffset(@NotNull PsiElement element, int offset) {
         do {
             PsiElement parent = element.getParent();
@@ -313,10 +340,31 @@ public class CodeInsightUtils {
         return element;
     }
 
+    @NotNull
+    public static PsiElement getTopParentWithEndOffset(@NotNull PsiElement element, @NotNull Class<?> stopAt) {
+        int endOffset = element.getTextOffset() + element.getTextLength();
+
+        do {
+            PsiElement parent = element.getParent();
+            if (parent == null || (parent.getTextOffset() + parent.getTextLength()) != endOffset) {
+                break;
+            }
+            element = parent;
+
+            if (stopAt.isInstance(element)) {
+                break;
+            }
+        }
+        while(true);
+
+        return element;
+    }
+
+
     @Nullable
-    public static <T> T getTopmostElementAtOffset(@NotNull PsiElement element, int offset, @NotNull Class<T> klass) {
+    public static <T> T getTopmostElementAtOffset(@NotNull PsiElement element, int offset, @NotNull Class<? extends T>... classes) {
         T lastElementOfType = null;
-        if (klass.isInstance(element)) {
+        if (anyIsInstance(element, classes)) {
             lastElementOfType = (T) element;
         }
         do {
@@ -324,7 +372,7 @@ public class CodeInsightUtils {
             if (parent == null || (parent.getTextOffset() < offset) || parent instanceof KtBlockExpression) {
                 break;
             }
-            if (klass.isInstance(parent)) {
+            if (anyIsInstance(parent, classes)) {
                 lastElementOfType = (T) parent;
             }
             element = parent;
@@ -332,5 +380,9 @@ public class CodeInsightUtils {
         while(true);
 
         return lastElementOfType;
+    }
+
+    private static <T> boolean anyIsInstance(PsiElement finalElement, @NotNull Class<? extends T>[] klass) {
+        return ArraysKt.any(klass, aClass -> aClass.isInstance(finalElement));
     }
 }

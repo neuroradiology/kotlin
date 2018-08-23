@@ -1,5 +1,4 @@
-// "Create extension property 'bar'" "true"
-// ERROR: Property must be initialized
+// "Create extension property 'T.bar'" "true"
 fun consume(n: Int) {}
 
 fun <T> foo(t: T) {

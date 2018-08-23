@@ -24,7 +24,11 @@ class ToObjectWithOnlyMethodsProcessing(private val psiClass: PsiClass) : UsageP
 
     override val convertedCodeProcessor: ConvertedCodeProcessor? get() = null
 
-    override val javaCodeProcessor = object: ExternalCodeProcessor {
+    override val javaCodeProcessors = listOf(ToObjectWithOnlyMethodsProcessor())
+
+    override val kotlinCodeProcessors = emptyList<ExternalCodeProcessor>()
+
+    inner class ToObjectWithOnlyMethodsProcessor: ExternalCodeProcessor {
         override fun processUsage(reference: PsiReference): Array<PsiReference>? {
             val refExpr = reference.element as? PsiReferenceExpression ?: return null
             val factory = PsiElementFactory.SERVICE.getInstance(psiClass.project)
@@ -33,6 +37,4 @@ class ToObjectWithOnlyMethodsProcessing(private val psiClass: PsiClass) : UsageP
             return arrayOf(qualifiedExpr)
         }
     }
-
-    override val kotlinCodeProcessor: ExternalCodeProcessor? get() = null
 }

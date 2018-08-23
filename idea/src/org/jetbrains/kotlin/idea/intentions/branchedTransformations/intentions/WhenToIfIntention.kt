@@ -22,6 +22,7 @@ import com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.idea.intentions.SelfTargetingRangeIntention
 import org.jetbrains.kotlin.idea.intentions.branchedTransformations.combineWhenConditions
 import org.jetbrains.kotlin.idea.util.CommentSaver
+import org.jetbrains.kotlin.psi.KtIfExpression
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.KtWhenExpression
 import org.jetbrains.kotlin.psi.buildExpression
@@ -32,6 +33,7 @@ class WhenToIfIntention : SelfTargetingRangeIntention<KtWhenExpression>(KtWhenEx
         if (entries.isEmpty()) return null
         val lastEntry = entries.last()
         if (entries.any { it != lastEntry && it.isElse }) return null
+        if (entries.all { it.isElse }) return null // 'when' with only 'else' branch is not supported
         return element.whenKeyword.textRange
     }
 
@@ -54,7 +56,13 @@ class WhenToIfIntention : SelfTargetingRangeIntention<KtWhenExpression>(KtWhenEx
                     appendFixedText("if (")
                     appendExpression(condition)
                     appendFixedText(")")
+                    if (branch is KtIfExpression) {
+                        appendFixedText("{ ")
+                    }
                     appendExpression(branch)
+                    if (branch is KtIfExpression) {
+                        appendFixedText(" }")
+                    }
                 }
                 if (i != entries.lastIndex) {
                     appendFixedText("\n")

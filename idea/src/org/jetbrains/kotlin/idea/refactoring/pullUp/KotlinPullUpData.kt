@@ -21,11 +21,15 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
+import org.jetbrains.kotlin.idea.caches.resolve.util.getJavaClassDescriptor
+import org.jetbrains.kotlin.idea.refactoring.memberInfo.KtPsiClassWrapper
 import org.jetbrains.kotlin.idea.refactoring.memberInfo.getClassDescriptorIfAny
 import org.jetbrains.kotlin.idea.util.getResolutionScope
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.KtParameter
 import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.utils.collectDescriptorsFiltered
 import org.jetbrains.kotlin.types.*
@@ -38,15 +42,25 @@ class KotlinPullUpData(val sourceClass: KtClassOrObject,
                        val membersToMove: Collection<KtNamedDeclaration>) {
     val resolutionFacade = sourceClass.getResolutionFacade()
 
-    val sourceClassContext = resolutionFacade.analyzeFullyAndGetResult(listOf(sourceClass)).bindingContext
+    val sourceClassContext = resolutionFacade.analyzeWithAllCompilerChecks(listOf(sourceClass)).bindingContext
 
     val sourceClassDescriptor = sourceClassContext[BindingContext.DECLARATION_TO_DESCRIPTOR, sourceClass] as ClassDescriptor
 
-    val memberDescriptors = membersToMove.keysToMap { sourceClassContext[BindingContext.DECLARATION_TO_DESCRIPTOR, it]!! }
+    val memberDescriptors = membersToMove.keysToMap {
+        when (it) {
+            is KtPsiClassWrapper -> it.psiClass.getJavaClassDescriptor(resolutionFacade)!!
+            is KtParameter -> sourceClassContext[BindingContext.PRIMARY_CONSTRUCTOR_PARAMETER, it]!!
+            else -> sourceClassContext[BindingContext.DECLARATION_TO_DESCRIPTOR, it]!!
+        }
+    }
 
     val targetClassDescriptor = targetClass.getClassDescriptorIfAny(resolutionFacade)!!
 
-    val typeParametersInSourceClassContext by lazy {
+    val superEntryForTargetClass = sourceClass.getSuperTypeEntryByDescriptor(targetClassDescriptor, sourceClassContext)
+
+    val targetClassSuperResolvedCall = superEntryForTargetClass.getResolvedCall(sourceClassContext)
+
+    private val typeParametersInSourceClassContext by lazy {
         sourceClassDescriptor.declaredTypeParameters +
         sourceClass.getResolutionScope(sourceClassContext, resolutionFacade)
                 .collectDescriptorsFiltered(DescriptorKindFilter.NON_SINGLETON_CLASSIFIERS)

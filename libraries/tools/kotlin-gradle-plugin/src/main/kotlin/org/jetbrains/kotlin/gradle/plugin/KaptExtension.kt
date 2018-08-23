@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,45 +18,121 @@ package org.jetbrains.kotlin.gradle.plugin
 
 import groovy.lang.Closure
 import org.gradle.api.Project
+import java.util.*
 
-public open class KaptExtension {
+open class KaptExtension {
 
-    public open var generateStubs: Boolean = false
+    open var generateStubs: Boolean = false
 
-    public open var inheritedAnnotations: Boolean = true
+    open var inheritedAnnotations: Boolean = true
 
-    private var closure: Closure<*>? = null
+    open var useLightAnalysis: Boolean = true
 
-    public open fun arguments(closure: Closure<*>) {
-        this.closure = closure
+    open var correctErrorTypes: Boolean = false
+
+    open var mapDiagnosticLocations: Boolean = false
+
+    @Deprecated("Use `annotationProcessor()` and `annotationProcessors()` instead")
+    open var processors: String = ""
+
+    /** Explicit opt-in switch for Kapt caching. Should be used when annotation processors used by this project are
+     * certain NOT to use anything aside from the task inputs in their logic and are guaranteed to produce the same
+     * output on subsequent runs without input changes. */
+    var useBuildCache: Boolean = false
+
+    private val apOptionsActions =
+            mutableListOf<(KaptAnnotationProcessorOptions) -> Unit>()
+
+    private val javacOptionsActions =
+            mutableListOf<(KaptJavacOptionsDelegate) -> Unit>()
+
+    private var apOptionsClosure: Closure<*>? = null
+    private var javacOptionsClosure: Closure<*>? = null
+
+    open fun annotationProcessor(fqName: String) {
+        val oldProcessors = this.processors
+        this.processors = if (oldProcessors.isEmpty()) fqName else "$oldProcessors,$fqName"
     }
 
-    fun getAdditionalArguments(project: Project, variant: Any?, android: Any?): List<String> {
-        val closureToExecute = closure ?: return emptyList()
+    open fun annotationProcessors(vararg fqName: String) {
+        fqName.forEach(this::annotationProcessor)
+    }
 
-        val executor = KaptAdditionalArgumentsDelegate(project, variant, android)
-        executor.execute(closureToExecute)
-        return executor.additionalCompilerArgs
+    open fun arguments(closure: Closure<*>) {
+        apOptionsActions += { apOptions ->
+            apOptions.execute(closure)
+        }
+    }
+
+    open fun arguments(action: KaptAnnotationProcessorOptions.() -> Unit) {
+        apOptionsActions += action
+    }
+
+    open fun javacOptions(closure: Closure<*>) {
+        this.javacOptionsActions += { javacOptions ->
+            javacOptions.execute(closure)
+        }
+    }
+
+    open fun javacOptions(action: KaptJavacOptionsDelegate.() -> Unit) {
+        javacOptionsActions += action
+    }
+
+    fun getJavacOptions(): Map<String, String> {
+        val result = KaptJavacOptionsDelegate()
+        javacOptionsActions.forEach { it(result) }
+        return result.options
+    }
+
+    fun getAdditionalArguments(project: Project, variantData: Any?, androidExtension: Any?): Map<String, String> {
+        val result = KaptAnnotationProcessorOptions(project, variantData, androidExtension)
+        apOptionsActions.forEach { it(result) }
+        return result.options
+    }
+
+    fun getAdditionalArgumentsForJavac(project: Project, variantData: Any?, androidExtension: Any?): List<String> {
+        val javacArgs = mutableListOf<String>()
+        for ((key, value) in getAdditionalArguments(project, variantData, androidExtension)) {
+            javacArgs += "-A" + key + (if (value.isNotEmpty()) "=$value" else "")
+        }
+        return javacArgs
     }
 }
 
-public open class KaptAdditionalArgumentsDelegate(
-        public open val project: Project,
-        public open val variant: Any?,
-        public open val android: Any?
+/**
+ * [project], [variant] and [android] properties are intended to be used inside the closure.
+ */
+open class KaptAnnotationProcessorOptions(
+        @Suppress("unused") open val project: Project,
+        @Suppress("unused") open val variant: Any?,
+        @Suppress("unused") open val android: Any?
 ) {
+    internal val options = LinkedHashMap<String, String>()
 
-    val additionalCompilerArgs = arrayListOf<String>()
-
-    public open fun arg(name: Any, vararg values: Any) {
-        val valuesString = if (values.isNotEmpty()) values.joinToString(" ", prefix = "=") else ""
-        additionalCompilerArgs.add("-A$name$valuesString")
+    @Suppress("unused")
+    open fun arg(name: Any, vararg values: Any) {
+        options.put(name.toString(), values.joinToString(" "))
     }
 
-    fun execute(closure: Closure<*>) {
-        closure.resolveStrategy = Closure.DELEGATE_FIRST
-        closure.delegate = this
-        closure.call()
+    fun execute(closure: Closure<*>) = executeClosure(closure)
+}
+
+open class KaptJavacOptionsDelegate {
+    internal val options = LinkedHashMap<String, String>()
+
+    open fun option(name: Any, value: Any) {
+        options.put(name.toString(), value.toString())
     }
 
+    open fun option(name: Any) {
+        options.put(name.toString(), "")
+    }
+
+    fun execute(closure: Closure<*>) = executeClosure(closure)
+}
+
+private fun Any?.executeClosure(closure: Closure<*>) {
+    closure.resolveStrategy = Closure.DELEGATE_FIRST
+    closure.delegate = this
+    closure.call()
 }

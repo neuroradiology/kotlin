@@ -1,5 +1,4 @@
-import java.util.HashMap
-
+// IGNORE_BACKEND: JS_IR
 data class Pair<First, Second>(val first: First, val second: Second)
 
 fun parseCatalogs(hashMap: Any?) {

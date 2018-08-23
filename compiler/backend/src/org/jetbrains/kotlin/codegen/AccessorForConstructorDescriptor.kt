@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,41 +23,46 @@ import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.TypeSubstitutor
 
 class AccessorForConstructorDescriptor(
-        private val calleeDescriptor: ConstructorDescriptor,
-        containingDeclaration: DeclarationDescriptor,
-        private val superCallTarget: ClassDescriptor?
+    override val calleeDescriptor: ClassConstructorDescriptor,
+    containingDeclaration: DeclarationDescriptor,
+    override val superCallTarget: ClassDescriptor?,
+    override val accessorKind: AccessorKind
 ) : AbstractAccessorForFunctionDescriptor(containingDeclaration, Name.special("<init>")),
-        ConstructorDescriptor,
-        AccessorForCallableDescriptor<ConstructorDescriptor> {
-    override fun getCalleeDescriptor(): ConstructorDescriptor = calleeDescriptor
+    ClassConstructorDescriptor,
+    AccessorForCallableDescriptor<ConstructorDescriptor> {
 
     override fun getContainingDeclaration(): ClassDescriptor = calleeDescriptor.containingDeclaration
+
+    override fun getConstructedClass(): ClassDescriptor = calleeDescriptor.constructedClass
 
     override fun isPrimary(): Boolean = false
 
     override fun getReturnType(): KotlinType = super.getReturnType()!!
 
-    override fun getSuperCallTarget(): ClassDescriptor? = superCallTarget
 
-    override fun substitute(substitutor: TypeSubstitutor) = super.substitute(substitutor) as ConstructorDescriptor
+    override fun substitute(substitutor: TypeSubstitutor) = super.substitute(substitutor) as ClassConstructorDescriptor
 
     override fun copy(
-            newOwner: DeclarationDescriptor?, modality: Modality?, visibility: Visibility?, kind: CallableMemberDescriptor.Kind?, copyOverrides: Boolean
+        newOwner: DeclarationDescriptor,
+        modality: Modality,
+        visibility: Visibility,
+        kind: CallableMemberDescriptor.Kind,
+        copyOverrides: Boolean
     ): AccessorForConstructorDescriptor {
-        throw UnsupportedOperationException("Trying to copy synthetic accessor $this")
+        throw UnsupportedOperationException()
     }
 
     override fun getOriginal(): AccessorForConstructorDescriptor = this
 
     init {
         initialize(
-                DescriptorUtils.getReceiverParameterType(extensionReceiverParameter),
-                calleeDescriptor.dispatchReceiverParameter,
-                copyTypeParameters(calleeDescriptor),
-                copyValueParameters(calleeDescriptor),
-                calleeDescriptor.returnType,
-                Modality.FINAL,
-                Visibilities.LOCAL
+            DescriptorUtils.getReceiverParameterType(extensionReceiverParameter),
+            calleeDescriptor.dispatchReceiverParameter,
+            copyTypeParameters(calleeDescriptor),
+            copyValueParameters(calleeDescriptor),
+            calleeDescriptor.returnType,
+            Modality.FINAL,
+            Visibilities.LOCAL
         )
     }
 }

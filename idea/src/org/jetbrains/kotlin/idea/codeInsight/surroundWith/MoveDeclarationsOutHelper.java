@@ -25,15 +25,16 @@ import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.psi.util.PsiUtilCore;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.descriptors.VariableDescriptor;
 import org.jetbrains.kotlin.idea.caches.resolve.ResolutionUtils;
 import org.jetbrains.kotlin.idea.codeInsight.CodeInsightUtils;
+import org.jetbrains.kotlin.idea.core.ShortenReferences;
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers;
-import org.jetbrains.kotlin.idea.util.ShortenReferences;
 import org.jetbrains.kotlin.psi.*;
-import org.jetbrains.kotlin.resolve.BindingContext;
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode;
 import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.KotlinTypeKt;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -116,11 +117,9 @@ public class MoveDeclarationsOutHelper {
 
     @NotNull
     private static KotlinType getPropertyType(@NotNull KtProperty property) {
-        BindingContext bindingContext = ResolutionUtils.analyze(property, BodyResolveMode.PARTIAL);
-
-        VariableDescriptor propertyDescriptor = bindingContext.get(BindingContext.VARIABLE, property);
-        assert propertyDescriptor != null : "Couldn't resolve property to property descriptor " + property.getText();
-        return propertyDescriptor.getType();
+        DeclarationDescriptor variableDescriptor = ResolutionUtils.resolveToDescriptorIfAny(property, BodyResolveMode.PARTIAL);
+        assert variableDescriptor instanceof VariableDescriptor : "Couldn't resolve property to property descriptor " + property.getText();
+        return ((VariableDescriptor) variableDescriptor).getType();
     }
 
     @NotNull
@@ -130,7 +129,7 @@ public class MoveDeclarationsOutHelper {
         if (typeRef != null) {
             typeString = typeRef.getText();
         }
-        else if (!propertyType.isError()) {
+        else if (!KotlinTypeKt.isError(propertyType)) {
             typeString = IdeDescriptorRenderers.SOURCE_CODE.renderType(propertyType);
         }
 

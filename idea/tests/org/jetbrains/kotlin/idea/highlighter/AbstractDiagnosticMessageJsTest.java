@@ -21,13 +21,14 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.analyzer.AnalysisResult;
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
-import org.jetbrains.kotlin.config.CompilerConfiguration;
+import org.jetbrains.kotlin.config.*;
 import org.jetbrains.kotlin.idea.test.PluginTestCaseBase;
 import org.jetbrains.kotlin.js.analyze.TopDownAnalyzerFacadeForJS;
-import org.jetbrains.kotlin.js.config.Config;
-import org.jetbrains.kotlin.js.config.LibrarySourcesConfig;
+import org.jetbrains.kotlin.js.config.JSConfigurationKeys;
+import org.jetbrains.kotlin.js.config.JsConfig;
 import org.jetbrains.kotlin.js.resolve.diagnostics.ErrorsJs;
 import org.jetbrains.kotlin.psi.KtFile;
+import org.jetbrains.kotlin.test.KotlinTestUtils;
 
 import java.lang.reflect.Field;
 
@@ -42,8 +43,8 @@ public abstract class AbstractDiagnosticMessageJsTest extends AbstractDiagnostic
 
     @NotNull
     @Override
-    protected AnalysisResult analyze(@NotNull KtFile file) {
-        return TopDownAnalyzerFacadeForJS.analyzeFiles(singletonList(file), getConfig());
+    protected AnalysisResult analyze(@NotNull KtFile file, @Nullable LanguageVersion explicitLanguageVersion) {
+        return TopDownAnalyzerFacadeForJS.analyzeFiles(singletonList(file), getConfig(explicitLanguageVersion));
     }
 
     @NotNull
@@ -59,10 +60,17 @@ public abstract class AbstractDiagnosticMessageJsTest extends AbstractDiagnostic
     }
 
     @NotNull
-    private Config getConfig() {
-        return new LibrarySourcesConfig.Builder(getProject(), "testModule", LibrarySourcesConfig.JS_STDLIB)
-                .inlineEnabled(false)
-                .isUnitTestConfig(true)
-                .build();
+    private JsConfig getConfig(@Nullable LanguageVersion explicitLanguageVersion) {
+        CompilerConfiguration configuration = getEnvironment().getConfiguration().copy();
+        configuration.put(CommonConfigurationKeys.MODULE_NAME, KotlinTestUtils.TEST_MODULE_NAME);
+        configuration.put(JSConfigurationKeys.LIBRARIES, JsConfig.JS_STDLIB);
+        configuration.put(CommonConfigurationKeys.DISABLE_INLINE, true);
+        if (explicitLanguageVersion != null) {
+            CommonConfigurationKeysKt.setLanguageVersionSettings(
+                    configuration,
+                    new LanguageVersionSettingsImpl(explicitLanguageVersion, LanguageVersionSettingsImpl.DEFAULT.getApiVersion())
+            );
+        }
+        return new JsConfig(getProject(), configuration);
     }
 }

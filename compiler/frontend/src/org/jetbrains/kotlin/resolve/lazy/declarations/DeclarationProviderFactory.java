@@ -21,13 +21,18 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.name.FqName;
 import org.jetbrains.kotlin.psi.KtFile;
 import org.jetbrains.kotlin.resolve.lazy.data.KtClassLikeInfo;
+import org.jetbrains.kotlin.storage.LockBasedStorageManager;
+
+import java.util.Collections;
 
 public interface DeclarationProviderFactory {
+    DeclarationProviderFactory EMPTY = new FileBasedDeclarationProviderFactory(LockBasedStorageManager.NO_LOCKS, Collections.emptyList());
+
     @NotNull
     ClassMemberDeclarationProvider getClassMemberDeclarationProvider(@NotNull KtClassLikeInfo classLikeInfo);
 
     @Nullable
     PackageMemberDeclarationProvider getPackageMemberDeclarationProvider(@NotNull FqName packageFqName);
 
-    void diagnoseMissingPackageFragment(KtFile file);
+    void diagnoseMissingPackageFragment(@NotNull FqName fqName, @Nullable KtFile file);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,11 @@ import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
 import org.jetbrains.kotlin.idea.core.OptionalParametersHelper
 import org.jetbrains.kotlin.idea.core.resolveCandidates
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
+import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
+import org.jetbrains.kotlin.idea.util.ShadowedDeclarationsFilter
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.load.java.NULLABILITY_ANNOTATIONS
+import org.jetbrains.kotlin.load.java.sam.SamAdapterDescriptor
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.allChildren
 import org.jetbrains.kotlin.psi.psiUtil.parents
@@ -42,11 +46,13 @@ import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
 import org.jetbrains.kotlin.resolve.calls.callUtil.getCall
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
+import org.jetbrains.kotlin.resolve.calls.components.hasDefaultValue
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatch
 import org.jetbrains.kotlin.resolve.calls.util.DelegatingCall
-import org.jetbrains.kotlin.resolve.descriptorUtil.hasDefaultValue
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
+import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.isError
 import org.jetbrains.kotlin.types.typeUtil.containsError
 import java.awt.Color
 import java.util.*
@@ -79,7 +85,7 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
     }
 
     private fun findCall(argumentList: TArgumentList, bindingContext: BindingContext): Call? {
-        return (argumentList.parent as KtElement).getCall(bindingContext)
+        return (argumentList.parent as? KtElement)?.getCall(bindingContext)
     }
 
     override fun getActualParameterDelimiterType() = KtTokens.COMMA
@@ -115,9 +121,18 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
         val bindingContext = argumentList.analyze(BodyResolveMode.PARTIAL)
         val call = findCall(argumentList, bindingContext) ?: return null
 
-        val candidates = call.resolveCandidates(bindingContext, file.getResolutionFacade())
+        val resolutionFacade = file.getResolutionFacade()
+        val candidates =
+                call.resolveCandidates(bindingContext, resolutionFacade)
+                        .map { it.resultingDescriptor }
+                        .distinctBy { it.original }
 
-        context.itemsToShow = candidates.map { it.resultingDescriptor.original }.distinct().toTypedArray()
+        val shadowedDeclarationsFilter = ShadowedDeclarationsFilter(bindingContext,
+                                                                    resolutionFacade,
+                                                                    call.callElement,
+                                                                    call.explicitReceiver as? ReceiverValue)
+
+        context.itemsToShow = shadowedDeclarationsFilter.filter(candidates).toTypedArray()
         return argumentList
     }
 
@@ -233,9 +248,22 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
     override fun getParametersForLookup(item: LookupElement, context: ParameterInfoContext) = emptyArray<Any>()
     override fun getParametersForDocumentation(item: FunctionDescriptor, context: ParameterInfoContext) = emptyArray<Any>()
 
+    private val RENDERER = DescriptorRenderer.SHORT_NAMES_IN_TYPES.withOptions {
+        enhancedTypes = true
+        renderUnabbreviatedType = false
+    }
+
     private fun renderParameter(parameter: ValueParameterDescriptor, includeName: Boolean, named: Boolean, project: Project): String {
         return buildString {
             if (named) append("[")
+
+            parameter
+                .annotations
+                .getAllAnnotations()
+                .filterNot { it.annotation.fqName in NULLABILITY_ANNOTATIONS }
+                .forEach {
+                    it.annotation.fqName?.let { append("@${it.shortName().asString()} ") }
+                }
 
             if (parameter.varargElementType != null) {
                 append("vararg ")
@@ -246,7 +274,7 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
                 append(": ")
             }
 
-            append(DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(parameterTypeToRender(parameter)))
+            append(RENDERER.renderType(parameterTypeToRender(parameter)))
 
             if (parameter.hasDefaultValue()) {
                 append(" = ")
@@ -351,7 +379,12 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
         }
 
         val candidates = callToUse.resolveCandidates(bindingContext, resolutionFacade)
-        val resolvedCall = candidates.firstOrNull { descriptorsEqual(it.resultingDescriptor, overload) } ?: return null
+        // First try to find strictly matching descriptor, then one with the same declaration.
+        // The second way is needed for the case when the descriptor was invalidated and new one has been built.
+        // See testLocalFunctionBug().
+        val resolvedCall = candidates.firstOrNull { it.resultingDescriptor.original == overload.original }
+                           ?: candidates.firstOrNull { descriptorsEqual(it.resultingDescriptor, overload) }
+                           ?: return null
         val resultingDescriptor = resolvedCall.resultingDescriptor
 
         fun argumentToParameter(argument: ValueArgument): ValueParameterDescriptor? {
@@ -380,6 +413,13 @@ abstract class KotlinParameterInfoWithCallHandlerBase<TArgumentList : KtElement,
     // we should not compare descriptors directly because partial resolve is involved
     private fun descriptorsEqual(descriptor1: FunctionDescriptor, descriptor2: FunctionDescriptor): Boolean {
         if (descriptor1.original == descriptor2.original) return true
+        val isSamDescriptor1 = descriptor1 is SamAdapterDescriptor<*>
+        val isSamDescriptor2 = descriptor2 is SamAdapterDescriptor<*>
+
+        // Previously it worked because of different order
+        // If descriptor1 is SamAdapter and descriptor2 isn't, this function shouldn't return `true` because of equal declaration
+        if (isSamDescriptor1 xor isSamDescriptor2) return false
+
         val declaration1 = DescriptorToSourceUtils.descriptorToDeclaration(descriptor1) ?: return false
         val declaration2 = DescriptorToSourceUtils.descriptorToDeclaration(descriptor2)
         return declaration1 == declaration2

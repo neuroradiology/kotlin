@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,28 +16,26 @@
 
 package org.jetbrains.kotlin.idea.imports
 
-import com.google.common.collect.HashMultimap
 import com.intellij.lang.ImportOptimizer
 import com.intellij.openapi.progress.ProgressIndicatorProvider
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import org.jetbrains.kotlin.descriptors.*
-import org.jetbrains.kotlin.idea.caches.resolve.ModuleSourceInfo
+import org.jetbrains.kotlin.idea.caches.project.ModuleSourceInfo
+import org.jetbrains.kotlin.idea.caches.project.getNullableModuleInfo
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.caches.resolve.getNullableModuleInfo
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
 import org.jetbrains.kotlin.idea.core.formatter.KotlinCodeStyleSettings
+import org.jetbrains.kotlin.idea.references.KtInvokeFunctionReference
 import org.jetbrains.kotlin.idea.references.KtReference
 import org.jetbrains.kotlin.idea.references.canBeResolvedViaImport
-import org.jetbrains.kotlin.idea.util.ImportInsertHelper
+import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.idea.util.application.runWriteAction
-import org.jetbrains.kotlin.idea.util.getFileResolutionScope
 import org.jetbrains.kotlin.idea.util.getResolutionScope
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.renderer.render
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.ImportPath
 import org.jetbrains.kotlin.resolve.descriptorUtil.getImportableDescriptor
@@ -45,11 +43,10 @@ import org.jetbrains.kotlin.resolve.scopes.HierarchicalScope
 import org.jetbrains.kotlin.resolve.scopes.utils.*
 import java.util.*
 
-class KotlinImportOptimizer() : ImportOptimizer {
-
+class KotlinImportOptimizer : ImportOptimizer {
     override fun supports(file: PsiFile?) = file is KtFile
 
-    override fun processFile(file: PsiFile?) = Runnable() {
+    override fun processFile(file: PsiFile?) = Runnable {
         OptimizeProcess(file as KtFile).execute()
     }
 
@@ -70,12 +67,13 @@ class KotlinImportOptimizer() : ImportOptimizer {
         }
     }
 
-    private class CollectUsedDescriptorsVisitor(val file: KtFile) : KtVisitorVoid() {
-        private val _descriptors = HashSet<DeclarationDescriptor>()
+    private class CollectUsedDescriptorsVisitor(file: KtFile) : KtVisitorVoid() {
         private val currentPackageName = file.packageFqName
+        private val descriptorsToImport = HashSet<DeclarationDescriptor>()
+        private val abstractRefs = ArrayList<OptimizedImportsBuilder.AbstractReference>()
 
-        val descriptors: Set<DeclarationDescriptor>
-            get() = _descriptors
+        val data: OptimizedImportsBuilder.InputData
+            get() = OptimizedImportsBuilder.InputData(descriptorsToImport, abstractRefs)
 
         override fun visitElement(element: PsiElement) {
             ProgressIndicatorProvider.checkCanceled()
@@ -91,28 +89,26 @@ class KotlinImportOptimizer() : ImportOptimizer {
         override fun visitKtElement(element: KtElement) {
             for (reference in element.references) {
                 if (reference !is KtReference) continue
+                abstractRefs.add(AbstractReferenceImpl(reference))
 
-                val referencedName = (element as? KtNameReferenceExpression)?.getReferencedNameAsName() //TODO: other types of references
+                val names = reference.resolvesByNames
 
                 val bindingContext = element.analyze()
-                //class qualifiers that refer to companion objects should be considered (containing) class references
-                val targets = bindingContext[BindingContext.SHORT_REFERENCE_TO_COMPANION_OBJECT, element as? KtReferenceExpression]?.let { listOf(it) }
-                              ?: reference.resolveToDescriptors(bindingContext)
+                val targets = reference.targets(bindingContext)
                 for (target in targets) {
+                    val importableDescriptor = target.getImportableDescriptor()
+                    if (importableDescriptor.name !in names) continue // resolved via alias
+
                     val importableFqName = target.importableFqName ?: continue
                     val parentFqName = importableFqName.parent()
                     if (target is PackageViewDescriptor && parentFqName == FqName.ROOT) continue // no need to import top-level packages
                     if (target !is PackageViewDescriptor && parentFqName == currentPackageName) continue
 
-                    if (!reference.canBeResolvedViaImport(target)) continue
-
-                    val importableDescriptor = target.getImportableDescriptor()
-
-                    if (referencedName != null && importableDescriptor.name != referencedName) continue // resolved via alias
+                    if (!reference.canBeResolvedViaImport(target, bindingContext)) continue
 
                     if (isAccessibleAsMember(importableDescriptor, element, bindingContext)) continue
 
-                    _descriptors.add(importableDescriptor)
+                    descriptorsToImport.add(importableDescriptor)
                 }
             }
 
@@ -126,12 +122,15 @@ class KotlinImportOptimizer() : ImportOptimizer {
                 return when (target) {
                     is FunctionDescriptor ->
                         scope.findFunction(target.name, NoLookupLocation.FROM_IDE) { it == target } != null
+                            && bindingContext[BindingContext.DEPRECATED_SHORT_NAME_ACCESS, place] != true
 
                     is PropertyDescriptor ->
                         scope.findVariable(target.name, NoLookupLocation.FROM_IDE) { it == target } != null
+                            && bindingContext[BindingContext.DEPRECATED_SHORT_NAME_ACCESS, place] != true
 
                     is ClassDescriptor ->
                         scope.findClassifier(target.name, NoLookupLocation.FROM_IDE) == target
+                            && bindingContext[BindingContext.DEPRECATED_SHORT_NAME_ACCESS, place] != true
 
                     else -> false
                 }
@@ -146,129 +145,47 @@ class KotlinImportOptimizer() : ImportOptimizer {
             }
             return false
         }
+
+        private class AbstractReferenceImpl(private val reference: KtReference) : OptimizedImportsBuilder.AbstractReference {
+            override val element: KtElement
+                get() = reference.element
+
+            override val dependsOnNames: Collection<Name>
+                get() {
+                    val resolvesByNames = reference.resolvesByNames
+                    if (reference is KtInvokeFunctionReference) {
+                        val additionalNames = (reference.element.calleeExpression as? KtNameReferenceExpression)?.mainReference?.resolvesByNames
+                        if (additionalNames != null) {
+                            return resolvesByNames + additionalNames
+                        }
+                    }
+                    return resolvesByNames
+                }
+
+            override fun resolve(bindingContext: BindingContext) = reference.resolveToDescriptors(bindingContext)
+
+            override fun toString() = reference.toString()
+        }
     }
 
     companion object {
-        fun collectDescriptorsToImport(file: KtFile): Set<DeclarationDescriptor> {
+        fun collectDescriptorsToImport(file: KtFile): OptimizedImportsBuilder.InputData {
             val visitor = CollectUsedDescriptorsVisitor(file)
             file.accept(visitor)
-            return visitor.descriptors
+            return visitor.data
         }
 
-        fun prepareOptimizedImports(
-                file: KtFile,
-                descriptorsToImport: Collection<DeclarationDescriptor>
-        ): List<ImportPath>? {
-            val importInsertHelper = ImportInsertHelper.getInstance(file.project)
-            val codeStyleSettings = KotlinCodeStyleSettings.getInstance(file.project)
-            val aliasImports = buildAliasImportMap(file)
-
-            val importsToGenerate = HashSet<ImportPath>()
-
-            val descriptorsByParentFqName = HashMultimap.create<FqName, DeclarationDescriptor>()
-            for (descriptor in descriptorsToImport) {
-                val fqName = descriptor.importableFqName!!
-                val container = descriptor.containingDeclaration
-                val parentFqName = fqName.parent()
-                val canUseStarImport = when {
-                    parentFqName.isRoot -> false
-                    (container as? ClassDescriptor)?.kind == ClassKind.OBJECT -> false
-                    else -> true
-                }
-                if (canUseStarImport) {
-                    descriptorsByParentFqName.put(parentFqName, descriptor)
-                }
-                else {
-                    importsToGenerate.add(ImportPath(fqName, false))
-                }
-            }
-
-            val classNamesToCheck = HashSet<FqName>()
-
-            fun isImportedByDefault(fqName: FqName) = importInsertHelper.isImportedWithDefault(ImportPath(fqName, false), file)
-
-            for (parentFqName in descriptorsByParentFqName.keys()) {
-                val descriptors = descriptorsByParentFqName[parentFqName]
-                val fqNames = descriptors.map { it.importableFqName!! }.toSet()
-                val isMember = descriptors.first().containingDeclaration is ClassDescriptor
-                val nameCountToUseStar = if (isMember)
-                    codeStyleSettings.NAME_COUNT_TO_USE_STAR_IMPORT_FOR_MEMBERS
-                else
-                    codeStyleSettings.NAME_COUNT_TO_USE_STAR_IMPORT
-                val explicitImports = fqNames.size < nameCountToUseStar
-                                      && parentFqName.asString() !in codeStyleSettings.PACKAGES_TO_USE_STAR_IMPORTS
-                if (explicitImports) {
-                    for (fqName in fqNames) {
-                        if (!isImportedByDefault(fqName)) {
-                            importsToGenerate.add(ImportPath(fqName, false))
-                        }
-                    }
-                }
-                else {
-                    for (descriptor in descriptors) {
-                        if (descriptor is ClassDescriptor) {
-                            classNamesToCheck.add(descriptor.importableFqName!!)
-                        }
-                    }
-
-                    if (!fqNames.all(::isImportedByDefault)) {
-                        importsToGenerate.add(ImportPath(parentFqName, true))
-                    }
-                }
-            }
-
-            // now check that there are no conflicts and all classes are really imported
-            val fileWithImportsText = buildString {
-                append("package ").append(file.packageFqName.toUnsafe().render()).append("\n")
-                importsToGenerate.filter { it.isAllUnder }.map { "import " + it.pathStr }.joinTo(this, "\n")
-            }
-            val fileWithImports = KtPsiFactory(file).createAnalyzableFile("Dummy.kt", fileWithImportsText, file)
-            val scope = fileWithImports.getResolutionFacade().getFileResolutionScope(fileWithImports)
-
-            for (fqName in classNamesToCheck) {
-                if (scope.findClassifier(fqName.shortName(), NoLookupLocation.FROM_IDE)?.importableFqName != fqName) {
-                    // add explicit import if failed to import with * (or from current package)
-                    importsToGenerate.add(ImportPath(fqName, false))
-
-                    val parentFqName = fqName.parent()
-
-                    for (descriptor in descriptorsByParentFqName[parentFqName].filter { it.importableFqName == fqName }) {
-                        descriptorsByParentFqName.remove(parentFqName, descriptor)
-                    }
-
-                    if (descriptorsByParentFqName[parentFqName].isEmpty()) { // star import is not really needed
-                        importsToGenerate.remove(ImportPath(parentFqName, true))
-                    }
-                }
-            }
-
-            //TODO: drop unused aliases?
-            aliasImports.mapTo(importsToGenerate) { ImportPath(it.value, false, it.key)}
-
-            val sortedImportsToGenerate = importsToGenerate.sortedWith(importInsertHelper.importSortComparator)
-
-            // check if no changes to imports required
-            val oldImports = file.importDirectives
-            if (oldImports.size == sortedImportsToGenerate.size && oldImports.map { it.importPath } == sortedImportsToGenerate) return null
-
-            return sortedImportsToGenerate
-        }
-
-        private fun buildAliasImportMap(file: KtFile): Map<Name, FqName> {
-            val imports = file.importDirectives
-            val aliasImports = HashMap<Name, FqName>()
-            for (import in imports) {
-                val path = import.importPath ?: continue
-                val aliasName = path.alias
-                if (aliasName != null && aliasName != path.fqnPart().shortName() /* we do not keep trivial aliases */) {
-                    aliasImports.put(aliasName, path.fqnPart())
-                }
-            }
-            return aliasImports
+        fun prepareOptimizedImports(file: KtFile, data: OptimizedImportsBuilder.InputData): List<ImportPath>? {
+            val settings = KotlinCodeStyleSettings.getInstance(file.project)
+            val options = OptimizedImportsBuilder.Options(
+                    settings.NAME_COUNT_TO_USE_STAR_IMPORT,
+                    settings.NAME_COUNT_TO_USE_STAR_IMPORT_FOR_MEMBERS,
+                    isInPackagesToUseStarImport = { fqName -> fqName.asString() in settings.PACKAGES_TO_USE_STAR_IMPORTS })
+            return OptimizedImportsBuilder(file, data, options).buildOptimizedImports()
         }
 
         fun replaceImports(file: KtFile, imports: List<ImportPath>) {
-            val importList = file.importList!!
+            val importList = file.importList ?: return
             val oldImports = importList.imports
             val psiFactory = KtPsiFactory(file.project)
             for (importPath in imports) {
@@ -279,6 +196,12 @@ class KotlinImportOptimizer() : ImportOptimizer {
             for (import in oldImports) {
                 import.delete()
             }
+        }
+
+        private fun KtReference.targets(bindingContext: BindingContext): Collection<DeclarationDescriptor> {
+            //class qualifiers that refer to companion objects should be considered (containing) class references
+            return bindingContext[BindingContext.SHORT_REFERENCE_TO_COMPANION_OBJECT, element as? KtReferenceExpression]?.let { listOf(it) }
+                   ?: resolveToDescriptors(bindingContext)
         }
     }
 }

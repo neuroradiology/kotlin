@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,9 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor;
 import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor;
+import org.jetbrains.kotlin.descriptors.SourceElement;
+import org.jetbrains.kotlin.descriptors.annotations.Annotations;
 import org.jetbrains.kotlin.load.java.descriptors.JavaMethodDescriptor;
-import org.jetbrains.kotlin.load.java.descriptors.SamAdapterDescriptor;
 import org.jetbrains.kotlin.name.Name;
 
 /* package */ class SamAdapterFunctionDescriptor extends JavaMethodDescriptor implements SamAdapterDescriptor<JavaMethodDescriptor> {
@@ -45,19 +46,20 @@ import org.jetbrains.kotlin.name.Name;
 
     @NotNull
     @Override
-    public JavaMethodDescriptor getOriginForSam() {
-        return declaration;
-    }
-
-    @NotNull
-    @Override
     protected JavaMethodDescriptor createSubstitutedCopy(
             @NotNull DeclarationDescriptor newOwner,
             @Nullable FunctionDescriptor original,
             @NotNull Kind kind,
             @Nullable Name newName,
-            boolean preserveSource
+            @NotNull Annotations annotations,
+            @NotNull SourceElement source
     ) {
         return new SamAdapterFunctionDescriptor(newOwner, (SimpleFunctionDescriptor) original, kind, declaration);
+    }
+
+    @NotNull
+    @Override
+    public JavaMethodDescriptor getBaseDescriptorForSynthetic() {
+        return declaration;
     }
 }

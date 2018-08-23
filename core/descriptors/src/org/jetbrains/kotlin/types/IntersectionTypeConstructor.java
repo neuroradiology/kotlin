@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,17 +20,16 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.descriptors.ClassifierDescriptor;
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor;
-import org.jetbrains.kotlin.descriptors.annotations.AnnotatedImpl;
-import org.jetbrains.kotlin.descriptors.annotations.Annotations;
+import org.jetbrains.kotlin.resolve.scopes.MemberScope;
+import org.jetbrains.kotlin.resolve.scopes.TypeIntersectionScope;
 
 import java.util.*;
 
-public class IntersectionTypeConstructor extends AnnotatedImpl implements TypeConstructor {
+public class IntersectionTypeConstructor implements TypeConstructor {
     private final Set<KotlinType> intersectedTypes;
     private final int hashCode;
 
-    public IntersectionTypeConstructor(Annotations annotations, Collection<KotlinType> typesToIntersect) {
-        super(annotations);
+    public IntersectionTypeConstructor(Collection<KotlinType> typesToIntersect) {
         assert !typesToIntersect.isEmpty() : "Attempt to create an empty intersection";
 
         this.intersectedTypes = new LinkedHashSet<KotlinType>(typesToIntersect);
@@ -47,6 +46,10 @@ public class IntersectionTypeConstructor extends AnnotatedImpl implements TypeCo
     @Override
     public Collection<KotlinType> getSupertypes() {
         return intersectedTypes;
+    }
+
+    public MemberScope createScopeForKotlinType() {
+        return TypeIntersectionScope.create("member scope for intersection type " + this, intersectedTypes);
     }
 
     @Override
@@ -105,5 +108,4 @@ public class IntersectionTypeConstructor extends AnnotatedImpl implements TypeCo
     public int hashCode() {
         return hashCode;
     }
-
 }

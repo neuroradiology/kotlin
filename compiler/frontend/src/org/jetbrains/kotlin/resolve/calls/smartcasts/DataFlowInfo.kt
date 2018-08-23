@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@
 
 package org.jetbrains.kotlin.resolve.calls.smartcasts
 
-import com.google.common.collect.ImmutableMap
-import com.google.common.collect.SetMultimap
+import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.util.javaslang.ImmutableMap
+import org.jetbrains.kotlin.util.javaslang.ImmutableSet
 
 /**
  * This interface is intended to provide and edit information about value nullabilities and possible types.
@@ -26,60 +27,62 @@ import org.jetbrains.kotlin.types.KotlinType
  */
 interface DataFlowInfo {
 
-    val completeNullabilityInfo: Map<DataFlowValue, Nullability>
+    val completeNullabilityInfo: ImmutableMap<DataFlowValue, Nullability>
 
-    val completeTypeInfo: SetMultimap<DataFlowValue, KotlinType>
+    val completeTypeInfo: ImmutableMap<DataFlowValue, ImmutableSet<KotlinType>>
 
     /**
-     * Returns collected nullability for the given value, NOT taking its predictability into account.
+     * Returns collected nullability for the given value, NOT taking its stability into account.
      */
     fun getCollectedNullability(key: DataFlowValue): Nullability
 
     /**
-     * Returns collected nullability for the given value if it's predictable.
+     * Returns collected nullability for the given value if it's stable.
      * Otherwise basic value nullability is returned
      */
-    fun getPredictableNullability(key: DataFlowValue): Nullability
+    fun getStableNullability(key: DataFlowValue): Nullability
 
     /**
-     * Returns possible types for the given value, NOT taking its predictability into account.
+     * Returns possible types for the given value, NOT taking its stability into account.
      *
      * IMPORTANT: by default, the original (native) type for this value
      * are NOT included. So it's quite possible to get an empty set here.
+     * Also, type order in the result set MAKES SENSE so keep it stable and do not change without reason
      */
-    fun getCollectedTypes(key: DataFlowValue): Set<KotlinType>
+    fun getCollectedTypes(key: DataFlowValue, languageVersionSettings: LanguageVersionSettings): Set<KotlinType>
 
     /**
-     * Returns possible types for the given value if it's predictable.
+     * Returns possible types for the given value if it's stable.
      * Otherwise, basic value type is returned.
      *
      * IMPORTANT: by default, the original (native) type for this value
      * are NOT included. So it's quite possible to get an empty set here.
+     * Also, type order in the result set MAKES SENSE so keep it stable and do not change without reason
      */
-    fun getPredictableTypes(key: DataFlowValue): Set<KotlinType>
+    fun getStableTypes(key: DataFlowValue, languageVersionSettings: LanguageVersionSettings): Set<KotlinType>
 
     /**
      * Call this function to clear all data flow information about
      * the given data flow value. Useful when we are not sure how this value can be changed, e.g. in a loop.
      */
-    fun clearValueInfo(value: DataFlowValue): DataFlowInfo
+    fun clearValueInfo(value: DataFlowValue, languageVersionSettings: LanguageVersionSettings): DataFlowInfo
 
     /**
      * Call this function when b is assigned to a
      */
-    fun assign(a: DataFlowValue, b: DataFlowValue): DataFlowInfo
+    fun assign(a: DataFlowValue, b: DataFlowValue, languageVersionSettings: LanguageVersionSettings): DataFlowInfo
 
     /**
-     * Call this function when it's known than a == b
+     * Call this function when it's known than a == b.
      */
-    fun equate(a: DataFlowValue, b: DataFlowValue): DataFlowInfo
+    fun equate(a: DataFlowValue, b: DataFlowValue, identityEquals: Boolean, languageVersionSettings: LanguageVersionSettings): DataFlowInfo
 
     /**
      * Call this function when it's known than a != b
      */
-    fun disequate(a: DataFlowValue, b: DataFlowValue): DataFlowInfo
+    fun disequate(a: DataFlowValue, b: DataFlowValue, languageVersionSettings: LanguageVersionSettings): DataFlowInfo
 
-    fun establishSubtyping(value: DataFlowValue, type: KotlinType): DataFlowInfo
+    fun establishSubtyping(value: DataFlowValue, type: KotlinType, languageVersionSettings: LanguageVersionSettings): DataFlowInfo
 
     /**
      * Call this function to add data flow information from other to this and return sum as the result
@@ -98,5 +101,5 @@ interface DataFlowInfo {
 
 object DataFlowInfoFactory {
     @JvmField
-    val EMPTY: DataFlowInfo = DelegatingDataFlowInfo()
+    val EMPTY: DataFlowInfo = DataFlowInfoImpl()
 }

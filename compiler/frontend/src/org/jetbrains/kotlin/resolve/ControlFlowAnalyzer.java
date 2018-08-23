@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,12 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.cfg.ControlFlowInformationProvider;
+import org.jetbrains.kotlin.config.LanguageVersionSettings;
 import org.jetbrains.kotlin.descriptors.PropertyAccessorDescriptor;
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor;
 import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor;
 import org.jetbrains.kotlin.psi.*;
+import org.jetbrains.kotlin.resolve.checkers.PlatformDiagnosticSuppressor;
 import org.jetbrains.kotlin.types.KotlinType;
 
 import java.util.Map;
@@ -31,12 +33,21 @@ import java.util.Map;
 import static org.jetbrains.kotlin.types.TypeUtils.NO_EXPECTED_TYPE;
 
 public class ControlFlowAnalyzer {
-    @NotNull private final BindingTrace trace;
-    @NotNull private final KotlinBuiltIns builtIns;
+    private final BindingTrace trace;
+    private final KotlinBuiltIns builtIns;
+    private final LanguageVersionSettings languageVersionSettings;
+    private final PlatformDiagnosticSuppressor diagnosticSuppressor;
 
-    public ControlFlowAnalyzer(@NotNull BindingTrace trace, @NotNull KotlinBuiltIns builtIns) {
+    public ControlFlowAnalyzer(
+            @NotNull BindingTrace trace,
+            @NotNull KotlinBuiltIns builtIns,
+            @NotNull LanguageVersionSettings languageVersionSettings,
+            @NotNull PlatformDiagnosticSuppressor diagnosticSuppressor
+    ) {
         this.trace = trace;
         this.builtIns = builtIns;
+        this.languageVersionSettings = languageVersionSettings;
+        this.diagnosticSuppressor = diagnosticSuppressor;
     }
 
     public void process(@NotNull BodiesResolveContext c) {
@@ -68,7 +79,8 @@ public class ControlFlowAnalyzer {
     }
 
     private void checkSecondaryConstructor(@NotNull KtSecondaryConstructor constructor) {
-        ControlFlowInformationProvider controlFlowInformationProvider = new ControlFlowInformationProvider(constructor, trace);
+        ControlFlowInformationProvider controlFlowInformationProvider =
+                new ControlFlowInformationProvider(constructor, trace, languageVersionSettings, diagnosticSuppressor);
         controlFlowInformationProvider.checkDeclaration();
         controlFlowInformationProvider.checkFunction(builtIns.getUnitType());
     }
@@ -76,8 +88,9 @@ public class ControlFlowAnalyzer {
     private void checkDeclarationContainer(@NotNull BodiesResolveContext c, KtDeclarationContainer declarationContainer) {
         // A pseudocode of class/object initialization corresponds to a class/object
         // or initialization of properties corresponds to a package declared in a file
-        ControlFlowInformationProvider
-                controlFlowInformationProvider = new ControlFlowInformationProvider((KtElement) declarationContainer, trace);
+        ControlFlowInformationProvider controlFlowInformationProvider = new ControlFlowInformationProvider(
+                (KtElement) declarationContainer, trace, languageVersionSettings, diagnosticSuppressor
+        );
         if (c.getTopDownAnalysisMode().isLocalDeclarations()) {
             controlFlowInformationProvider.checkForLocalClassOrObjectMode();
             return;
@@ -96,9 +109,11 @@ public class ControlFlowAnalyzer {
         }
     }
 
-    private void checkFunction(@NotNull BodiesResolveContext c, @NotNull KtDeclarationWithBody function, @Nullable KotlinType expectedReturnType) {
-        if (!function.hasBody()) return;
-        ControlFlowInformationProvider controlFlowInformationProvider = new ControlFlowInformationProvider(function, trace);
+    private void checkFunction(
+            @NotNull BodiesResolveContext c, @NotNull KtDeclarationWithBody function, @Nullable KotlinType expectedReturnType
+    ) {
+        ControlFlowInformationProvider controlFlowInformationProvider =
+                new ControlFlowInformationProvider(function, trace, languageVersionSettings, diagnosticSuppressor);
         if (c.getTopDownAnalysisMode().isLocalDeclarations()) {
             controlFlowInformationProvider.checkForLocalClassOrObjectMode();
             return;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,28 +19,23 @@ package org.jetbrains.kotlin.idea.hierarchy.calls;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.IdeBundle;
 import com.intellij.ide.hierarchy.HierarchyNodeDescriptor;
-import com.intellij.ide.hierarchy.JavaHierarchyUtil;
 import com.intellij.ide.hierarchy.call.CallHierarchyNodeDescriptor;
 import com.intellij.openapi.editor.markup.TextAttributes;
-import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ui.util.CompositeAppearance;
 import com.intellij.openapi.util.Comparing;
 import com.intellij.openapi.util.Iconable;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.pom.Navigatable;
-import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiReference;
-import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.ui.LayeredIcon;
-import com.intellij.util.Function;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.idea.caches.resolve.ResolutionUtils;
+import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.renderer.DescriptorRenderer;
-import org.jetbrains.kotlin.resolve.BindingContext;
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode;
 
 import javax.swing.*;
@@ -49,32 +44,27 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class KotlinCallHierarchyNodeDescriptor extends HierarchyNodeDescriptor implements Navigatable {
-    private int usageCount = 0;
-    private final Set<PsiReference> references = new HashSet<PsiReference>();
+    private int usageCount = 1;
+    private final Set<PsiReference> references = new HashSet<>();
     private final CallHierarchyNodeDescriptor javaDelegate;
 
-    public KotlinCallHierarchyNodeDescriptor(@NotNull Project project,
-            HierarchyNodeDescriptor parentDescriptor,
-            @NotNull PsiElement element,
+    public KotlinCallHierarchyNodeDescriptor(
+            @Nullable HierarchyNodeDescriptor parentDescriptor,
+            @NotNull KtElement element,
             boolean isBase,
             boolean navigateToReference) {
-        super(project, parentDescriptor, element, isBase);
+        super(element.getProject(), parentDescriptor, element, isBase);
         this.javaDelegate = new CallHierarchyNodeDescriptor(myProject, null, element, isBase, navigateToReference);
     }
 
-    public final CallHierarchyNodeDescriptor getJavaDelegate() {
-        return javaDelegate;
+    public final void incrementUsageCount() {
+        usageCount++;
+        javaDelegate.incrementUsageCount();
     }
 
     public final void addReference(PsiReference reference) {
-        if (references.add(reference)) {
-            usageCount++;
-        }
+        references.add(reference);
         javaDelegate.addReference(reference);
-    }
-
-    public final PsiElement getTargetElement(){
-        return getPsiElement();
     }
 
     @Override
@@ -96,7 +86,7 @@ public class KotlinCallHierarchyNodeDescriptor extends HierarchyNodeDescriptor i
 
         boolean changes = super.update();
 
-        PsiElement targetElement = getTargetElement();
+        PsiElement targetElement = getPsiElement();
         String elementText = renderElement(targetElement);
 
         if (elementText == null) {
@@ -122,16 +112,7 @@ public class KotlinCallHierarchyNodeDescriptor extends HierarchyNodeDescriptor i
             mainTextAttributes = new TextAttributes(myColor, null, null, null, Font.PLAIN);
         }
 
-        String packageName = null;
-        if (targetElement instanceof KtElement) {
-            packageName = KtPsiUtil.getPackageName((KtElement) targetElement);
-        }
-        else {
-            PsiClass enclosingClass = PsiTreeUtil.getParentOfType(targetElement, PsiClass.class, false);
-            if (enclosingClass != null) {
-                packageName = JavaHierarchyUtil.getPackageName(enclosingClass);
-            }
-        }
+        String packageName = KtPsiUtil.getPackageName((KtElement) targetElement);
 
         myHighlightedText.getEnding().addText(elementText, mainTextAttributes);
 
@@ -157,74 +138,75 @@ public class KotlinCallHierarchyNodeDescriptor extends HierarchyNodeDescriptor i
 
     @Nullable
     private static String renderElement(@Nullable PsiElement element) {
-        String elementText;
-        String containerText = null;
-
         if (element instanceof KtFile) {
-            elementText = ((KtFile) element).getName();
+            return ((KtFile) element).getName();
         }
-        else if (element instanceof KtNamedDeclaration) {
-            BindingContext bindingContext = ResolutionUtils.analyze((KtElement) element, BodyResolveMode.FULL);
 
-            DeclarationDescriptor descriptor = bindingContext.get(BindingContext.DECLARATION_TO_DESCRIPTOR, element);
-            if (descriptor == null) return null;
+        if (!(element instanceof KtNamedDeclaration)) {
+            return null;
+        }
 
-            if (element instanceof KtClassOrObject) {
-                if (element instanceof KtObjectDeclaration && ((KtObjectDeclaration) element).isCompanion()) {
-                    descriptor = descriptor.getContainingDeclaration();
-                    if (!(descriptor instanceof ClassDescriptor)) return null;
+        DeclarationDescriptor descriptor = ResolutionUtils.resolveToDescriptorIfAny((KtNamedDeclaration) element, BodyResolveMode.PARTIAL);
+        if (descriptor == null) return null;
 
+        String elementText;
+        if (element instanceof KtClassOrObject) {
+            if (element instanceof KtObjectDeclaration && ((KtObjectDeclaration) element).isCompanion()) {
+                descriptor = descriptor.getContainingDeclaration();
+                if (!(descriptor instanceof ClassDescriptor)) return null;
+
+                elementText = renderClassOrObject((ClassDescriptor) descriptor);
+            }
+            else if (element instanceof KtEnumEntry) {
+                elementText = ((KtEnumEntry) element).getName();
+            }
+            else {
+                if (((KtClassOrObject) element).getName() != null) {
                     elementText = renderClassOrObject((ClassDescriptor) descriptor);
                 }
-                else if (element instanceof KtEnumEntry) {
-                    elementText = ((KtEnumEntry) element).getName();
-                }
                 else {
-                    if (((KtClassOrObject) element).getName() != null) {
-                        elementText = renderClassOrObject((ClassDescriptor) descriptor);
-                    }
-                    else {
-                        elementText = "[anonymous]";
-                    }
+                    elementText = "[anonymous]";
                 }
             }
-            else if (element instanceof KtNamedFunction || element instanceof KtSecondaryConstructor) {
-                elementText = renderNamedFunction((FunctionDescriptor) descriptor);
-            }
-            else if (element instanceof KtProperty) {
-                elementText = ((KtProperty) element).getName();
-            }
-            else return null;
-
-            DeclarationDescriptor containerDescriptor = descriptor.getContainingDeclaration();
-            while (containerDescriptor != null) {
-                String name = containerDescriptor.getName().asString();
-                if (!name.startsWith("<")) {
-                    containerText = name;
-                    break;
-                }
-                containerDescriptor = containerDescriptor.getContainingDeclaration();
-            }
+        }
+        else if ((element instanceof KtNamedFunction || element instanceof KtConstructor)) {
+            if (!(descriptor instanceof FunctionDescriptor)) return null;
+            elementText = renderNamedFunction((FunctionDescriptor) descriptor);
+        }
+        else if (element instanceof KtProperty) {
+            elementText = ((KtProperty) element).getName();
         }
         else return null;
 
         if (elementText == null) return null;
-        return containerText != null ? containerText + "." + elementText : elementText;
-    }
 
-    public static String renderNamedFunction(FunctionDescriptor descriptor) {
+        String containerText = null;
+        DeclarationDescriptor containerDescriptor = descriptor.getContainingDeclaration();
+        while (containerDescriptor != null) {
+            if (containerDescriptor instanceof PackageFragmentDescriptor || containerDescriptor instanceof ModuleDescriptor) {
+                break;
+            }
+
+            Name name = containerDescriptor.getName();
+            if (!name.isSpecial()) {
+                String identifier = name.getIdentifier();
+                containerText = containerText != null ? identifier + "." + containerText : identifier;
+            }
+
+            containerDescriptor = containerDescriptor.getContainingDeclaration();
+        }
+
+        return containerText != null ? containerText + "." + elementText : elementText;
+}
+
+    public static String renderNamedFunction(@NotNull FunctionDescriptor descriptor) {
         DeclarationDescriptor descriptorForName = descriptor instanceof ConstructorDescriptor
                                                   ? descriptor.getContainingDeclaration()
                                                   : descriptor;
         String name = descriptorForName.getName().asString();
         String paramTypes = StringUtil.join(
                 descriptor.getValueParameters(),
-                new Function<ValueParameterDescriptor, String>() {
-                    @Override
-                    public String fun(ValueParameterDescriptor descriptor) {
-                        return DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(descriptor.getType());
-                    }
-                },
+                descriptor1 -> DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(descriptor1.getType()),
                 ", "
         );
         return name + "(" + paramTypes + ")";

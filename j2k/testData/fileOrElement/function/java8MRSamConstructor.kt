@@ -8,11 +8,9 @@ internal class Test {
         return 1
     }
 
-    constructor(i: Int) : super() {
-    }
+    constructor(i: Int) : super() {}
 
-    constructor() {
-    }
+    constructor() {}
 
     companion object {
         var field = Java8Class()
@@ -51,8 +49,8 @@ internal class Java8Class {
     fun testMemberFunctionThroughClass() {
         val memberFunFromClass = JFunction2<Java8Class, Int> { it.memberFun() }
         memberFunFromClass.foo(Java8Class())
-        MethodReferenceHelperClass.staticFun2(JFunction2<Any, Any> { memberFun() })
-        h.memberFun2(JFunction2<Any, Any> { memberFun() })
+        MethodReferenceHelperClass.staticFun2(JFunction2<Java8Class, Int> { it.memberFun() })
+        h.memberFun2(JFunction2<Java8Class, Int> { it.memberFun() })
     }
 
     fun testMemberFunctionThroughObject() {

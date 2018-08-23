@@ -1,27 +1,23 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package test.collections
 
-import org.junit.Test
-import java.util.ArrayList
-import java.util.LinkedHashSet
+import test.*
 import kotlin.test.*
 
-fun <T> iterableOf(vararg items: T): Iterable<T> = IterableWrapper(items.toList())
+fun <T> iterableOf(vararg items: T): Iterable<T> = Iterable { items.iterator() }
+fun <T> Iterable<T>.toIterable(): Iterable<T> = Iterable { this.iterator() }
 
-class IterableWrapper<T>(collection: Iterable<T>) : Iterable<T> {
-    private val collection = collection
+class IterableTest : OrderedIterableTests<Iterable<String>>({ iterableOf(*it) }, iterableOf<String>())
+class SetTest : IterableTests<Set<String>>({ setOf(*it) }, setOf())
+class LinkedSetTest : OrderedIterableTests<LinkedHashSet<String>>({ linkedSetOf(*it) }, linkedSetOf())
+class ListTest : OrderedIterableTests<List<String>>({ listOf(*it) }, listOf<String>())
+class ArrayListTest : OrderedIterableTests<ArrayList<String>>({ arrayListOf(*it) }, arrayListOf<String>())
 
-    override fun iterator(): Iterator<T> {
-        return collection.iterator()
-    }
-}
-
-class IterableTest : OrderedIterableTests<Iterable<String>>(iterableOf("foo", "bar"), iterableOf<String>())
-class SetTest : IterableTests<Set<String>>(setOf("foo", "bar"), setOf<String>())
-class LinkedSetTest : IterableTests<LinkedHashSet<String>>(linkedSetOf("foo", "bar"), linkedSetOf<String>())
-class ListTest : OrderedIterableTests<List<String>>(listOf("foo", "bar"), listOf<String>())
-class ArrayListTest : OrderedIterableTests<ArrayList<String>>(arrayListOf("foo", "bar"), arrayListOf<String>())
-
-abstract class OrderedIterableTests<T : Iterable<String>>(data: T, empty: T) : IterableTests<T>(data, empty) {
+abstract class OrderedIterableTests<T : Iterable<String>>(createFrom: (Array<out String>) -> T, empty: T) : IterableTests<T>(createFrom, empty) {
     @Test
     fun indexOf() {
         expect(0) { data.indexOf("foo") }
@@ -60,10 +56,10 @@ abstract class OrderedIterableTests<T : Iterable<String>>(data: T, empty: T) : I
         assertFails { data.elementAt(-1) }
         assertFails { empty.elementAt(0) }
 
-        expect("foo") { data.elementAtOrElse(0, {""} )}
-        expect("zoo") { data.elementAtOrElse(-1, { "zoo" })}
-        expect("zoo") { data.elementAtOrElse(2, { "zoo" })}
-        expect("zoo") { empty.elementAtOrElse(0) { "zoo" }}
+        expect("foo") { data.elementAtOrElse(0, { "" }) }
+        expect("zoo") { data.elementAtOrElse(-1, { "zoo" }) }
+        expect("zoo") { data.elementAtOrElse(2, { "zoo" }) }
+        expect("zoo") { empty.elementAtOrElse(0) { "zoo" } }
 
         expect(null) { empty.elementAtOrNull(0) }
 
@@ -108,9 +104,106 @@ abstract class OrderedIterableTests<T : Iterable<String>>(data: T, empty: T) : I
         expect(null) { empty.lastOrNull() }
         expect("foo") { data.lastOrNull { it.startsWith("f") } }
     }
+
+
+    @Test
+    fun zipWithNext() {
+        val data = createFrom("", "a", "xyz")
+        val lengthDeltas = data.zipWithNext { a: String, b: String -> b.length - a.length }
+        assertEquals(listOf(1, 2), lengthDeltas)
+
+        assertTrue(empty.zipWithNext { a: String, b: String -> a + b }.isEmpty())
+        assertTrue(createFrom("foo").zipWithNext { a: String, b: String -> a + b }.isEmpty())
+    }
+
+    @Test
+    fun zipWithNextPairs() {
+        assertTrue(empty.zipWithNext().isEmpty())
+        assertTrue(createFrom("foo").zipWithNext().isEmpty())
+        assertEquals(listOf("a" to "b"), createFrom("a", "b").zipWithNext())
+        assertEquals(listOf("a" to "b", "b" to "c"), createFrom("a", "b", "c").zipWithNext())
+    }
+
+    @Test
+    fun chunked() {
+        val size = 7
+        val data = createFrom(Array(size) { "$it" })
+        val result = data.chunked(4)
+        assertEquals(listOf(
+                listOf("0", "1", "2", "3"),
+                listOf("4", "5", "6")
+        ), result)
+
+        val result2 = data.chunked(3) { it.joinToString("") }
+        assertEquals(listOf("012", "345", "6"), result2)
+
+        data.toList().let { expectedSingleChunk ->
+            assertEquals(expectedSingleChunk, data.chunked(size).single())
+            assertEquals(expectedSingleChunk, data.chunked(size + 3).single())
+        }
+
+        assertTrue(empty.chunked(3).isEmpty())
+
+        for (illegalValue in listOf(Int.MIN_VALUE, -1, 0)) {
+            assertFailsWith<IllegalArgumentException>("size $illegalValue") { data.chunked(illegalValue) }
+        }
+    }
+
+
+    @Test
+    fun windowed() {
+        val size = 7
+        val data = createFrom(Array(size) { "$it" })
+        val result = data.windowed(4, 2)
+        assertEquals(listOf(
+                listOf("0", "1", "2", "3"),
+                listOf("2", "3", "4", "5")
+        ), result)
+
+        val resultPartial = data.windowed(4, 2, partialWindows = true)
+        assertEquals(listOf(
+                listOf("0", "1", "2", "3"),
+                listOf("2", "3", "4", "5"),
+                listOf("4", "5", "6"),
+                listOf("6")
+        ), resultPartial)
+
+
+        val result2 = data.windowed(2, 3) { it.joinToString("") }
+        assertEquals(listOf("01", "34"), result2)
+
+        val result2partial = data.windowed(2, 3, partialWindows = true) { it.joinToString("") }
+        assertEquals(listOf("01", "34", "6"), result2partial)
+
+        assertEquals(data.chunked(2), data.windowed(2, 2, partialWindows = true))
+
+        assertEquals(data.take(2), data.windowed(2, size).single())
+        assertEquals(data.take(3), data.windowed(3, size + 3).single())
+
+        assertEquals(data.toList(), data.windowed(size, 1).single())
+        assertTrue(data.windowed(size + 1, 1).isEmpty())
+
+        val result3partial = data.windowed(size, 1, partialWindows = true)
+        result3partial.forEachIndexed { index, window ->
+            assertEquals(size - index, window.size, "size of window#$index")
+        }
+
+        assertTrue(empty.windowed(3, 2).isEmpty())
+
+        for (illegalValue in listOf(Int.MIN_VALUE, -1, 0)) {
+            assertFailsWith<IllegalArgumentException>("size $illegalValue") { data.windowed(illegalValue, 1) }
+            assertFailsWith<IllegalArgumentException>("step $illegalValue") { data.windowed(1, illegalValue) }
+        }
+    }
+
+
 }
 
-abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
+abstract class IterableTests<T : Iterable<String>>(val createFrom: (Array<out String>) -> T, val empty: T) {
+    fun createFrom(vararg items: String): T = createFrom(items)
+
+    val data = createFrom("foo", "bar")
+
     @Test
     fun any() {
         expect(true) { data.any() }
@@ -140,13 +233,14 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
     @Test
     fun filter() {
         val foo = data.filter { it.startsWith("f") }
-        expect(true) { foo is List<String> }
+        assertStaticAndRuntimeTypeIs<List<String>>(foo)
         expect(true) { foo.all { it.startsWith("f") } }
         expect(1) { foo.size }
         assertEquals(listOf("foo"), foo)
     }
 
-    @Test fun filterIndexed() {
+    @Test
+    fun filterIndexed() {
         val result = data.filterIndexed { index, value -> value.first() == ('a' + index) }
         assertEquals(listOf("bar"), result)
     }
@@ -154,7 +248,7 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
     @Test
     fun drop() {
         val foo = data.drop(1)
-        expect(true) { foo is List<String> }
+        assertStaticAndRuntimeTypeIs<List<String>>(foo)
         expect(true) { foo.all { it.startsWith("b") } }
         expect(1) { foo.size }
         assertEquals(listOf("bar"), foo)
@@ -163,7 +257,7 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
     @Test
     fun dropWhile() {
         val foo = data.dropWhile { it[0] == 'f' }
-        expect(true) { foo is List<String> }
+        assertStaticAndRuntimeTypeIs<List<String>>(foo)
         expect(true) { foo.all { it.startsWith("b") } }
         expect(1) { foo.size }
         assertEquals(listOf("bar"), foo)
@@ -172,7 +266,7 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
     @Test
     fun filterNot() {
         val notFoo = data.filterNot { it.startsWith("f") }
-        expect(true) { notFoo is List<String> }
+        assertStaticAndRuntimeTypeIs<List<String>>(notFoo)
         expect(true) { notFoo.none { it.startsWith("f") } }
         expect(1) { notFoo.size }
         assertEquals(listOf("bar"), notFoo)
@@ -183,6 +277,17 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
         var count = 0
         data.forEach { count += it.length }
         assertEquals(6, count)
+    }
+
+    @Test
+    fun onEach() {
+        var count = 0
+        val newData = data.onEach { count += it.length }
+        assertEquals(6, count)
+        assertTrue(data === newData)
+
+        // static types test
+        assertStaticTypeIs<ArrayList<Int>>(arrayListOf(1, 2, 3).onEach { })
     }
 
     @Test
@@ -386,7 +491,10 @@ abstract class IterableTests<T : Iterable<String>>(val data: T, val empty: T) {
 }
 
 
-fun <T> Iterable<T>.assertSorted(isInOrder: (T, T) -> Boolean): Unit { this.iterator().assertSorted(isInOrder) }
+fun <T> Iterable<T>.assertSorted(isInOrder: (T, T) -> Boolean) {
+    this.iterator().assertSorted(isInOrder)
+}
+
 fun <T> Iterator<T>.assertSorted(isInOrder: (T, T) -> Boolean) {
     if (!hasNext()) return
     var index = 0
@@ -394,7 +502,7 @@ fun <T> Iterator<T>.assertSorted(isInOrder: (T, T) -> Boolean) {
     while (hasNext()) {
         index += 1
         val next = next()
-        assertTrue(isInOrder(prev, next), "Not in order at position $index, element[${index-1}]: $prev, element[$index]: $next")
+        assertTrue(isInOrder(prev, next), "Not in order at position $index, element[${index - 1}]: $prev, element[$index]: $next")
         prev = next
     }
     return

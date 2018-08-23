@@ -1,3 +1,5 @@
+// DONT_RUN_GENERATED_CODE: JS
+
 fun withoutAnnotation(x : Int) : Int {
     if (x > 0) {
         return 1 + withoutAnnotation(x - 1)

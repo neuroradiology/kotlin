@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,12 @@
 
 package org.jetbrains.kotlin.resolve;
 
+import kotlin.Pair;
 import kotlin.Unit;
+import kotlin.annotations.jvm.Mutable;
 import kotlin.collections.CollectionsKt;
 import kotlin.jvm.functions.Function1;
-import org.jetbrains.annotations.Mutable;
+import kotlin.jvm.functions.Function2;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.*;
@@ -29,8 +31,10 @@ import org.jetbrains.kotlin.descriptors.impl.PropertyDescriptorImpl;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.types.FlexibleTypesKt;
 import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.KotlinTypeKt;
 import org.jetbrains.kotlin.types.TypeConstructor;
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker;
+import org.jetbrains.kotlin.types.checker.KotlinTypeCheckerImpl;
 import org.jetbrains.kotlin.utils.SmartSet;
 
 import java.util.*;
@@ -63,6 +67,99 @@ public class OverridingUtil {
         equalityAxioms = axioms;
     }
 
+    /**
+     * Given a set of descriptors, returns a set containing all the given descriptors except those which _are overridden_ by at least
+     * one other descriptor from the original set.
+     */
+    @NotNull
+    public static <D extends CallableDescriptor> Set<D> filterOutOverridden(@NotNull Set<D> candidateSet) {
+        return filterOverrides(candidateSet, new Function2<D, D, Pair<CallableDescriptor, CallableDescriptor>>() {
+            @Override
+            public Pair<CallableDescriptor, CallableDescriptor> invoke(D a, D b) {
+                return new Pair<CallableDescriptor, CallableDescriptor>(a, b);
+            }
+        });
+    }
+
+    @NotNull
+    public static <D> Set<D> filterOverrides(
+            @NotNull Set<D> candidateSet,
+            @NotNull Function2<? super D, ? super D, Pair<CallableDescriptor, CallableDescriptor>> transformFirst
+    ) {
+        if (candidateSet.size() <= 1) return candidateSet;
+
+        Set<D> result = new LinkedHashSet<D>();
+        outerLoop:
+        for (D meD : candidateSet) {
+            for (Iterator<D> iterator = result.iterator(); iterator.hasNext(); ) {
+                D otherD = iterator.next();
+                Pair<CallableDescriptor, CallableDescriptor> meAndOther = transformFirst.invoke(meD, otherD);
+                CallableDescriptor me = meAndOther.component1();
+                CallableDescriptor other = meAndOther.component2();
+                if (overrides(me, other)) {
+                    iterator.remove();
+                }
+                else if (overrides(other, me)) {
+                    continue outerLoop;
+                }
+            }
+            result.add(meD);
+        }
+
+        assert !result.isEmpty() : "All candidates filtered out from " + candidateSet;
+
+        return result;
+    }
+
+    /**
+     * @return whether f overrides g
+     */
+    public static <D extends CallableDescriptor> boolean overrides(@NotNull D f, @NotNull D g) {
+        // In a multi-module project different "copies" of the same class may be present in different libraries,
+        // that's why we use structural equivalence for members (DescriptorEquivalenceForOverrides).
+
+        // This first check cover the case of duplicate classes in different modules:
+        // when B is defined in modules m1 and m2, and C (indirectly) inherits from both versions,
+        // we'll be getting sets of members that do not override each other, but are structurally equivalent.
+        // As other code relies on no equal descriptors passed here, we guard against f == g, but this may not be necessary
+        // Note that this is needed for the usage of this function in the IDE code
+        if (!f.equals(g) && DescriptorEquivalenceForOverrides.INSTANCE.areEquivalent(f.getOriginal(), g.getOriginal())) return true;
+
+        CallableDescriptor originalG = g.getOriginal();
+        for (D overriddenFunction : DescriptorUtils.getAllOverriddenDescriptors(f)) {
+            if (DescriptorEquivalenceForOverrides.INSTANCE.areEquivalent(originalG, overriddenFunction)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @return overridden real descriptors (not fake overrides). Note that most usages of this method should be followed by calling
+     * {@link #filterOutOverridden(Set)}, because some of the declarations can override the other.
+     */
+    @NotNull
+    public static Set<CallableMemberDescriptor> getOverriddenDeclarations(@NotNull CallableMemberDescriptor descriptor) {
+        Set<CallableMemberDescriptor> result = new LinkedHashSet<CallableMemberDescriptor>();
+        collectOverriddenDeclarations(descriptor, result);
+        return result;
+    }
+
+    private static void collectOverriddenDeclarations(
+            @NotNull CallableMemberDescriptor descriptor,
+            @NotNull Set<CallableMemberDescriptor> result
+    ) {
+        if (descriptor.getKind().isReal()) {
+            result.add(descriptor);
+        }
+        else {
+            if (descriptor.getOverriddenDescriptors().isEmpty()) {
+                throw new IllegalStateException("No overridden descriptors found for (fake override) " + descriptor);
+            }
+            for (CallableMemberDescriptor overridden : descriptor.getOverriddenDescriptors()) {
+                collectOverriddenDeclarations(overridden, result);
+            }
+        }
+    }
+
     @NotNull
     public OverrideCompatibilityInfo isOverridableBy(
             @NotNull CallableDescriptor superDescriptor,
@@ -73,12 +170,7 @@ public class OverridingUtil {
     }
 
     @NotNull
-    public OverrideCompatibilityInfo isOverridableByIncludingReturnType(@NotNull CallableDescriptor superDescriptor, @NotNull CallableDescriptor subDescriptor) {
-        return isOverridableBy(superDescriptor, subDescriptor, null, true);
-    }
-
-    @NotNull
-    private OverrideCompatibilityInfo isOverridableBy(
+    public OverrideCompatibilityInfo isOverridableBy(
             @NotNull CallableDescriptor superDescriptor,
             @NotNull CallableDescriptor subDescriptor,
             @Nullable ClassDescriptor subClassDescriptor,
@@ -176,12 +268,17 @@ public class OverridingUtil {
             }
         }
 
+        if (superDescriptor instanceof FunctionDescriptor && subDescriptor instanceof FunctionDescriptor &&
+            ((FunctionDescriptor) superDescriptor).isSuspend() != ((FunctionDescriptor) subDescriptor).isSuspend()) {
+            return OverrideCompatibilityInfo.conflict("Incompatible suspendability");
+        }
+
         if (checkReturnType) {
             KotlinType superReturnType = superDescriptor.getReturnType();
             KotlinType subReturnType = subDescriptor.getReturnType();
 
             if (superReturnType != null && subReturnType != null) {
-                boolean bothErrors = subReturnType.isError() && superReturnType.isError();
+                boolean bothErrors = KotlinTypeKt.isError(subReturnType) && KotlinTypeKt.isError(superReturnType);
                 if (!bothErrors && !typeChecker.isSubtypeOf(subReturnType, superReturnType)) {
                     return OverrideCompatibilityInfo.conflict("Return type mismatch");
                 }
@@ -225,14 +322,14 @@ public class OverridingUtil {
     ) {
         assert firstParameters.size() == secondParameters.size() :
                 "Should be the same number of type parameters: " + firstParameters + " vs " + secondParameters;
-        if (firstParameters.isEmpty()) return KotlinTypeChecker.withAxioms(equalityAxioms);
+        if (firstParameters.isEmpty()) return KotlinTypeCheckerImpl.withAxioms(equalityAxioms);
 
         final Map<TypeConstructor, TypeConstructor> matchingTypeConstructors = new HashMap<TypeConstructor, TypeConstructor>();
         for (int i = 0; i < firstParameters.size(); i++) {
             matchingTypeConstructors.put(firstParameters.get(i).getTypeConstructor(), secondParameters.get(i).getTypeConstructor());
         }
 
-        return KotlinTypeChecker.withAxioms(new KotlinTypeChecker.TypeConstructorEquality() {
+        return KotlinTypeCheckerImpl.withAxioms(new KotlinTypeChecker.TypeConstructorEquality() {
             @Override
             public boolean equals(@NotNull TypeConstructor a, @NotNull TypeConstructor b) {
                 if (equalityAxioms.equals(a, b)) return true;
@@ -244,7 +341,7 @@ public class OverridingUtil {
     }
 
     @Nullable
-    static OverrideCompatibilityInfo checkReceiverAndParameterCount(
+    private static OverrideCompatibilityInfo checkReceiverAndParameterCount(
             CallableDescriptor superDescriptor,
             CallableDescriptor subDescriptor
     ) {
@@ -264,7 +361,7 @@ public class OverridingUtil {
             @NotNull KotlinType typeInSub,
             @NotNull KotlinTypeChecker typeChecker
     ) {
-        boolean bothErrors = typeInSuper.isError() && typeInSub.isError();
+        boolean bothErrors = KotlinTypeKt.isError(typeInSuper) && KotlinTypeKt.isError(typeInSub);
         return bothErrors || typeChecker.equalTypes(typeInSuper, typeInSub);
     }
 
@@ -295,7 +392,7 @@ public class OverridingUtil {
         return true;
     }
 
-    static List<KotlinType> compiledValueParameters(CallableDescriptor callableDescriptor) {
+    private static List<KotlinType> compiledValueParameters(CallableDescriptor callableDescriptor) {
         ReceiverParameterDescriptor receiverParameter = callableDescriptor.getExtensionReceiverParameter();
         List<KotlinType> parameters = new ArrayList<KotlinType>();
         if (receiverParameter != null) {
@@ -326,6 +423,11 @@ public class OverridingUtil {
         createAndBindFakeOverrides(current, notOverridden, strategy);
     }
 
+    public static boolean isVisibleForOverride(@NotNull MemberDescriptor overriding, @NotNull MemberDescriptor fromSuper) {
+        return !Visibilities.isPrivate(fromSuper.getVisibility()) &&
+               Visibilities.isVisibleIgnoringReceiver(fromSuper, overriding);
+    }
+
     private static Collection<CallableMemberDescriptor> extractAndBindOverridesForMember(
             @NotNull CallableMemberDescriptor fromCurrent,
             @NotNull Collection<? extends CallableMemberDescriptor> descriptorsFromSuper,
@@ -337,17 +439,18 @@ public class OverridingUtil {
         for (CallableMemberDescriptor fromSupertype : descriptorsFromSuper) {
             OverrideCompatibilityInfo.Result result = DEFAULT.isOverridableBy(fromSupertype, fromCurrent, current).getResult();
 
-            boolean isVisible = Visibilities.isVisibleWithIrrelevantReceiver(fromSupertype, current);
+            boolean isVisibleForOverride = isVisibleForOverride(fromCurrent, fromSupertype);
+
             switch (result) {
                 case OVERRIDABLE:
-                    if (isVisible) {
+                    if (isVisibleForOverride) {
                         overridden.add(fromSupertype);
                     }
                     bound.add(fromSupertype);
                     break;
                 case CONFLICT:
-                    if (isVisible) {
-                        strategy.conflict(fromSupertype, fromCurrent);
+                    if (isVisibleForOverride) {
+                        strategy.overrideConflict(fromSupertype, fromCurrent);
                     }
                     bound.add(fromSupertype);
                     break;
@@ -405,8 +508,8 @@ public class OverridingUtil {
 
         if (!isVisibilityMoreSpecific(a, b)) return false;
 
-        if (a instanceof SimpleFunctionDescriptor) {
-            assert b instanceof SimpleFunctionDescriptor : "b is " + b.getClass();
+        if (a instanceof FunctionDescriptor) {
+            assert b instanceof FunctionDescriptor : "b is " + b.getClass();
 
             return isReturnTypeMoreSpecific(a, aReturnType, b, bReturnType);
         }
@@ -500,6 +603,7 @@ public class OverridingUtil {
 
         H firstNonFlexible = null;
         for (H candidate : candidates) {
+            //noinspection ConstantConditions
             if (!FlexibleTypesKt.isFlexible(descriptorByHandle.invoke(candidate).getReturnType())) {
                 firstNonFlexible = candidate;
                 break;
@@ -521,6 +625,9 @@ public class OverridingUtil {
         boolean allInvisible = visibleOverridables.isEmpty();
         Collection<CallableMemberDescriptor> effectiveOverridden = allInvisible ? overridables : visibleOverridables;
 
+        Modality modality = determineModalityForFakeOverride(effectiveOverridden, current);
+        Visibility visibility = allInvisible ? Visibilities.INVISIBLE_FAKE : Visibilities.INHERITED;
+
         // FIXME doesn't work as expected for flexible types: should create a refined signature.
         // Current algorithm produces bad results in presence of annotated Java signatures such as:
         //      J: foo(s: String!): String -- @NotNull String foo(String s);
@@ -528,8 +635,6 @@ public class OverridingUtil {
         //  --> 'foo(s: String!): String' as an inherited signature with most specific return type.
         // This is bad because it can be overridden by 'foo(s: String?): String', which is not override-equivalent with K::foo above.
         // Should be 'foo(s: String): String'.
-        Modality modality = getMinimalModality(effectiveOverridden);
-        Visibility visibility = allInvisible ? Visibilities.INVISIBLE_FAKE : Visibilities.INHERITED;
         CallableMemberDescriptor mostSpecific =
                 selectMostSpecificMember(effectiveOverridden,
                                          new Function1<CallableMemberDescriptor, CallableDescriptor>() {
@@ -547,14 +652,66 @@ public class OverridingUtil {
     }
 
     @NotNull
-    private static Modality getMinimalModality(@NotNull Collection<CallableMemberDescriptor> descriptors) {
-        Modality modality = Modality.ABSTRACT;
+    private static Modality determineModalityForFakeOverride(
+            @NotNull Collection<CallableMemberDescriptor> descriptors,
+            @NotNull ClassDescriptor current
+    ) {
+        // Optimization: avoid creating hash sets in frequent cases when modality can be computed trivially
+        boolean hasOpen = false;
+        boolean hasAbstract = false;
         for (CallableMemberDescriptor descriptor : descriptors) {
-            if (descriptor.getModality().compareTo(modality) < 0) {
-                modality = descriptor.getModality();
+            switch (descriptor.getModality()) {
+                case FINAL:
+                    return Modality.FINAL;
+                case SEALED:
+                    throw new IllegalStateException("Member cannot have SEALED modality: " + descriptor);
+                case OPEN:
+                    hasOpen = true;
+                    break;
+                case ABSTRACT:
+                    hasAbstract = true;
+                    break;
             }
         }
-        return modality;
+
+        // Fake overrides of abstract members in non-abstract expected classes should not be abstract, because otherwise it would be
+        // impossible to inherit a non-expected class from that expected class in common code.
+        // We're making their modality that of the containing class, because this is the least confusing behavior for the users.
+        // However, it may cause problems if we reuse resolution results of common code when compiling platform code (see KT-15220)
+        boolean transformAbstractToClassModality =
+                current.isExpect() && (current.getModality() != Modality.ABSTRACT && current.getModality() != Modality.SEALED);
+
+        if (hasOpen && !hasAbstract) {
+            return Modality.OPEN;
+        }
+        if (!hasOpen && hasAbstract) {
+            return transformAbstractToClassModality ? current.getModality() : Modality.ABSTRACT;
+        }
+
+        Set<CallableMemberDescriptor> allOverriddenDeclarations = new HashSet<CallableMemberDescriptor>();
+        for (CallableMemberDescriptor descriptor : descriptors) {
+            allOverriddenDeclarations.addAll(getOverriddenDeclarations(descriptor));
+        }
+        return getMinimalModality(filterOutOverridden(allOverriddenDeclarations), transformAbstractToClassModality, current.getModality());
+    }
+
+    @NotNull
+    private static Modality getMinimalModality(
+            @NotNull Collection<CallableMemberDescriptor> descriptors,
+            boolean transformAbstractToClassModality,
+            @NotNull Modality classModality
+    ) {
+        Modality result = Modality.ABSTRACT;
+        for (CallableMemberDescriptor descriptor : descriptors) {
+            Modality effectiveModality =
+                    transformAbstractToClassModality && descriptor.getModality() == Modality.ABSTRACT
+                    ? classModality
+                    : descriptor.getModality();
+            if (effectiveModality.compareTo(result) < 0) {
+                result = effectiveModality;
+            }
+        }
+        return result;
     }
 
     @NotNull
@@ -567,7 +724,7 @@ public class OverridingUtil {
             public Boolean invoke(CallableMemberDescriptor descriptor) {
                 //nested class could capture private member, so check for private visibility added
                 return !Visibilities.isPrivate(descriptor.getVisibility()) &&
-                       Visibilities.isVisibleWithIrrelevantReceiver(descriptor, current);
+                       Visibilities.isVisibleIgnoringReceiver(descriptor, current);
             }
         });
     }
@@ -638,7 +795,7 @@ public class OverridingUtil {
                 new Function1<CallableMemberDescriptor, Unit>() {
                     @Override
                     public Unit invoke(CallableMemberDescriptor descriptor) {
-                        strategy.conflict(overrider, descriptor);
+                        strategy.inheritanceConflict(overrider, descriptor);
                         return Unit.INSTANCE;
                     }
                 });
@@ -683,7 +840,11 @@ public class OverridingUtil {
         }
         else {
             assert memberDescriptor instanceof PropertyAccessorDescriptorImpl;
-            ((PropertyAccessorDescriptorImpl) memberDescriptor).setVisibility(visibilityToInherit);
+            PropertyAccessorDescriptorImpl propertyAccessorDescriptor = (PropertyAccessorDescriptorImpl) memberDescriptor;
+            propertyAccessorDescriptor.setVisibility(visibilityToInherit);
+            if (visibilityToInherit != propertyAccessorDescriptor.getCorrespondingProperty().getVisibility()) {
+                propertyAccessorDescriptor.setDefault(false);
+            }
         }
     }
 

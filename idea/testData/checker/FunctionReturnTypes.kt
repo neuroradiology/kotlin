@@ -1,3 +1,4 @@
+// RUNTIME
 fun none() {}
 
 fun unitEmptyInfer() {}
@@ -64,10 +65,10 @@ fun blockReturnValueTypeMatch1() : Int {
   return if (1 > 2) <error>1.0</error> else <error>2.0</error>
 }
 fun blockReturnValueTypeMatch2() : Int {
-  return <error>if (1 > 2) 1</error>
+    return <error><error>if</error> (1 > 2) 1</error>
 }
 fun blockReturnValueTypeMatch3() : Int {
-  return <error>if (1 > 2) else 1</error>
+    return <error><error>if</error> (1 > 2) else 1</error>
 }
 fun blockReturnValueTypeMatch4() : Int {
   if (1 > 2)
@@ -100,8 +101,7 @@ fun blockReturnValueTypeMatch9() : Int {
     <warning>1.0</warning>
 <error>}</error>
 fun blockReturnValueTypeMatch10() : Int {
-  return <error>if (1 > 2)
-    1</error>
+    return <error><error>if</error> (1 > 2) 1</error>
 }
 fun blockReturnValueTypeMatch11() : Int {
   if (1 > 2)
@@ -131,7 +131,7 @@ fun blockNoReturnIfUnitInOneBranch(): Int {
 fun nonBlockReturnIfEmptyIf(): Int = if (1 < 2) <error>{}</error> else <error>{}</error>
 fun nonBlockNoReturnIfUnitInOneBranch(): Int = if (1 < 2) <error>{}</error> else 2
 
-val a = <error>return 1</error>
+val a = <error>return</error> 1
 
 class A() {
 }

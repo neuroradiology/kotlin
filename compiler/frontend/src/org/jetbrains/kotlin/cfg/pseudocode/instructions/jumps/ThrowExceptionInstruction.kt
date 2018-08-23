@@ -20,31 +20,26 @@ import org.jetbrains.kotlin.cfg.pseudocode.PseudoValue
 import org.jetbrains.kotlin.psi.KtThrowExpression
 import org.jetbrains.kotlin.cfg.Label
 import java.util.Collections
-import org.jetbrains.kotlin.cfg.pseudocode.instructions.LexicalScope
+import org.jetbrains.kotlin.cfg.pseudocode.instructions.BlockScope
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitor
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitorWithResult
 
 class ThrowExceptionInstruction(
-        expression: KtThrowExpression,
-        lexicalScope: LexicalScope,
-        errorLabel: Label,
-        val thrownValue: PseudoValue
-) : AbstractJumpInstruction(expression, errorLabel, lexicalScope) {
+    expression: KtThrowExpression,
+    blockScope: BlockScope,
+    errorLabel: Label,
+    private val thrownValue: PseudoValue
+) : AbstractJumpInstruction(expression, errorLabel, blockScope) {
     override val inputValues: List<PseudoValue> get() = Collections.singletonList(thrownValue)
 
     override fun accept(visitor: InstructionVisitor) {
         visitor.visitThrowExceptionInstruction(this)
     }
 
-    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R {
-        return visitor.visitThrowExceptionInstruction(this)
-    }
+    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R = visitor.visitThrowExceptionInstruction(this)
 
-    override fun toString(): String {
-        return "throw (${element.text}|$thrownValue)"
-    }
+    override fun toString(): String = "throw (${element.text}|$thrownValue)"
 
-    override fun createCopy(newLabel: Label, lexicalScope: LexicalScope): AbstractJumpInstruction {
-        return ThrowExceptionInstruction((element as KtThrowExpression), lexicalScope, newLabel, thrownValue)
-    }
+    override fun createCopy(newLabel: Label, blockScope: BlockScope): AbstractJumpInstruction =
+        ThrowExceptionInstruction((element as KtThrowExpression), blockScope, newLabel, thrownValue)
 }

@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 // !CHECK_TYPE
 
 fun <T> magic(): T = null!!
@@ -10,11 +11,11 @@ class Q {
         C()
     }
 
-    private var x = foo<CharSequence>()()
-    private var y = foo<String>()()
+    private var x = <!DEBUG_INFO_LEAKING_THIS!>foo<!><CharSequence>()()
+    private var y = <!DEBUG_INFO_LEAKING_THIS!>foo<!><String>()()
 
     fun bar() {
-        x = <!TYPE_MISMATCH!>y<!>
+        x = <!NI;TYPE_MISMATCH, TYPE_MISMATCH!>y<!>
         x = foo<CharSequence>()()
         y = foo<String>()()
 

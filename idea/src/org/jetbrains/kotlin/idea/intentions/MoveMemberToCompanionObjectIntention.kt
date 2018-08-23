@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.idea.intentions
 
 import com.intellij.codeInsight.CodeInsightUtilCore
+import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.codeInsight.template.TemplateBuilderImpl
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.TextRange
@@ -34,35 +35,40 @@ import com.intellij.usageView.UsageInfo
 import com.intellij.util.SmartList
 import com.intellij.util.containers.MultiMap
 import org.jetbrains.kotlin.asJava.toLightClass
+import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptorWithResolutionScopes
+import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
+import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptor
-import org.jetbrains.kotlin.idea.core.CollectingNameValidator
-import org.jetbrains.kotlin.idea.core.KotlinNameSuggester
-import org.jetbrains.kotlin.idea.core.getOrCreateCompanionObject
-import org.jetbrains.kotlin.idea.core.replaced
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
+import org.jetbrains.kotlin.idea.caches.resolve.unsafeResolveToDescriptor
+import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
+import org.jetbrains.kotlin.idea.core.*
+import org.jetbrains.kotlin.idea.quickfix.KotlinSingleIntentionActionFactory
 import org.jetbrains.kotlin.idea.refactoring.checkConflictsInteractively
 import org.jetbrains.kotlin.idea.refactoring.move.OuterInstanceReferenceUsageInfo
 import org.jetbrains.kotlin.idea.refactoring.move.collectOuterInstanceReferences
 import org.jetbrains.kotlin.idea.refactoring.move.moveDeclarations.*
-import org.jetbrains.kotlin.idea.refactoring.move.reportConflictIfAny
 import org.jetbrains.kotlin.idea.refactoring.move.traverseOuterInstanceReferences
-import org.jetbrains.kotlin.idea.refactoring.runSynchronouslyWithProgress
 import org.jetbrains.kotlin.idea.references.KtSimpleNameReference
+import org.jetbrains.kotlin.idea.runSynchronouslyWithProgress
 import org.jetbrains.kotlin.idea.search.declarationsSearch.HierarchySearchRequest
 import org.jetbrains.kotlin.idea.search.declarationsSearch.searchOverriders
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
-import org.jetbrains.kotlin.idea.util.ShortenReferences
+import org.jetbrains.kotlin.idea.util.application.runReadAction
+import org.jetbrains.kotlin.idea.util.application.runWriteAction
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.*
-import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
+import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ImplicitReceiver
+import org.jetbrains.kotlin.util.findCallableMemberBySignature
 
 class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamedDeclaration>(KtNamedDeclaration::class.java,
                                                                                              "Move to companion object") {
@@ -74,8 +80,14 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
         if ((element is KtNamedFunction || element is KtProperty) && element.hasModifier(KtTokens.ABSTRACT_KEYWORD)) return null
         if (element.hasModifier(KtTokens.OVERRIDE_KEYWORD)) return null
         val containingClass = element.containingClassOrObject as? KtClass ?: return null
-        if (containingClass.isLocal() || containingClass.isInner()) return null
-        return element.nameIdentifier?.textRange
+        if (containingClass.isLocal || containingClass.isInner()) return null
+
+        val nameIdentifier = element.nameIdentifier ?: return null
+        if (element is KtProperty && element.hasModifier(KtTokens.CONST_KEYWORD) && !element.isVar) {
+            val constElement = element.modifierList?.allChildren?.find { it.node.elementType == KtTokens.CONST_KEYWORD }
+            if (constElement != null) return TextRange(constElement.startOffset, nameIdentifier.endOffset)
+        }
+        return nameIdentifier.textRange
     }
 
     class JavaUsageInfo(refExpression: PsiReferenceExpression) : UsageInfo(refExpression)
@@ -85,7 +97,7 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
 
     private fun getNameSuggestionsForOuterInstance(element: KtNamedDeclaration): List<String> {
         val containingClass = element.containingClassOrObject as KtClass
-        val containingClassDescriptor = containingClass.resolveToDescriptor() as ClassDescriptorWithResolutionScopes
+        val containingClassDescriptor = containingClass.unsafeResolveToDescriptor() as ClassDescriptorWithResolutionScopes
         val companionDescriptor = containingClassDescriptor.companionObjectDescriptor
         val companionMemberScope = (companionDescriptor ?: containingClassDescriptor).scopeForMemberDeclarationResolution
         val validator = CollectingNameValidator(element.getValueParameters().mapNotNull { it.name }) {
@@ -114,7 +126,7 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
         }
     }
 
-    private fun moveReceiverToArgumentList(refElement: PsiElement) {
+    private fun moveReceiverToArgumentList(refElement: PsiElement, classFqName: FqName) {
         when (refElement) {
             is PsiReferenceExpression -> {
                 val qualifier = refElement.qualifier
@@ -126,15 +138,15 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
             }
 
             is KtSimpleNameExpression -> {
-                val call = refElement.parent as? KtCallExpression
-                val receiver = call?.getQualifiedExpressionForSelector()?.receiverExpression
-                if (call != null && receiver != null) {
-                    val psiFactory = KtPsiFactory(refElement)
-                    val argumentList = call.valueArgumentList
-                                       ?: call.addAfter(psiFactory.createCallArguments("()"), call.typeArgumentList ?: refElement) as KtValueArgumentList
-                    argumentList.addArgumentBefore(psiFactory.createArgument(receiver),
-                                                   argumentList.arguments.firstOrNull())
-                }
+                val call = refElement.parent as? KtCallExpression ?: return
+                val psiFactory = KtPsiFactory(refElement)
+                val argumentList = call.valueArgumentList
+                                   ?: call.addAfter(psiFactory.createCallArguments("()"), call.typeArgumentList ?: refElement) as KtValueArgumentList
+
+                val receiver = call.getQualifiedExpressionForSelector()?.receiverExpression
+                val receiverArg = receiver?.let { psiFactory.createArgument(it) }
+                                  ?: psiFactory.createArgument(psiFactory.createExpression("this@${classFqName.shortName().asString()}"))
+                argumentList.addArgumentBefore(receiverArg, argumentList.arguments.firstOrNull())
             }
         }
     }
@@ -163,13 +175,13 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
             val parameterList = element.valueParameterList!!
             val parameters = parameterList.parameters
 
-            val newParamType = (containingClass.resolveToDescriptor() as ClassDescriptor).defaultType
+            val newParamType = (containingClass.unsafeResolveToDescriptor() as ClassDescriptor).defaultType
 
             nameSuggestions = getNameSuggestionsForOuterInstance(element)
 
             val newParam = parameterList.addParameterBefore(
-                    ktPsiFactory.createParameter("${nameSuggestions.first()}: ${IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.renderType(newParamType)}"),
-                    parameters.firstOrNull()
+                ktPsiFactory.createParameter("${nameSuggestions.first()}: ${IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.renderType(newParamType)}"),
+                parameters.firstOrNull()
             )
 
             val newOuterInstanceRef = ktPsiFactory.createExpression(newParam.name!!)
@@ -189,6 +201,8 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
             nameSuggestions = emptyList()
         }
 
+        val hasInstanceArg = nameSuggestions.isNotEmpty()
+
         element.removeModifier(KtTokens.OPEN_KEYWORD)
         element.removeModifier(KtTokens.FINAL_KEYWORD)
 
@@ -197,8 +211,8 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
         for (usage in externalUsages) {
             val usageElement = usage.element ?: continue
 
-            if (nameSuggestions.isNotEmpty()) {
-                moveReceiverToArgumentList(usageElement)
+            if (hasInstanceArg) {
+                moveReceiverToArgumentList(usageElement, containingClass.fqName!!)
             }
 
             when (usage) {
@@ -216,18 +230,36 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
                 is ImplicitReceiverUsageInfo -> {
                     usage.callExpression
                             .let { it.replaced(ktPsiFactory.createExpressionByPattern("$0.$1", ktCompanionRef, it)) }
-                            .let { elementsToShorten += (it as KtQualifiedExpression).receiverExpression }
+                            .let {
+                                val qualifiedCall = it as KtQualifiedExpression
+                                elementsToShorten += qualifiedCall.receiverExpression
+                                if (hasInstanceArg) {
+                                    elementsToShorten += (qualifiedCall.selectorExpression as KtCallExpression).valueArguments.first()
+                                }
+                            }
                 }
             }
         }
 
-        ShortenReferences.DEFAULT.process(elementsToShorten)
+        ShortenReferences { ShortenReferences.Options.ALL_ENABLED }.process(elementsToShorten)
 
         runTemplateForInstanceParam(newDeclaration, nameSuggestions, editor)
     }
 
+    private fun hasTypeParameterReferences(containingClass: KtClassOrObject, element: KtNamedDeclaration): Boolean {
+        val containingClassDescriptor = containingClass.unsafeResolveToDescriptor()
+        return element.collectDescendantsOfType<KtTypeReference> {
+            val referencedDescriptor = it.analyze(BodyResolveMode.PARTIAL)[BindingContext.TYPE, it]?.constructor?.declarationDescriptor
+            referencedDescriptor is TypeParameterDescriptor && referencedDescriptor.containingDeclaration == containingClassDescriptor
+        }.isNotEmpty()
+    }
+
+    override fun startInWriteAction() = false
+
     override fun applyTo(element: KtNamedDeclaration, editor: Editor?) {
         val project = element.project
+
+        val containingClass = element.containingClassOrObject as KtClass
 
         if (element is KtClassOrObject) {
             val nameSuggestions = if (traverseOuterInstanceReferences(element, true)) getNameSuggestionsForOuterInstance(element) else emptyList()
@@ -238,23 +270,38 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
                     return Mover.Default(originalElement, targetContainer).apply { movedClass = this as KtClassOrObject }
                 }
             }
-            val moveDescriptor = MoveDeclarationsDescriptor(listOf(element),
-                                                            KotlinMoveTargetForCompanion(element.containingClassOrObject!! as KtClass),
+            val moveDescriptor = MoveDeclarationsDescriptor(project,
+                                                            listOf(element),
+                                                            KotlinMoveTargetForCompanion(containingClass),
                                                             MoveDeclarationsDelegate.NestedClass(null, outerInstanceName),
                                                             moveCallback = MoveCallback { runTemplateForInstanceParam(movedClass!!, nameSuggestions, editor) })
-            MoveKotlinDeclarationsProcessor(project, moveDescriptor, mover).run()
+            MoveKotlinDeclarationsProcessor(moveDescriptor, mover).run()
             return
         }
 
+        val description = RefactoringUIUtil.getDescription(element, false).capitalize()
+
         if (HierarchySearchRequest(element, element.useScope, false).searchOverriders().any()) {
-            val description = RefactoringUIUtil.getDescription(element, false).capitalize()
-            CommonRefactoringUtil.showErrorHint(project, editor, "$description is overridden by declaration(s) in a subclass", text, null)
-            return
+            return CommonRefactoringUtil.showErrorHint(project, editor, "$description is overridden by declaration(s) in a subclass", text, null)
+        }
+
+        if (hasTypeParameterReferences(containingClass, element)) {
+            return CommonRefactoringUtil.showErrorHint(project, editor, "$description references type parameters of the containing class", text, null)
         }
 
         val externalUsages = SmartList<UsageInfo>()
         val outerInstanceUsages = SmartList<UsageInfo>()
         val conflicts = MultiMap<PsiElement, String>()
+
+        containingClass.companionObjects.firstOrNull()?.let { companion ->
+            val companionDescriptor = companion.unsafeResolveToDescriptor() as ClassDescriptor
+            val callableDescriptor = element.unsafeResolveToDescriptor() as CallableMemberDescriptor
+            companionDescriptor.findCallableMemberBySignature(callableDescriptor)?.let {
+                DescriptorToSourceUtilsIde.getAnyDeclaration(project, it)
+            }?.let {
+                conflicts.putValue(it, "Companion object already contains ${RefactoringUIUtil.getDescription(it, false)}")
+            }
+        }
 
         val outerInstanceReferences = collectOuterInstanceReferences(element)
         if (outerInstanceReferences.isNotEmpty()) {
@@ -267,39 +314,46 @@ class MoveMemberToCompanionObjectIntention : SelfTargetingRangeIntention<KtNamed
         }
 
         project.runSynchronouslyWithProgress("Searching for ${element.name}", true) {
-            ReferencesSearch.search(element).mapNotNullTo(externalUsages) { ref ->
-                when (ref) {
-                    is PsiReferenceExpression -> JavaUsageInfo(ref)
-                    is KtSimpleNameReference -> {
-                        val refExpr = ref.expression
-                        if (element.isAncestor(refExpr)) return@mapNotNullTo null
-                        val context = refExpr.analyze(BodyResolveMode.PARTIAL)
-                        val resolvedCall = refExpr.getResolvedCall(context) ?: return@mapNotNullTo null
+            runReadAction {
+                ReferencesSearch.search(element).mapNotNullTo(externalUsages) { ref ->
+                    when (ref) {
+                        is PsiReferenceExpression -> JavaUsageInfo(ref)
+                        is KtSimpleNameReference -> {
+                            val refExpr = ref.expression
+                            if (element.isAncestor(refExpr)) return@mapNotNullTo null
+                            val resolvedCall = refExpr.resolveToCall() ?: return@mapNotNullTo null
 
-                        val callExpression = resolvedCall.call.callElement as? KtExpression ?: return@mapNotNullTo null
+                            val callExpression = resolvedCall.call.callElement as? KtExpression ?: return@mapNotNullTo null
 
-                        val extensionReceiver = resolvedCall.extensionReceiver
-                        if (extensionReceiver != null && extensionReceiver !is ImplicitReceiver) {
-                            conflicts.putValue(callExpression,
-                                               "Calls with explicit extension receiver won't be processed: ${callExpression.text}")
-                            return@mapNotNullTo null
-                        }
+                            val extensionReceiver = resolvedCall.extensionReceiver
+                            if (extensionReceiver != null && extensionReceiver !is ImplicitReceiver) {
+                                conflicts.putValue(callExpression,
+                                                   "Calls with explicit extension receiver won't be processed: ${callExpression.text}")
+                                return@mapNotNullTo null
+                            }
 
-                        val dispatchReceiver = resolvedCall.dispatchReceiver ?: return@mapNotNullTo null
-                        if (dispatchReceiver is ExpressionReceiver) {
-                            ExplicitReceiverUsageInfo(refExpr, dispatchReceiver.expression)
+                            val dispatchReceiver = resolvedCall.dispatchReceiver ?: return@mapNotNullTo null
+                            if (dispatchReceiver is ExpressionReceiver) {
+                                ExplicitReceiverUsageInfo(refExpr, dispatchReceiver.expression)
+                            }
+                            else {
+                                ImplicitReceiverUsageInfo(refExpr, callExpression)
+                            }
                         }
-                        else {
-                            ImplicitReceiverUsageInfo(refExpr, callExpression)
-                        }
+                        else -> null
                     }
-                    else -> null
                 }
             }
         }
 
         project.checkConflictsInteractively(conflicts) {
-            doMove(element, externalUsages, outerInstanceUsages, editor)
+            runWriteAction { doMove(element, externalUsages, outerInstanceUsages, editor) }
+        }
+    }
+
+    companion object : KotlinSingleIntentionActionFactory() {
+        override fun createAction(diagnostic: Diagnostic): IntentionAction? {
+            return MoveMemberToCompanionObjectIntention()
         }
     }
 }

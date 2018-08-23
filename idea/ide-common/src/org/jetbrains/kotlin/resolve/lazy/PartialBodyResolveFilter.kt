@@ -17,7 +17,7 @@
 package org.jetbrains.kotlin.resolve.lazy
 
 import com.intellij.psi.PsiElement
-import com.intellij.util.SmartList
+import com.intellij.psi.PsiRecursiveElementVisitor
 import org.jetbrains.kotlin.KtNodeTypes
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
@@ -26,23 +26,23 @@ import org.jetbrains.kotlin.resolve.StatementFilter
 import org.jetbrains.kotlin.util.isProbablyNothing
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 import org.jetbrains.kotlin.utils.addToStdlib.swap
-import java.util.ArrayList
-import java.util.HashMap
-import java.util.HashSet
+import java.util.*
 
 //TODO: do resolve anonymous object's body
 
 class PartialBodyResolveFilter(
-        elementToResolve: KtElement,
+        elementsToResolve: Collection<KtElement>,
         private val declaration: KtDeclaration,
-        probablyNothingCallableNames: ProbablyNothingCallableNames,
         forCompletion: Boolean
 ) : StatementFilter() {
 
     private val statementMarks = StatementMarks()
 
-    private val nothingFunctionNames = HashSet(probablyNothingCallableNames.functionNames())
-    private val nothingVariableNames = HashSet(probablyNothingCallableNames.propertyNames())
+    private val globalProbablyNothingCallableNames = ProbablyNothingCallableNames.getInstance(declaration.project)
+    private val globalProbablyContractedCallableNames = ProbablyContractedCallableNames.getInstance(declaration.project)
+
+    private val contextNothingFunctionNames = HashSet<String>()
+    private val contextNothingVariableNames = HashSet<String>()
 
     override val filter: ((KtExpression) -> Boolean)? = { statementMarks.statementMark(it) != MarkLevel.NONE }
 
@@ -50,7 +50,7 @@ class PartialBodyResolveFilter(
         get() = statementMarks.allMarkedStatements()
 
     init {
-        assert(declaration.isAncestor(elementToResolve))
+        elementsToResolve.forEach { assert(declaration.isAncestor(it)) }
         assert(!KtPsiUtil.isLocal(declaration)) { "Should never be invoked on local declaration otherwise we may miss some local declarations with type Nothing" }
 
         declaration.forEachDescendantOfType<KtCallableDeclaration> { declaration ->
@@ -58,16 +58,18 @@ class PartialBodyResolveFilter(
                 val name = declaration.name
                 if (name != null) {
                     if (declaration is KtNamedFunction) {
-                        nothingFunctionNames.add(name)
+                        contextNothingFunctionNames.add(name)
                     }
                     else {
-                        nothingVariableNames.add(name)
+                        contextNothingVariableNames.add(name)
                     }
                 }
             }
         }
 
-        statementMarks.mark(elementToResolve, if (forCompletion) MarkLevel.NEED_COMPLETION else MarkLevel.NEED_REFERENCE_RESOLVE)
+        elementsToResolve.forEach {
+            statementMarks.mark(it, if (forCompletion) MarkLevel.NEED_COMPLETION else MarkLevel.NEED_REFERENCE_RESOLVE)
+        }
         declaration.forTopLevelBlocksInside { processBlock(it) }
     }
 
@@ -169,6 +171,19 @@ class PartialBodyResolveFilter(
                 }
             }
 
+            override fun visitCallExpression(expression: KtCallExpression) {
+                super.visitCallExpression(expression)
+
+                val nameReference = expression.calleeExpression as? KtNameReferenceExpression ?: return
+                if (!globalProbablyContractedCallableNames.isProbablyContractedCallableName(nameReference.getReferencedName())) return
+
+                val mentionedSmartCastName = expression.findMentionedName(filter)
+
+                if (mentionedSmartCastName != null) {
+                    addPlace(mentionedSmartCastName, expression)
+                }
+            }
+
             override fun visitBinaryWithTypeRHSExpression(expression: KtBinaryExpressionWithTypeRHS) {
                 expression.acceptChildren(this)
 
@@ -259,6 +274,25 @@ class PartialBodyResolveFilter(
         return map
     }
 
+    private fun KtExpression.findMentionedName(filter: (SmartCastName) -> Boolean): SmartCastName? {
+        var foundMentionedName: SmartCastName? = null
+
+        val visitor = object : PsiRecursiveElementVisitor() {
+            override fun visitElement(element: PsiElement) {
+                if (foundMentionedName != null) return
+
+                if (element !is KtSimpleNameExpression) super.visitElement(element)
+                if (element !is KtExpression) return
+
+                element.smartCastExpressionName()?.takeIf(filter)?.let { foundMentionedName = it }
+            }
+        }
+
+        accept(visitor)
+
+        return foundMentionedName
+    }
+
     /**
      * Returns names of expressions that would possibly be smart cast
      * in then (first component) and else (second component)
@@ -272,18 +306,18 @@ class PartialBodyResolveFilter(
                 val left = condition.left ?: return emptyResult
                 val right = condition.right ?: return emptyResult
 
-                fun smartCastInEq(): Pair<Set<SmartCastName>, Set<SmartCastName>> {
-                    if (left.isNullLiteral()) {
-                        return Pair(setOf(), right.smartCastExpressionName().singletonOrEmptySet())
+                fun smartCastInEq(): Pair<Set<SmartCastName>, Set<SmartCastName>> = when {
+                    left.isNullLiteral() -> {
+                        Pair(setOf(), right.smartCastExpressionName().singletonOrEmptySet())
                     }
-                    else if (right.isNullLiteral()) {
-                        return Pair(setOf(), left.smartCastExpressionName().singletonOrEmptySet())
+                    right.isNullLiteral() -> {
+                        Pair(setOf(), left.smartCastExpressionName().singletonOrEmptySet())
                     }
-                    else {
+                    else -> {
                         val leftName = left.smartCastExpressionName()
                         val rightName = right.smartCastExpressionName()
                         val names = listOfNotNull(leftName, rightName).toSet()
-                        return Pair(names, setOf())
+                        Pair(names, setOf())
                     }
                 }
 
@@ -400,7 +434,7 @@ class PartialBodyResolveFilter(
 
             override fun visitCallExpression(expression: KtCallExpression) {
                 val name = (expression.calleeExpression as? KtSimpleNameExpression)?.getReferencedName()
-                if (name != null && name in nothingFunctionNames) {
+                if (name != null && (name in globalProbablyNothingCallableNames.functionNames() || name in contextNothingFunctionNames)) {
                     result.add(expression)
                 }
                 super.visitCallExpression(expression)
@@ -408,7 +442,7 @@ class PartialBodyResolveFilter(
 
             override fun visitSimpleNameExpression(expression: KtSimpleNameExpression) {
                 val name = expression.getReferencedName()
-                if (name in nothingVariableNames) {
+                if (name in globalProbablyNothingCallableNames.propertyNames() || name in contextNothingVariableNames) {
                     result.add(expression)
                 }
             }
@@ -540,7 +574,7 @@ class PartialBodyResolveFilter(
                 is KtBlockExpression -> expression == parent.lastStatement() && isValueNeeded(parent)
 
                 is KtContainerNode -> { //TODO - not quite correct
-                    val pparent = parent.getParent() as? KtExpression
+                    val pparent = parent.parent as? KtExpression
                     pparent != null && isValueNeeded(pparent)
                 }
 
@@ -560,7 +594,7 @@ class PartialBodyResolveFilter(
         private fun KtBlockExpression.lastStatement(): KtExpression?
                 = lastChild?.siblings(forward = false)?.firstIsInstanceOrNull<KtExpression>()
 
-        private fun PsiElement.isStatement() = this is KtExpression && getParent() is KtBlockExpression
+        private fun PsiElement.isStatement() = this is KtExpression && parent is KtBlockExpression
 
         private fun KtTypeReference?.containsProbablyNothing()
                 = this?.typeElement?.anyDescendantOfType<KtUserType> { it.isProbablyNothing() } ?: false

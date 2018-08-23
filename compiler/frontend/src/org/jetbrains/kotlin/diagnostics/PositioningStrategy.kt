@@ -25,12 +25,12 @@ import com.intellij.psi.PsiWhiteSpace
 import org.jetbrains.kotlin.psi.psiUtil.endOffset
 import org.jetbrains.kotlin.psi.psiUtil.startOffset
 
-open class PositioningStrategy<E : PsiElement> {
+open class PositioningStrategy<in E : PsiElement> {
     open fun markDiagnostic(diagnostic: ParametrizedDiagnostic<out E>): List<TextRange> {
         return mark(diagnostic.psiElement)
     }
 
-    protected open fun mark(element: E): List<TextRange> {
+    open fun mark(element: E): List<TextRange> {
         return markElement(element)
     }
 

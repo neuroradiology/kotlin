@@ -1,7 +1,7 @@
 // !MARK_DYNAMIC_CALLS
 // !DIAGNOSTICS: -UNUSED_PARAMETER
 
-fun dynamic.test() {
+fun <!DYNAMIC_RECEIVER_NOT_ALLOWED!>dynamic<!>.test() {
     <!DEBUG_INFO_DYNAMIC!>foo<!>()
     <!DEBUG_INFO_DYNAMIC!>ext<!>()
 
@@ -27,7 +27,7 @@ fun dynamic.test() {
     <!DEBUG_INFO_DYNAMIC!>this<!>()
 
     C() + C()
-    <!DEPRECATED_UNARY_PLUS_MINUS!><!NO_VALUE_FOR_PARAMETER!>+<!>C()<!>
+    <!UNRESOLVED_REFERENCE!>+<!>C()
 
     this <!DEBUG_INFO_DYNAMIC!>+<!> C()
 
@@ -57,7 +57,7 @@ class C {
 
     val withInvoke = WithInvoke()
 
-    fun dynamic.test() {
+    fun <!DYNAMIC_RECEIVER_NOT_ALLOWED!>dynamic<!>.test() {
         s()
         <!DEBUG_INFO_DYNAMIC!>this<!>()
 

@@ -28,12 +28,10 @@ import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.storage.LockBasedStorageManager;
 import org.jetbrains.kotlin.types.KotlinType;
-import org.jetbrains.kotlin.types.TypeConstructor;
-import org.jetbrains.kotlin.types.TypeConstructorImpl;
+import org.jetbrains.kotlin.types.KotlinTypeKt;
 import org.jetbrains.kotlin.types.Variance;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static org.jetbrains.kotlin.resolve.descriptorUtil.DescriptorUtilsKt.getBuiltIns;
@@ -41,9 +39,8 @@ import static org.jetbrains.kotlin.resolve.descriptorUtil.DescriptorUtilsKt.getB
 public class TypeParameterDescriptorImpl extends AbstractTypeParameterDescriptor {
     @Nullable
     private final Function1<KotlinType, Void> reportCycleError;
-    @NotNull
-    private final SupertypeLoopChecker supertypeLoopsChecker;
 
+    @NotNull
     public static TypeParameterDescriptor createWithDefaultBound(
             @NotNull DeclarationDescriptor containingDeclaration,
             @NotNull Annotations annotations,
@@ -69,7 +66,7 @@ public class TypeParameterDescriptorImpl extends AbstractTypeParameterDescriptor
             @NotNull SourceElement source
     ) {
         return createForFurtherModification(containingDeclaration, annotations, reified, variance, name, index, source,
-                                            /* reportCycleError = */ null, SupertypeLoopChecker.EMPTY.INSTANCE);
+                                            /* reportSupertypeLoopError = */ null, SupertypeLoopChecker.EMPTY.INSTANCE);
     }
 
     public static TypeParameterDescriptorImpl createForFurtherModification(
@@ -101,24 +98,9 @@ public class TypeParameterDescriptorImpl extends AbstractTypeParameterDescriptor
             @Nullable Function1<KotlinType, Void> reportCycleError,
             @NotNull SupertypeLoopChecker supertypeLoopsChecker
     ) {
-        super(LockBasedStorageManager.NO_LOCKS, containingDeclaration, annotations, name, variance, reified, index, source);
+        super(LockBasedStorageManager.NO_LOCKS, containingDeclaration, annotations, name, variance, reified, index, source,
+              supertypeLoopsChecker);
         this.reportCycleError = reportCycleError;
-        // ?
-        this.supertypeLoopsChecker = supertypeLoopsChecker;
-    }
-
-    @NotNull
-    @Override
-    protected TypeConstructor createTypeConstructor() {
-        // TODO: Should we actually pass the annotations on to the type constructor?
-        return TypeConstructorImpl.createForTypeParameter(
-                this,
-                getAnnotations(),
-                false,
-                getName().asString(),
-                Collections.<TypeParameterDescriptor>emptyList(),
-                upperBounds
-        );
     }
 
     private void checkInitialized() {
@@ -148,6 +130,7 @@ public class TypeParameterDescriptorImpl extends AbstractTypeParameterDescriptor
     }
 
     private void doAddUpperBound(KotlinType bound) {
+        if (KotlinTypeKt.isError(bound)) return;
         upperBounds.add(bound); // TODO : Duplicates?
     }
 
@@ -159,14 +142,8 @@ public class TypeParameterDescriptorImpl extends AbstractTypeParameterDescriptor
         }
     }
 
-    @NotNull
     @Override
-    protected SupertypeLoopChecker getSupertypeLoopChecker() {
-        return supertypeLoopsChecker;
-    }
-
-    @Override
-    protected void reportCycleError(@NotNull KotlinType type) {
+    protected void reportSupertypeLoopError(@NotNull KotlinType type) {
         if (reportCycleError == null) return;
         reportCycleError.invoke(type);
     }

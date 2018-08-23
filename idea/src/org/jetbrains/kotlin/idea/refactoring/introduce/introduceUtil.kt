@@ -27,10 +27,11 @@ import com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.idea.codeInsight.CodeInsightUtils
 import org.jetbrains.kotlin.idea.refactoring.chooseContainerElementIfNecessary
 import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringBundle
-import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringUtil
+import org.jetbrains.kotlin.idea.refactoring.selectElement
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.KotlinPsiRange
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.*
+import org.jetbrains.kotlin.utils.SmartList
 
 fun showErrorHint(project: Project, editor: Editor, message: String, title: String) {
     CodeInsightUtils.showErrorHint(project, editor, message, title, null)
@@ -44,6 +45,9 @@ fun selectElementsWithTargetSibling(
         operationName: String,
         editor: Editor,
         file: KtFile,
+        title: String,
+        elementKinds: Collection<CodeInsightUtils.ElementKind>,
+        elementValidator: (List<PsiElement>) -> String?,
         getContainers: (elements: List<PsiElement>, commonParent: PsiElement) -> List<PsiElement>,
         continuation: (elements: List<PsiElement>, targetSibling: PsiElement) -> Unit
 ) {
@@ -66,13 +70,16 @@ fun selectElementsWithTargetSibling(
         continuation(elements, outermostParent)
     }
 
-    selectElementsWithTargetParent(operationName, editor, file, getContainers, ::onSelectionComplete)
+    selectElementsWithTargetParent(operationName, editor, file, title, elementKinds, elementValidator, getContainers, ::onSelectionComplete)
 }
 
 fun selectElementsWithTargetParent(
         operationName: String,
         editor: Editor,
         file: KtFile,
+        title: String,
+        elementKinds: Collection<CodeInsightUtils.ElementKind>,
+        elementValidator: (List<PsiElement>) -> String?,
         getContainers: (elements: List<PsiElement>, commonParent: PsiElement) -> List<PsiElement>,
         continuation: (elements: List<PsiElement>, targetParent: PsiElement) -> Unit
 ) {
@@ -81,6 +88,11 @@ fun selectElementsWithTargetParent(
     }
 
     fun selectTargetContainer(elements: List<PsiElement>) {
+        elementValidator(elements)?.let {
+            showErrorHint(file.project, editor, it, operationName)
+            return
+        }
+
         val physicalElements = elements.map { it.substringContextOrThis }
         val parent = PsiTreeUtil.findCommonParent(physicalElements)
                      ?: throw AssertionError("Should have at least one parent: ${physicalElements.joinToString("\n")}")
@@ -94,47 +106,52 @@ fun selectElementsWithTargetParent(
         chooseContainerElementIfNecessary(
                 containers,
                 editor,
-                "Select target code block",
+                title,
                 true,
                 { it },
                 { continuation(elements, it) }
         )
     }
 
-    fun selectMultipleExpressions() {
+    fun selectMultipleElements() {
         val startOffset = editor.selectionModel.selectionStart
         val endOffset = editor.selectionModel.selectionEnd
 
-        val elements = CodeInsightUtils.findStatements(file, startOffset, endOffset)
+        val elements = elementKinds.flatMap { CodeInsightUtils.findElements(file, startOffset, endOffset, it).toList() }
         if (elements.isEmpty()) {
-            showErrorHintByKey("cannot.refactor.no.expression")
-            return
+            return when (elementKinds.singleOrNull()) {
+                CodeInsightUtils.ElementKind.EXPRESSION -> showErrorHintByKey("cannot.refactor.no.expression")
+                CodeInsightUtils.ElementKind.TYPE_ELEMENT -> showErrorHintByKey("cannot.refactor.no.type")
+                else -> showErrorHint(file.project, editor, "Refactoring can't be performed on the selected code element", title)
+            }
         }
 
-        selectTargetContainer(elements.toList())
+        selectTargetContainer(elements)
     }
 
-    fun selectSingleExpression() {
-        KotlinRefactoringUtil.selectExpression(editor, file, false) { expr ->
+    fun selectSingleElement() {
+        selectElement(editor, file, false, elementKinds) { expr ->
             if (expr != null) {
                 selectTargetContainer(listOf(expr))
             }
             else {
                 if (!editor.selectionModel.hasSelection()) {
-                    val elementAtCaret = file.findElementAt(editor.caretModel.offset)
-                    elementAtCaret?.getParentOfTypeAndBranch<KtProperty> { nameIdentifier }?.let {
-                        return@selectExpression selectTargetContainer(listOf(it))
+                    if (elementKinds.singleOrNull() == CodeInsightUtils.ElementKind.EXPRESSION) {
+                        val elementAtCaret = file.findElementAt(editor.caretModel.offset)
+                        elementAtCaret?.getParentOfTypeAndBranch<KtProperty> { nameIdentifier }?.let {
+                            return@selectElement selectTargetContainer(listOf(it))
+                        }
                     }
 
                     editor.selectionModel.selectLineAtCaret()
                 }
-                selectMultipleExpressions()
+                selectMultipleElements()
             }
         }
     }
 
     editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
-    selectSingleExpression()
+    selectSingleElement()
 }
 
 fun PsiElement.findExpressionByCopyableDataAndClearIt(key: Key<Boolean>): KtExpression {
@@ -156,8 +173,6 @@ fun PsiElement.findExpressionsByCopyableDataAndClearIt(key: Key<Boolean>): List<
 }
 
 fun findExpressionOrStringFragment(file: KtFile, startOffset: Int, endOffset: Int): KtExpression? {
-    CodeInsightUtils.findExpression(file, startOffset, endOffset)?.let { return it }
-
     val entry1 = file.findElementAt(startOffset)?.getNonStrictParentOfType<KtStringTemplateEntry>() ?: return null
     val entry2 = file.findElementAt(endOffset - 1)?.getNonStrictParentOfType<KtStringTemplateEntry>() ?: return null
 
@@ -208,4 +223,31 @@ fun KtExpression.mustBeParenthesizedInInitializerPosition(): Boolean {
 
     if (left?.mustBeParenthesizedInInitializerPosition() ?: false) return true
     return PsiChildRange(left, operationReference).any { (it is PsiWhiteSpace) && it.textContains('\n') }
+}
+
+fun isObjectOrNonInnerClass(e: PsiElement): Boolean = e is KtObjectDeclaration || (e is KtClass && !e.isInner())
+
+fun <T : KtDeclaration> insertDeclaration(declaration: T, targetSibling: PsiElement): T {
+    val targetParent = targetSibling.parent
+
+    val anchorCandidates = SmartList<PsiElement>()
+    anchorCandidates.add(targetSibling)
+    if (targetSibling is KtEnumEntry) {
+        anchorCandidates.add(targetSibling.siblings().last { it is KtEnumEntry })
+    }
+
+    val anchor = anchorCandidates.minBy { it.startOffset }!!.parentsWithSelf.first { it.parent == targetParent }
+    val targetContainer = anchor.parent!!
+
+    @Suppress("UNCHECKED_CAST")
+    return (targetContainer.addBefore(declaration, anchor) as T).apply {
+        targetContainer.addBefore(KtPsiFactory(declaration).createWhiteSpace("\n\n"), anchor)
+    }
+}
+
+internal fun validateExpressionElements(elements: List<PsiElement>): String? {
+    if (elements.any { it is KtConstructor<*> || it is KtParameter || it is KtTypeAlias || it is KtPropertyAccessor }) {
+        return "Refactoring is not applicable to this code fragment"
+    }
+    return null
 }

@@ -49,6 +49,10 @@ class CompletionMultiFileHandlerTest : KotlinCompletionTestCase() {
         doTest()
     }
 
+    fun testTopLevelValImportInStringTemplate() {
+        doTest()
+    }
+
     fun testNoParenthesisInImports() {
         doTest()
     }
@@ -85,7 +89,23 @@ class CompletionMultiFileHandlerTest : KotlinCompletionTestCase() {
         doTest('\t', "TestBundle.properties")
     }
 
+    fun testFileRefInStringLiteralEnter() {
+        doTest('\n', "foo.txt", "bar.txt")
+    }
+
+    fun testFileRefInStringLiteralTab() {
+        doTest('\t', "foo.txt", "bar.txt")
+    }
+
     fun testNotImportedExtension() {
+        doTest()
+    }
+
+    fun testNotImportedTypeAlias() {
+        doTest()
+    }
+
+    fun testKT12077() {
         doTest()
     }
 

@@ -21,7 +21,7 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.codegen.AccessorForPropertyDescriptor;
 import org.jetbrains.kotlin.codegen.OwnerKind;
 import org.jetbrains.kotlin.codegen.binding.MutableClosure;
-import org.jetbrains.kotlin.codegen.state.JetTypeMapper;
+import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper;
 import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor;
@@ -32,7 +32,7 @@ import java.util.Map;
 
 public abstract class FieldOwnerContext<T extends DeclarationDescriptor> extends CodegenContext<T> {
     //default property name -> map<property descriptor -> bytecode name>
-    private final Map<String, Map<PropertyDescriptor, String>> fieldNames = new HashMap<String, Map<PropertyDescriptor, String>>();
+    private final Map<String, Map<PropertyDescriptor, String>> fieldNames = new HashMap<>();
 
     public FieldOwnerContext(
             @NotNull T contextDescriptor,
@@ -54,13 +54,9 @@ public abstract class FieldOwnerContext<T extends DeclarationDescriptor> extends
         PropertyDescriptor descriptor = possiblySubstitutedDescriptor.getOriginal();
         assert descriptor.getKind().isReal() : "Only declared properties can have backing fields: " + descriptor;
 
-        String defaultPropertyName = JetTypeMapper.mapDefaultFieldName(descriptor, isDelegated);
+        String defaultPropertyName = KotlinTypeMapper.mapDefaultFieldName(descriptor, isDelegated);
 
-        Map<PropertyDescriptor, String> descriptor2Name = fieldNames.get(defaultPropertyName);
-        if (descriptor2Name == null) {
-            descriptor2Name = new HashMap<PropertyDescriptor, String>();
-            fieldNames.put(defaultPropertyName, descriptor2Name);
-        }
+        Map<PropertyDescriptor, String> descriptor2Name = fieldNames.computeIfAbsent(defaultPropertyName, unused -> new HashMap<>());
 
         String actualName = descriptor2Name.get(descriptor);
         if (actualName != null) return actualName;

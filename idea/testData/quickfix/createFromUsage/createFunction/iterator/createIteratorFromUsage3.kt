@@ -1,10 +1,10 @@
-// "Create member function 'next'" "true"
+// "Create member function 'FooIterator.next'" "true"
 class FooIterator<T> {
     operator fun hasNext(): Boolean { return false }
 }
 class Foo<T> {
     operator fun iterator(): FooIterator<String> {
-        throw UnsupportedOperationException("not implemented")
+        TODO("not implemented")
     }
 }
 operator fun Any.component1(): Int {

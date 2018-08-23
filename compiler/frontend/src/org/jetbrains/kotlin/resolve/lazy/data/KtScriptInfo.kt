@@ -23,7 +23,7 @@ import org.jetbrains.kotlin.psi.KtParameter
 import org.jetbrains.kotlin.psi.KtScript
 
 class KtScriptInfo(
-        val script: KtScript
+    val script: KtScript
 ) : KtClassLikeInfo {
     override fun getContainingPackageFqName() = script.fqName.parent()
     override fun getModifierList() = null
@@ -33,6 +33,6 @@ class KtScriptInfo(
     override fun getTypeParameterList() = null
     override fun getPrimaryConstructorParameters() = listOf<KtParameter>()
     override fun getClassKind() = ClassKind.CLASS
-    override fun getDeclarations() = script.getDeclarations()
+    override fun getDeclarations() = script.declarations
     override fun getDanglingAnnotations() = listOf<KtAnnotationEntry>()
 }

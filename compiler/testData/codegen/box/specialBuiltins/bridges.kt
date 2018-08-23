@@ -1,4 +1,6 @@
-import java.util.*;
+// IGNORE_BACKEND: JVM_IR
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: NATIVE
 
 interface A0 {
     val size: Int get() = 56

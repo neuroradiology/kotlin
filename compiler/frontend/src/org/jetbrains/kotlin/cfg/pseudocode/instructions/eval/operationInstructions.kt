@@ -18,57 +18,55 @@ package org.jetbrains.kotlin.cfg.pseudocode.instructions.eval
 
 import org.jetbrains.kotlin.cfg.pseudocode.PseudoValue
 import org.jetbrains.kotlin.cfg.pseudocode.PseudoValueFactory
-import org.jetbrains.kotlin.cfg.pseudocode.TypePredicate
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitor
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionVisitorWithResult
 import org.jetbrains.kotlin.cfg.pseudocode.instructions.InstructionWithNext
-import org.jetbrains.kotlin.cfg.pseudocode.instructions.LexicalScope
+import org.jetbrains.kotlin.cfg.pseudocode.instructions.BlockScope
 import org.jetbrains.kotlin.descriptors.ValueParameterDescriptor
 import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 
 abstract class OperationInstruction protected constructor(
-        element: KtElement,
-        lexicalScope: LexicalScope,
-        override val inputValues: List<PseudoValue>
-) : InstructionWithNext(element, lexicalScope), InstructionWithValue {
+    element: KtElement,
+    blockScope: BlockScope,
+    override val inputValues: List<PseudoValue>
+) : InstructionWithNext(element, blockScope), InstructionWithValue {
     protected var resultValue: PseudoValue? = null
 
     override val outputValue: PseudoValue?
         get() = resultValue
 
     protected fun renderInstruction(name: String, desc: String): String =
-            "$name($desc" +
-            (if (inputValues.isNotEmpty()) "|${inputValues.joinToString(", ")})" else ")") +
-            (if (resultValue != null) " -> $resultValue" else "")
+        "$name($desc" +
+                (if (inputValues.isNotEmpty()) "|${inputValues.joinToString(", ")})" else ")") +
+                (if (resultValue != null) " -> $resultValue" else "")
 
     protected fun setResult(value: PseudoValue?): OperationInstruction {
         this.resultValue = value
         return this
     }
 
-    protected fun setResult(factory: PseudoValueFactory?, valueElement: KtElement? = element): OperationInstruction {
-        return setResult(factory?.newValue(valueElement, this))
-    }
+    protected fun setResult(factory: PseudoValueFactory?, valueElement: KtElement? = element): OperationInstruction =
+        setResult(factory?.newValue(valueElement, this))
 }
 
 class CallInstruction private constructor(
-        element: KtElement,
-        lexicalScope: LexicalScope,
-        val resolvedCall: ResolvedCall<*>,
-        override val receiverValues: Map<PseudoValue, ReceiverValue>,
-        val arguments: Map<PseudoValue, ValueParameterDescriptor>
-) : OperationInstruction(element, lexicalScope, (receiverValues.keys as Collection<PseudoValue>) + arguments.keys), InstructionWithReceivers {
+    element: KtElement,
+    blockScope: BlockScope,
+    val resolvedCall: ResolvedCall<*>,
+    override val receiverValues: Map<PseudoValue, ReceiverValue>,
+    val arguments: Map<PseudoValue, ValueParameterDescriptor>
+) : OperationInstruction(element, blockScope, (receiverValues.keys as Collection<PseudoValue>) + arguments.keys), InstructionWithReceivers {
 
     constructor (
-            element: KtElement,
-            lexicalScope: LexicalScope,
-            resolvedCall: ResolvedCall<*>,
-            receiverValues: Map<PseudoValue, ReceiverValue>,
-            arguments: Map<PseudoValue, ValueParameterDescriptor>,
-            factory: PseudoValueFactory?
-    ): this(element, lexicalScope, resolvedCall, receiverValues, arguments) {
+        element: KtElement,
+        blockScope: BlockScope,
+        resolvedCall: ResolvedCall<*>,
+        receiverValues: Map<PseudoValue, ReceiverValue>,
+        arguments: Map<PseudoValue, ValueParameterDescriptor>,
+        factory: PseudoValueFactory?
+    ) : this(element, blockScope, resolvedCall, receiverValues, arguments) {
         setResult(factory)
     }
 
@@ -76,15 +74,13 @@ class CallInstruction private constructor(
         visitor.visitCallInstruction(this)
     }
 
-    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R {
-        return visitor.visitCallInstruction(this)
-    }
+    override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R = visitor.visitCallInstruction(this)
 
     override fun createCopy() =
-            CallInstruction(element, lexicalScope, resolvedCall, receiverValues, arguments).setResult(resultValue)
+        CallInstruction(element, blockScope, resolvedCall, receiverValues, arguments).setResult(resultValue)
 
     override fun toString() =
-            renderInstruction("call", "${render(element)}, ${resolvedCall.resultingDescriptor!!.name}")
+        renderInstruction("call", "${render(element)}, ${resolvedCall.resultingDescriptor!!.name}")
 }
 
 // Introduces black-box operation
@@ -93,19 +89,19 @@ class CallInstruction private constructor(
 //      denote value transformation which can't be expressed by other instructions (such as call or read)
 //      pass more than one value to instruction which formally requires only one (e.g. jump)
 class MagicInstruction(
-        element: KtElement,
-        lexicalScope: LexicalScope,
-        inputValues: List<PseudoValue>,
-        val kind: MagicKind
-) : OperationInstruction(element, lexicalScope, inputValues) {
+    element: KtElement,
+    blockScope: BlockScope,
+    inputValues: List<PseudoValue>,
+    val kind: MagicKind
+) : OperationInstruction(element, blockScope, inputValues) {
     constructor (
-            element: KtElement,
-            valueElement: KtElement?,
-            lexicalScope: LexicalScope,
-            inputValues: List<PseudoValue>,
-            kind: MagicKind,
-            factory: PseudoValueFactory
-    ): this(element, lexicalScope, inputValues, kind) {
+        element: KtElement,
+        valueElement: KtElement?,
+        blockScope: BlockScope,
+        inputValues: List<PseudoValue>,
+        kind: MagicKind,
+        factory: PseudoValueFactory
+    ) : this(element, blockScope, inputValues, kind) {
         setResult(factory, valueElement)
     }
 
@@ -119,7 +115,7 @@ class MagicInstruction(
     override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R = visitor.visitMagic(this)
 
     override fun createCopy() =
-            MagicInstruction(element, lexicalScope, inputValues, kind).setResult(resultValue)
+        MagicInstruction(element, blockScope, inputValues, kind).setResult(resultValue)
 
     override fun toString() = renderInstruction("magic[$kind]", render(element))
 }
@@ -133,7 +129,8 @@ enum class MagicKind(val sideEffectFree: Boolean = false) {
     EQUALS_IN_WHEN_CONDITION(),
     IS(),
     CAST(),
-    CALLABLE_REFERENCE(true),
+    UNBOUND_CALLABLE_REFERENCE(true),
+    BOUND_CALLABLE_REFERENCE(true),
     // implicit operations
     LOOP_RANGE_ITERATION(),
     IMPLICIT_RECEIVER(),
@@ -148,16 +145,16 @@ enum class MagicKind(val sideEffectFree: Boolean = false) {
 
 // Merges values produced by alternative control-flow paths (such as 'if' branches)
 class MergeInstruction private constructor(
-        element: KtElement,
-        lexicalScope: LexicalScope,
-        inputValues: List<PseudoValue>
-): OperationInstruction(element, lexicalScope, inputValues) {
+    element: KtElement,
+    blockScope: BlockScope,
+    inputValues: List<PseudoValue>
+) : OperationInstruction(element, blockScope, inputValues) {
     constructor (
-            element: KtElement,
-            lexicalScope: LexicalScope,
-            inputValues: List<PseudoValue>,
-            factory: PseudoValueFactory
-    ): this(element, lexicalScope, inputValues) {
+        element: KtElement,
+        blockScope: BlockScope,
+        inputValues: List<PseudoValue>,
+        factory: PseudoValueFactory
+    ) : this(element, blockScope, inputValues) {
         setResult(factory)
     }
 
@@ -168,7 +165,7 @@ class MergeInstruction private constructor(
 
     override fun <R> accept(visitor: InstructionVisitorWithResult<R>): R = visitor.visitMerge(this)
 
-    override fun createCopy() = MergeInstruction(element, lexicalScope, inputValues).setResult(resultValue)
+    override fun createCopy() = MergeInstruction(element, blockScope, inputValues).setResult(resultValue)
 
     override fun toString() = renderInstruction("merge", render(element))
 }

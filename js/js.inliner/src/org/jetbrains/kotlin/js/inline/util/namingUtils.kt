@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,37 +16,44 @@
 
 package org.jetbrains.kotlin.js.inline.util
 
-import com.google.dart.compiler.backend.js.ast.*
+import org.jetbrains.kotlin.js.backend.ast.*
+import org.jetbrains.kotlin.js.backend.ast.metadata.staticRef
 
 import org.jetbrains.kotlin.js.inline.context.NamingContext
 import org.jetbrains.kotlin.js.inline.util.rewriters.LabelNameRefreshingVisitor
+import org.jetbrains.kotlin.js.translate.utils.JsAstUtils
 
 fun aliasArgumentsIfNeeded(
         context: NamingContext,
         arguments: List<JsExpression>,
-        parameters: List<JsParameter>
+        parameters: List<JsParameter>,
+        source: Any?
 ) {
     require(arguments.size <= parameters.size) { "arguments.size (${arguments.size}) should be less or equal to parameters.size (${parameters.size})" }
 
+    val defaultParams = mutableListOf<JsParameter>()
     for ((arg, param) in arguments.zip(parameters)) {
+        if (JsAstUtils.isUndefinedExpression(arg)) {
+            defaultParams += param
+            continue
+        }
         val paramName = param.name
-        val replacement =
-                if (arg.needToAlias()) {
-                    val freshName = context.getFreshName(paramName)
-                    context.newVar(freshName, arg)
-                    freshName.makeRef()
-                } else {
-                    arg
-                }
 
+        val replacement = JsScope.declareTemporaryName(paramName.ident).apply {
+            staticRef = arg
+            context.newVar(this, arg.deepCopy(), source = source)
+        }.makeRef()
+
+        replacement.source = arg.source
         context.replaceName(paramName, replacement)
     }
 
-    val defaultParams = parameters.subList(arguments.size, parameters.size)
+    defaultParams += parameters.subList(arguments.size, parameters.size)
     for (defaultParam in defaultParams) {
         val paramName = defaultParam.name
-        val freshName = context.getFreshName(paramName)
-        context.newVar(freshName)
+        val freshName = JsScope.declareTemporaryName(paramName.ident)
+        freshName.copyMetadataFrom(paramName)
+        context.newVar(freshName, source = source)
 
         context.replaceName(paramName, freshName.makeRef())
     }
@@ -59,20 +66,18 @@ fun renameLocalNames(
         context: NamingContext,
         function: JsFunction
 ) {
-    for (name in collectLocalNames(function)) {
-        val freshName = context.getFreshName(name)
-        context.replaceName(name, freshName.makeRef())
+    for (name in collectDefinedNames(function.body)) {
+        val temporaryName = JsScope.declareTemporaryName(name.ident).apply { staticRef = name.staticRef }
+        context.replaceName(name, temporaryName.makeRef())
     }
 }
 
 fun refreshLabelNames(
-        context: NamingContext,
-        function: JsFunction
-) {
-    val scope = function.scope
+        node: JsNode,
+        scope: JsScope
+): JsNode {
     if (scope !is JsFunctionScope) throw AssertionError("JsFunction is expected to have JsFunctionScope")
 
-    val visitor = LabelNameRefreshingVisitor(context, scope)
-    visitor.accept(function.body)
-    context.applyRenameTo(function)
+    val visitor = LabelNameRefreshingVisitor(scope)
+    return visitor.accept(node)
 }

@@ -1,7 +1,10 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package test.properties.delegation.lazy
 
-import org.junit.Test as test
-import kotlin.properties.*
 import kotlin.test.*
 
 class LazyValTest {
@@ -10,26 +13,9 @@ class LazyValTest {
         ++result
     }
 
-    @test fun doTest() {
+    @Test fun doTest() {
         a
         assertTrue(a == 1, "fail: initializer should be invoked only once")
-    }
-}
-
-class SynchronizedLazyValTest {
-    @Volatile var result = 0
-    val a by lazy(this) {
-        ++result
-    }
-
-    @test fun doTest() {
-        synchronized(this) {
-            // thread { a } // not available in js // TODO: Make this test JVM-only
-            result = 1
-            a
-        }
-        assertTrue(a == 2, "fail: initializer should be invoked only once")
-        assertTrue(result == 2, "fail result should be incremented after test")
     }
 }
 
@@ -39,7 +25,7 @@ class UnsafeLazyValTest {
         ++result
     }
 
-    @test fun doTest() {
+    @Test fun doTest() {
         a
         assertTrue(a == 1, "fail: initializer should be invoked only once")
     }
@@ -52,7 +38,7 @@ class NullableLazyValTest {
     val a: Int? by lazy { resultA++; null}
     val b by lazy { foo() }
 
-    @test fun doTest() {
+    @Test fun doTest() {
         a
         b
 
@@ -75,7 +61,7 @@ class UnsafeNullableLazyValTest {
     val a: Int? by lazy(LazyThreadSafetyMode.NONE) { resultA++; null}
     val b by lazy(LazyThreadSafetyMode.NONE) { foo() }
 
-    @test fun doTest() {
+    @Test fun doTest() {
         a
         b
 
@@ -95,7 +81,7 @@ class IdentityEqualsIsUsedToUnescapeLazyValTest {
     var equalsCalled = 0
     private val a by lazy { ClassWithCustomEquality { equalsCalled++ } }
 
-    @test fun doTest() {
+    @Test fun doTest() {
         a
         a
         assertTrue(equalsCalled == 0, "fail: equals called $equalsCalled times.")

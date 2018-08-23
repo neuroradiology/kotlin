@@ -1,5 +1,19 @@
+// IGNORE_BACKEND: JVM_IR
+// WITH_REFLECT
 // FULL_JDK
-import javaFields as J
+// FILE: J.java
+
+public class J {
+    public final int i;
+    public String s;
+
+    public J(int i, String s) {
+        this.i = i;
+        this.s = s;
+    }
+}
+
+// FILE: 1.kt
 
 import java.lang.reflect.*
 import kotlin.reflect.*
@@ -33,8 +47,8 @@ fun box(): String {
     assert(a.s == "def") { "Fail js access" }
 
     // Check that valid Kotlin reflection objects are created by those Field objects
-    val ki = ji.kotlin as KProperty1<J, Int>
-    val ks = js.kotlin as KMutableProperty1<J, String>
+    val ki = ji.kotlinProperty as KProperty1<J, Int>
+    val ks = js.kotlinProperty as KMutableProperty1<J, String>
     assert(ki.get(a) == 42) { "Fail ki get" }
     assert(ks.get(a) == "def") { "Fail ks get" }
     ks.set(a, "ghi")

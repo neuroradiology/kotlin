@@ -16,7 +16,6 @@
 
 package org.jetbrains.kotlin.load.java.structure.impl;
 
-import com.intellij.psi.PsiAnnotationOwner;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiTypeParameter;
 import org.jetbrains.annotations.NotNull;
@@ -32,14 +31,8 @@ public abstract class JavaClassifierImpl<Psi extends PsiClass> extends JavaEleme
         super(psiClass);
     }
 
-    @Nullable
-    @Override
-    public PsiAnnotationOwner getAnnotationOwnerPsi() {
-        return getPsi().getModifierList();
-    }
-
     @NotNull
-    /* package */ static JavaClassifier create(@NotNull PsiClass psiClass) {
+    /* package */ static JavaClassifierImpl<?> create(@NotNull PsiClass psiClass) {
         if (psiClass instanceof PsiTypeParameter) {
             return new JavaTypeParameterImpl((PsiTypeParameter) psiClass);
         }

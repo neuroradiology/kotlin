@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,10 +32,12 @@ import org.jetbrains.kotlin.types.typesApproximation.approximateCapturedTypes
 import java.util.*
 
 data class ConstraintContext(
-        val position: ConstraintPosition,
-        // see TypeBounds.Bound.derivedFrom
-        val derivedFrom: Set<TypeVariable>? = null,
-        val initial: Boolean = false)
+    val position: ConstraintPosition,
+    // see TypeBounds.Bound.derivedFrom
+    val derivedFrom: Set<TypeVariable>? = null,
+    val initial: Boolean = false,
+    val initialReduction: Boolean = false
+)
 
 fun ConstraintSystemBuilderImpl.incorporateBound(newBound: Bound) {
     val typeVariable = newBound.typeVariable
@@ -81,6 +83,7 @@ private fun ConstraintSystemBuilderImpl.addConstraintFromBounds(old: Bound, new:
 }
 
 private fun ConstraintSystemBuilderImpl.generateNewBound(bound: Bound, substitution: Bound) {
+    if (bound === substitution) return
     // Let's have a bound 'T <=> My<R>', and a substitution 'R <=> Type'.
     // Here <=> means lower_bound, upper_bound or exact_bound constraint.
     // Then a new bound 'T <=> My<_/in/out Type>' can be generated.

@@ -18,6 +18,7 @@ package org.jetbrains.kotlin.runner
 
 import java.io.File
 import java.io.FileNotFoundException
+import java.net.URL
 import java.util.*
 
 object Main {
@@ -33,12 +34,11 @@ object Main {
     }
 
     private fun run(args: Array<String>) {
-        val classpath = Classpath()
+        val classpath = arrayListOf<URL>()
         var runner: Runner? = null
         var collectingArguments = false
         val arguments = arrayListOf<String>()
-
-        classpath.add(".")
+        var noReflect = false
 
         var i = 0
         while (i < args.size) {
@@ -63,11 +63,16 @@ object Main {
                 printVersionAndExit()
             }
             else if ("-classpath" == arg || "-cp" == arg) {
-                classpath.add(next())
+                for (path in next().split(File.pathSeparator).filter(String::isNotEmpty)) {
+                    classpath.addPath(path)
+                }
             }
             else if ("-expression" == arg || "-e" == arg) {
                 runner = ExpressionRunner(next())
                 collectingArguments = true
+            }
+            else if ("-no-reflect" == arg) {
+                noReflect = true
             }
             else if (arg.startsWith("-")) {
                 throw RunnerException("unsupported argument: $arg")
@@ -87,10 +92,15 @@ object Main {
             i++
         }
 
-        classpath.add(KOTLIN_HOME.toString() + "/lib/kotlin-runtime.jar")
+        if (classpath.isEmpty()) {
+            classpath.addPath(".")
+        }
 
-        // TODO: provide a way to disable including kotlin-reflect.jar to the classpath
-        classpath.add(KOTLIN_HOME.toString() + "/lib/kotlin-reflect.jar")
+        classpath.addPath(KOTLIN_HOME.toString() + "/lib/kotlin-runtime.jar")
+
+        if (!noReflect) {
+            classpath.addPath(KOTLIN_HOME.toString() + "/lib/kotlin-reflect.jar")
+        }
 
         if (runner == null) {
             runner = ReplRunner()
@@ -99,7 +109,12 @@ object Main {
         runner.run(classpath, arguments)
     }
 
-    @JvmStatic fun main(args: Array<String>) {
+    private fun MutableList<URL>.addPath(path: String) {
+        add(File(path).absoluteFile.toURI().toURL())
+    }
+
+    @JvmStatic
+    fun main(args: Array<String>) {
         try {
             run(args)
         }
@@ -124,6 +139,7 @@ where command may be one of:
   -classpath (-cp) <path>    Paths where to find user class files
   -Dname=value               Set a system JVM property
   -J<option>                 Pass an option directly to JVM
+  -no-reflect                Don't include Kotlin reflection implementation into classpath
   -version                   Display Kotlin version
   -help (-h)                 Print a synopsis of options
 """)

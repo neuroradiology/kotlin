@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,12 @@ package org.jetbrains.kotlin.idea.intentions
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.KtNodeTypes
+import org.jetbrains.kotlin.config.LanguageFeature
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
+import org.jetbrains.kotlin.idea.project.languageVersionSettings
 import org.jetbrains.kotlin.idea.references.ReferenceAccess
 import org.jetbrains.kotlin.idea.references.readWriteAccess
 import org.jetbrains.kotlin.idea.util.CommentSaver
@@ -56,7 +60,10 @@ class OperatorToFunctionIntention : SelfTargetingIntention<KtExpression>(KtExpre
             val opRef = element.operationReference
             if (!opRef.textRange.containsOffset(caretOffset)) return false
             return when (opRef.getReferencedNameElementType()) {
-                KtTokens.PLUS, KtTokens.MINUS, KtTokens.MUL, KtTokens.DIV, KtTokens.PERC, KtTokens.RANGE, KtTokens.IN_KEYWORD, KtTokens.NOT_IN, KtTokens.PLUSEQ, KtTokens.MINUSEQ, KtTokens.MULTEQ, KtTokens.DIVEQ, KtTokens.PERCEQ, KtTokens.EQEQ, KtTokens.EXCLEQ, KtTokens.GT, KtTokens.LT, KtTokens.GTEQ, KtTokens.LTEQ -> true
+                KtTokens.PLUS, KtTokens.MINUS, KtTokens.MUL, KtTokens.DIV, KtTokens.PERC, KtTokens.RANGE,
+                KtTokens.IN_KEYWORD, KtTokens.NOT_IN, KtTokens.PLUSEQ, KtTokens.MINUSEQ, KtTokens.MULTEQ, KtTokens.DIVEQ, KtTokens.PERCEQ,
+                KtTokens.GT, KtTokens.LT, KtTokens.GTEQ, KtTokens.LTEQ -> true
+                KtTokens.EQEQ, KtTokens.EXCLEQ -> listOf(element.left, element.right).none { it?.node?.elementType == KtNodeTypes.NULL }
                 KtTokens.EQ -> element.left is KtArrayAccessExpression
                 else -> false
             }
@@ -78,7 +85,7 @@ class OperatorToFunctionIntention : SelfTargetingIntention<KtExpression>(KtExpre
                           ?: return false) as PsiElement
             if (!lbrace.textRange.containsOffset(caretOffset)) return false
 
-            val resolvedCall = element.getResolvedCall(element.analyze())
+            val resolvedCall = element.resolveToCall(BodyResolveMode.FULL)
             val descriptor = resolvedCall?.resultingDescriptor
             if (descriptor is FunctionDescriptor && descriptor.getName() == OperatorNameConventions.INVOKE) {
                 if (element.parent is KtDotQualifiedExpression &&
@@ -138,7 +145,7 @@ class OperatorToFunctionIntention : SelfTargetingIntention<KtExpression>(KtExpre
                 KtTokens.MINUS -> "$0.minus($1)"
                 KtTokens.MUL -> "$0.times($1)"
                 KtTokens.DIV -> "$0.div($1)"
-                KtTokens.PERC -> "$0.mod($1)"
+                KtTokens.PERC -> "$0.rem($1)"
                 KtTokens.RANGE -> "$0.rangeTo($1)"
                 KtTokens.IN_KEYWORD -> "$1.contains($0)"
                 KtTokens.NOT_IN -> "!$1.contains($0)"
@@ -146,9 +153,15 @@ class OperatorToFunctionIntention : SelfTargetingIntention<KtExpression>(KtExpre
                 KtTokens.MINUSEQ -> if (functionName == "minusAssign") "$0.minusAssign($1)" else "$0 = $0.minus($1)"
                 KtTokens.MULTEQ -> if (functionName == "multAssign") "$0.multAssign($1)" else "$0 = $0.mult($1)"
                 KtTokens.DIVEQ -> if (functionName == "divAssign") "$0.divAssign($1)" else "$0 = $0.div($1)"
-                KtTokens.PERCEQ -> if (functionName == "modAssign") "$0.modAssign($1)" else "$0 = $0.mod($1)"
-                KtTokens.EQEQ -> if (elemType?.isMarkedNullable() ?: true) "$0?.equals($1) ?: ($1 == null)" else "$0.equals($1)"
-                KtTokens.EXCLEQ -> if (elemType?.isMarkedNullable() ?: true) "!($0?.equals($1) ?: ($1 == null))" else "!$0.equals($1)"
+                KtTokens.PERCEQ -> {
+                    val remSupported = element.languageVersionSettings.supportsFeature(LanguageFeature.OperatorRem)
+                    if (remSupported && functionName == "remAssign") "$0.remAssign($1)"
+                    else if (functionName == "modAssign") "$0.modAssign($1)"
+                    else if (remSupported) "$0 = $0.rem($1)"
+                    else "$0 = $0.mod($1)"
+                }
+                KtTokens.EQEQ -> if (elemType?.isMarkedNullable != false) "$0?.equals($1) ?: ($1 == null)" else "$0.equals($1)"
+                KtTokens.EXCLEQ -> if (elemType?.isMarkedNullable != false) "!($0?.equals($1) ?: ($1 == null))" else "!$0.equals($1)"
                 KtTokens.GT -> "$0.compareTo($1) > 0"
                 KtTokens.LT -> "$0.compareTo($1) < 0"
                 KtTokens.GTEQ -> "$0.compareTo($1) >= 0"
@@ -209,7 +222,7 @@ class OperatorToFunctionIntention : SelfTargetingIntention<KtExpression>(KtExpre
                     callExpression.valueArgumentList?.delete()
                 }
             }
-            return callee.parent!!.replace(transformed) as KtExpression
+            return callee.parent.replace(transformed) as KtExpression
         }
 
         fun convert(element: KtExpression): Pair<KtExpression, KtSimpleNameExpression> {

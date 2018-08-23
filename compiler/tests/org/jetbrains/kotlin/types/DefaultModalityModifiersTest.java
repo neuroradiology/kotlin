@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,26 +17,25 @@
 package org.jetbrains.kotlin.types;
 
 import kotlin.Unit;
-import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.analyzer.AnalysisResult;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
 import org.jetbrains.kotlin.context.ContextKt;
-import org.jetbrains.kotlin.context.ModuleContext;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl;
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation;
 import org.jetbrains.kotlin.psi.*;
-import org.jetbrains.kotlin.resolve.*;
+import org.jetbrains.kotlin.resolve.BindingContext;
+import org.jetbrains.kotlin.resolve.DescriptorResolver;
+import org.jetbrains.kotlin.resolve.FunctionDescriptorResolver;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfoFactory;
 import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil;
 import org.jetbrains.kotlin.resolve.lazy.ResolveSession;
-import org.jetbrains.kotlin.resolve.lazy.declarations.FileBasedDeclarationProviderFactory;
 import org.jetbrains.kotlin.resolve.scopes.*;
 import org.jetbrains.kotlin.resolve.scopes.utils.ScopeUtilsKt;
 import org.jetbrains.kotlin.test.ConfigurationKind;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 import org.jetbrains.kotlin.tests.di.ContainerForTests;
 import org.jetbrains.kotlin.tests.di.InjectionKt;
 
@@ -45,7 +44,7 @@ import java.util.List;
 
 import static org.jetbrains.kotlin.frontend.di.InjectionKt.createLazyResolveSession;
 
-public class DefaultModalityModifiersTest extends KotlinLiteFixture {
+public class DefaultModalityModifiersTest extends KotlinTestWithEnvironment {
     private final DefaultModalityModifiersTestCase tc = new DefaultModalityModifiersTestCase();
 
     @Override
@@ -85,32 +84,27 @@ public class DefaultModalityModifiersTest extends KotlinLiteFixture {
 
         @NotNull
         private LexicalScope createScope(@NotNull MemberScope libraryScope) {
-            KtFile file = KtPsiFactoryKt
-                    .KtPsiFactory(getProject()).createFile("abstract class C { abstract fun foo(); abstract val a: Int }");
-            List<KtDeclaration> declarations = file.getDeclarations();
-            KtDeclaration aClass = declarations.get(0);
+            KtFile file =
+                    KtPsiFactoryKt.KtPsiFactory(getProject()).createFile("abstract class C { abstract fun foo(); abstract val a: Int }");
+            KtDeclaration aClass = file.getDeclarations().get(0);
             assert aClass instanceof KtClass;
-            AnalysisResult bindingContext = JvmResolveUtil.analyzeOneFileWithJavaIntegrationAndCheckForErrors(file);
-            final DeclarationDescriptor classDescriptor = bindingContext.getBindingContext().get(BindingContext.DECLARATION_TO_DESCRIPTOR, aClass);
-            return new LexicalScopeImpl(ScopeUtilsKt.memberScopeAsImportingScope(libraryScope), root, false, null,
-                                        LexicalScopeKind.SYNTHETIC, RedeclarationHandler.DO_NOTHING,
-                                        new Function1<LexicalScopeImpl.InitializeHandler, Unit>() {
-                                            @Override
-                                            public Unit invoke(LexicalScopeImpl.InitializeHandler handler) {
-                                                handler.addClassifierDescriptor((ClassifierDescriptor) classDescriptor);
-                                                return Unit.INSTANCE;
-                                            }
-                                        });
+            AnalysisResult bindingContext = JvmResolveUtil.analyzeAndCheckForErrors(file, getEnvironment());
+            DeclarationDescriptor classDescriptor =
+                    bindingContext.getBindingContext().get(BindingContext.DECLARATION_TO_DESCRIPTOR, aClass);
+            return new LexicalScopeImpl(
+                    ScopeUtilsKt.memberScopeAsImportingScope(libraryScope), root, false, null,
+                    LexicalScopeKind.SYNTHETIC, LocalRedeclarationChecker.DO_NOTHING.INSTANCE,
+                    handler -> {
+                        handler.addClassifierDescriptor((ClassifierDescriptor) classDescriptor);
+                        return Unit.INSTANCE;
+                    }
+            );
         }
 
         private ClassDescriptorWithResolutionScopes createClassDescriptor(ClassKind kind, KtClass aClass) {
-            ModuleContext moduleContext = ContextKt.ModuleContext(root, getProject());
             ResolveSession resolveSession = createLazyResolveSession(
-                    moduleContext,
-                    new FileBasedDeclarationProviderFactory(moduleContext.getStorageManager(),
-                                                            Collections.singleton(aClass.getContainingKtFile())),
-                    new BindingTraceContext(),
-                    TargetPlatform.Default.INSTANCE
+                    ContextKt.ModuleContext(root, getProject()),
+                    Collections.singleton(aClass.getContainingKtFile())
             );
 
             return (ClassDescriptorWithResolutionScopes) resolveSession.getClassDescriptor(aClass, NoLookupLocation.FROM_TEST);
@@ -144,7 +138,7 @@ public class DefaultModalityModifiersTest extends KotlinLiteFixture {
             List<KtDeclaration> declarations = aClass.getDeclarations();
             KtProperty property = (KtProperty) declarations.get(0);
             PropertyDescriptor propertyDescriptor = descriptorResolver.resolvePropertyDescriptor(
-                    classDescriptor, scope, property, KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY);
+                    classDescriptor, scope, scope, property, KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY);
 
             assertEquals(expectedPropertyModality, propertyDescriptor.getModality());
         }
@@ -157,7 +151,7 @@ public class DefaultModalityModifiersTest extends KotlinLiteFixture {
             List<KtDeclaration> declarations = aClass.getDeclarations();
             KtProperty property = (KtProperty) declarations.get(0);
             PropertyDescriptor propertyDescriptor = descriptorResolver.resolvePropertyDescriptor(
-                    classDescriptor, scope, property, KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY);
+                    classDescriptor, scope, scope, property, KotlinTestUtils.DUMMY_TRACE, DataFlowInfoFactory.EMPTY);
             PropertyAccessorDescriptor propertyAccessor = isGetter
                                                           ? propertyDescriptor.getGetter()
                                                           : propertyDescriptor.getSetter();

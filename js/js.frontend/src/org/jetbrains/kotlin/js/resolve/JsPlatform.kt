@@ -16,34 +16,27 @@
 
 package org.jetbrains.kotlin.js.resolve
 
-import com.google.common.collect.ImmutableList
 import org.jetbrains.kotlin.builtins.DefaultBuiltIns
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
-import org.jetbrains.kotlin.descriptors.ModuleParameters
-import org.jetbrains.kotlin.platform.PlatformToKotlinClassMap
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.resolve.ImportPath
+import org.jetbrains.kotlin.resolve.MultiTargetPlatform
 import org.jetbrains.kotlin.resolve.PlatformConfigurator
 import org.jetbrains.kotlin.resolve.TargetPlatform
+import org.jetbrains.kotlin.storage.StorageManager
 
 object JsPlatform : TargetPlatform("JS") {
-    override val defaultModuleParameters = object : ModuleParameters {
-        override val defaultImports: List<ImportPath> = ImmutableList.of(
-                ImportPath("java.lang.*"),
-                ImportPath("kotlin.*"),
-                ImportPath("kotlin.annotation.*"),
-                ImportPath("kotlin.collections.*"),
-                ImportPath("kotlin.ranges.*"),
-                ImportPath("kotlin.sequences.*"),
-                ImportPath("kotlin.text.*"),
-                ImportPath("kotlin.js.*")
-        )
-
-        override val platformToKotlinClassMap: PlatformToKotlinClassMap
-            get() = PlatformToKotlinClassMap.EMPTY
+    override fun computePlatformSpecificDefaultImports(storageManager: StorageManager, result: MutableList<ImportPath>) {
+        result.add(ImportPath.fromString("kotlin.js.*"))
     }
 
     override val platformConfigurator: PlatformConfigurator = JsPlatformConfigurator
 
-    override val builtIns: KotlinBuiltIns
+    val builtIns: KotlinBuiltIns
         get() = DefaultBuiltIns.Instance
+
+    override val multiTargetPlatform = MultiTargetPlatform.Specific(platformName)
+
+    override val excludedImports: List<FqName> =
+        listOf("Promise", "Date", "Console", "Math", "RegExp", "RegExpMatch", "Json", "json").map { FqName("kotlin.js.$it") }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,52 +18,65 @@ package org.jetbrains.kotlin.idea.decompiler.classFile
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
+import org.jetbrains.kotlin.builtins.DefaultBuiltIns
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.contracts.ContractDeserializerImpl
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.NotFoundClasses
 import org.jetbrains.kotlin.idea.caches.IDEKotlinBinaryClassCache
 import org.jetbrains.kotlin.idea.decompiler.textBuilder.DeserializerForDecompilerBase
 import org.jetbrains.kotlin.idea.decompiler.textBuilder.LoggingErrorReporter
-import org.jetbrains.kotlin.idea.decompiler.textBuilder.ResolveEverythingToKotlinAnyLocalClassResolver
+import org.jetbrains.kotlin.idea.decompiler.textBuilder.ResolveEverythingToKotlinAnyLocalClassifierResolver
 import org.jetbrains.kotlin.incremental.components.LookupTracker
 import org.jetbrains.kotlin.load.java.structure.JavaClass
+import org.jetbrains.kotlin.load.java.structure.classId
 import org.jetbrains.kotlin.load.kotlin.*
+import org.jetbrains.kotlin.metadata.jvm.deserialization.JvmProtoBufUtil
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.resolve.TargetPlatform
 import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
-import org.jetbrains.kotlin.serialization.ClassDataWithSource
-import org.jetbrains.kotlin.serialization.deserialization.ClassDataFinder
-import org.jetbrains.kotlin.serialization.deserialization.ClassDescriptorFactory
-import org.jetbrains.kotlin.serialization.deserialization.DeserializationComponents
+import org.jetbrains.kotlin.serialization.deserialization.*
 import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedPackageMemberScope
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBufUtil
+import java.io.InputStream
 
 fun DeserializerForClassfileDecompiler(classFile: VirtualFile): DeserializerForClassfileDecompiler {
     val kotlinClassHeaderInfo = IDEKotlinBinaryClassCache.getKotlinBinaryClassHeaderData(classFile)
-    assert(kotlinClassHeaderInfo != null) { "Decompiled data factory shouldn't be called on an unsupported file: " + classFile }
-    val packageFqName = kotlinClassHeaderInfo!!.classId.packageFqName
+                                ?: error("Decompiled data factory shouldn't be called on an unsupported file: " + classFile)
+    val packageFqName = kotlinClassHeaderInfo.classId.packageFqName
     return DeserializerForClassfileDecompiler(classFile.parent!!, packageFqName)
 }
 
 class DeserializerForClassfileDecompiler(
         packageDirectory: VirtualFile,
         directoryPackageFqName: FqName
-) : DeserializerForDecompilerBase(packageDirectory, directoryPackageFqName) {
+) : DeserializerForDecompilerBase(directoryPackageFqName) {
     override val targetPlatform: TargetPlatform get() = JvmPlatform
+    override val builtIns: KotlinBuiltIns get() = DefaultBuiltIns.Instance
 
     private val classFinder = DirectoryBasedClassFinder(packageDirectory, directoryPackageFqName)
 
-    private val classDataFinder = DirectoryBasedDataFinder(classFinder, LOG)
+    override val deserializationComponents: DeserializationComponents
 
-    private val errorReporter = LoggingErrorReporter(LOG)
+    init {
+        val classDataFinder = DirectoryBasedDataFinder(classFinder, LOG)
+        val notFoundClasses = NotFoundClasses(storageManager, moduleDescriptor)
+        val annotationAndConstantLoader =
+                BinaryClassAnnotationAndConstantLoaderImpl(moduleDescriptor, notFoundClasses, storageManager, classFinder)
 
-    private val annotationAndConstantLoader =
-            BinaryClassAnnotationAndConstantLoaderImpl(moduleDescriptor, storageManager, classFinder, errorReporter)
+        val configuration = object : DeserializationConfiguration {
+            override val readDeserializedContracts: Boolean
+                get() = true
+        }
 
-    override val deserializationComponents: DeserializationComponents = DeserializationComponents(
-            storageManager, moduleDescriptor, classDataFinder, annotationAndConstantLoader, packageFragmentProvider,
-            ResolveEverythingToKotlinAnyLocalClassResolver(targetPlatform.builtIns), errorReporter,
-            LookupTracker.DO_NOTHING, JavaFlexibleTypeCapabilitiesDeserializer, ClassDescriptorFactory.EMPTY
-    )
+        deserializationComponents = DeserializationComponents(
+                storageManager, moduleDescriptor, configuration, classDataFinder, annotationAndConstantLoader,
+                packageFragmentProvider, ResolveEverythingToKotlinAnyLocalClassifierResolver(builtIns), LoggingErrorReporter(LOG),
+                LookupTracker.DO_NOTHING, JavaFlexibleTypeDeserializer, emptyList(), notFoundClasses,
+                ContractDeserializerImpl(configuration),
+                extensionRegistryLite = JvmProtoBufUtil.EXTENSION_REGISTRY
+        )
+    }
 
     override fun resolveDeclarationsInFacade(facadeFqName: FqName): List<DeclarationDescriptor> {
         val packageFqName = facadeFqName.parent()
@@ -80,8 +93,9 @@ class DeserializerForClassfileDecompiler(
         }
         val (nameResolver, packageProto) = JvmProtoBufUtil.readPackageDataFrom(annotationData, strings)
         val membersScope = DeserializedPackageMemberScope(
-                createDummyPackageFragment(packageFqName), packageProto, nameResolver,
-                JvmPackagePartSource(binaryClassForPackageClass!!.classId), deserializationComponents
+            createDummyPackageFragment(header.packageName?.let(::FqName) ?: facadeFqName.parent()),
+            packageProto, nameResolver, header.metadataVersion,
+            JvmPackagePartSource(binaryClassForPackageClass, packageProto, nameResolver), deserializationComponents
         ) { emptyList() }
         return membersScope.getContributedDescriptors().toList()
     }
@@ -95,7 +109,7 @@ class DirectoryBasedClassFinder(
         val packageDirectory: VirtualFile,
         val directoryPackageFqName: FqName
 ) : KotlinClassFinder {
-    override fun findKotlinClass(javaClass: JavaClass) = findKotlinClass(javaClass.classId)
+    override fun findKotlinClass(javaClass: JavaClass) = findKotlinClass(javaClass.classId!!)
 
     override fun findKotlinClass(classId: ClassId): KotlinJvmBinaryClass? {
         if (classId.packageFqName != directoryPackageFqName) {
@@ -108,13 +122,22 @@ class DirectoryBasedClassFinder(
         }
         return null
     }
+
+    // TODO
+    override fun findMetadata(classId: ClassId): InputStream? = null
+
+    // TODO
+    override fun hasMetadataPackage(fqName: FqName): Boolean = false
+
+    // TODO: load built-ins from packageDirectory?
+    override fun findBuiltInsData(packageFqName: FqName): InputStream? = null
 }
 
 class DirectoryBasedDataFinder(
         val classFinder: DirectoryBasedClassFinder,
         val log: Logger
 ) : ClassDataFinder {
-    override fun findClassData(classId: ClassId): ClassDataWithSource? {
+    override fun findClassData(classId: ClassId): ClassData? {
         val binaryClass = classFinder.findKotlinClass(classId) ?: return null
         val classHeader = binaryClass.classHeader
         val data = classHeader.data
@@ -128,13 +151,7 @@ class DirectoryBasedDataFinder(
             return null
         }
 
-        return ClassDataWithSource(JvmProtoBufUtil.readClassDataFrom(data, strings))
+        val (nameResolver, classProto) = JvmProtoBufUtil.readClassDataFrom(data, strings)
+        return ClassData(nameResolver, classProto, classHeader.metadataVersion, KotlinJvmBinarySourceElement(binaryClass))
     }
 }
-
-
-private val JavaClass.classId: ClassId
-    get() {
-        val outer = outerClass
-        return if (outer == null) ClassId.topLevel(fqName!!) else outer.classId.createNestedClassId(name)
-    }

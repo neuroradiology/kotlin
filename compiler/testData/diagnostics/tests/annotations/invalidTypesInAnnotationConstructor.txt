@@ -83,6 +83,14 @@ package test {
         public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
     }
 
+    public final annotation class Ann9 : kotlin.Annotation {
+        public constructor Ann9(/*0*/ error: [ERROR : Unresolved] = ...)
+        public final val error: [ERROR : Unresolved]
+        public open override /*1*/ /*fake_override*/ fun equals(/*0*/ other: kotlin.Any?): kotlin.Boolean
+        public open override /*1*/ /*fake_override*/ fun hashCode(): kotlin.Int
+        public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
+    }
+
     public final annotation class InAnn1 : kotlin.Annotation {
         public constructor InAnn1(/*0*/ p1: kotlin.Int?, /*1*/ p3: kotlin.Short?, /*2*/ p4: kotlin.Long?, /*3*/ p5: kotlin.Double?, /*4*/ p6: kotlin.Float?, /*5*/ p7: kotlin.Char?, /*6*/ p8: kotlin.Boolean?)
         public final val p1: kotlin.Int?
@@ -193,11 +201,12 @@ package test {
         protected final override /*1*/ /*fake_override*/ fun clone(): kotlin.Any
         public final override /*1*/ /*fake_override*/ fun compareTo(/*0*/ other: test.MyEnum): kotlin.Int
         public final override /*1*/ /*fake_override*/ fun equals(/*0*/ other: kotlin.Any?): kotlin.Boolean
+        protected/*protected and package*/ final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun finalize(): kotlin.Unit
+        public final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun getDeclaringClass(): java.lang.Class<test.MyEnum!>!
         public final override /*1*/ /*fake_override*/ fun hashCode(): kotlin.Int
         public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
 
         // Static members
-        @kotlin.Deprecated(level = DeprecationLevel.ERROR, message = "Use 'values()' function instead", replaceWith = kotlin.ReplaceWith(expression = "this.values()", imports = {})) public final /*synthesized*/ val values: kotlin.Array<test.MyEnum>
         public final /*synthesized*/ fun valueOf(/*0*/ value: kotlin.String): test.MyEnum
         public final /*synthesized*/ fun values(): kotlin.Array<test.MyEnum>
     }

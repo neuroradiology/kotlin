@@ -1,3 +1,7 @@
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// IGNORE_BACKEND: JS
+
 private object EmptyList : List<Nothing> {
     override fun contains(element: Nothing): Boolean = false
     override fun containsAll(elements: Collection<Nothing>): Boolean = elements.isEmpty()

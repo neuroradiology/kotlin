@@ -18,13 +18,13 @@ package org.jetbrains.kotlin.idea.editor.fixers
 
 import com.intellij.lang.SmartEnterProcessorWithFixers
 import com.intellij.openapi.editor.Editor
-import org.jetbrains.kotlin.idea.editor.KotlinSmartEnterHandler
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.psi.KtClassOrObject
-import org.jetbrains.kotlin.psi.KtPsiUtil
+import org.jetbrains.kotlin.idea.editor.KotlinSmartEnterHandler
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.psi.KtClassOrObject
+import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.psi.KtPsiUtil
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 
 
@@ -43,11 +43,12 @@ class KotlinFunctionDeclarationBodyFixer : SmartEnterProcessorWithFixers.Fixer<K
         val doc = editor.document
         var endOffset = psiElement.range.end
 
-        if (psiElement.getText()?.last() == ';') {
+        if (psiElement.text?.last() == ';') {
             doc.deleteString(endOffset - 1, endOffset)
             endOffset--
         }
 
-        doc.insertString(endOffset, "{}")
+        // Insert '\n' to force a multiline body, otherwise there will be an empty body on one line and a caret on the next one.
+        doc.insertString(endOffset, "{\n}")
     }
 }

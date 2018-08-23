@@ -20,6 +20,9 @@ import com.intellij.openapi.diagnostic.Logger;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.psi.KtElement;
 import org.jetbrains.kotlin.psi.psiUtil.PsiUtilsKt;
+import org.jetbrains.kotlin.resolve.constants.ConstantValueFactoryKt;
+import org.jetbrains.kotlin.resolve.constants.IntegerValueTypeConstant;
+import org.jetbrains.kotlin.types.TypeUtils;
 
 import java.util.Arrays;
 import java.util.List;
@@ -36,13 +39,43 @@ public class Slices {
         @Override
         public <K, V> boolean processRewrite(WritableSlice<K, V> slice, K key, V oldValue, V newValue) {
             if (!((oldValue == null && newValue == null) || (oldValue != null && oldValue.equals(newValue)))) {
-                // NOTE: Use BindingTraceContext.TRACK_REWRITES to debug this exception
-                LOG.error("Rewrite at slice " + slice +
-                        " key: " + key +
-                        " old value: " + oldValue + '@' + System.identityHashCode(oldValue) +
-                        " new value: " + newValue + '@' + System.identityHashCode(newValue) +
-                          (key instanceof KtElement ? "\n" + PsiUtilsKt.getElementTextWithContext((KtElement) key) : ""));
+                logErrorAboutRewritingNonEqualObjects(slice, key, oldValue, newValue);
             }
+            return true;
+        }
+    };
+
+    // Rewrite is allowed for equal objects and for signed constant values that were converted to unsigned ones
+    // This is needed to avoid making `CompileTimeConstant` mutable
+    public static final RewritePolicy COMPILE_TIME_VALUE_REWRITE_POLICY = new RewritePolicy() {
+        @Override
+        public <K> boolean rewriteProcessingNeeded(K key) {
+            return true;
+        }
+
+        @Override
+        public <K, V> boolean processRewrite(WritableSlice<K, V> slice, K key, V oldValue, V newValue) {
+            if ((oldValue == null && newValue == null) || (oldValue != null && oldValue.equals(newValue))) return true;
+
+            if (oldValue instanceof IntegerValueTypeConstant && newValue instanceof IntegerValueTypeConstant) {
+                IntegerValueTypeConstant oldConstant = (IntegerValueTypeConstant) oldValue;
+                IntegerValueTypeConstant newConstant = (IntegerValueTypeConstant) newValue;
+
+                if (oldConstant.getParameters().isPure() && newConstant.getParameters().isUnsignedNumberLiteral()) {
+                    long oldConstantValue = oldConstant.getValue(TypeUtils.NO_EXPECTED_TYPE).longValue();
+                    Number newConstantValue = newConstant.getValue(TypeUtils.NO_EXPECTED_TYPE);
+                    if (oldConstantValue == newConstantValue.longValue() ||
+                        oldConstantValue == ConstantValueFactoryKt.fromUIntToLong(newConstantValue.intValue()) ||
+                        oldConstantValue == ConstantValueFactoryKt.fromUByteToLong(newConstantValue.byteValue()) ||
+                        oldConstantValue == ConstantValueFactoryKt.fromUShortToLong(newConstantValue.shortValue())
+                    ) {
+                        return true;
+                    }
+                }
+            }
+
+            logErrorAboutRewritingNonEqualObjects(slice, key, oldValue, newValue);
+
             return true;
         }
     };
@@ -51,23 +84,23 @@ public class Slices {
     }
 
     public static <K, V> SliceBuilder<K, V> sliceBuilder() {
-        return new SliceBuilder<K, V>(ONLY_REWRITE_TO_EQUAL);
+        return new SliceBuilder<>(ONLY_REWRITE_TO_EQUAL);
     }
 
     public static <K, V> WritableSlice<K, V> createSimpleSlice() {
-        return new BasicWritableSlice<K, V>(ONLY_REWRITE_TO_EQUAL);
+        return new BasicWritableSlice<>(ONLY_REWRITE_TO_EQUAL);
     }
 
     public static <K, V> WritableSlice<K, V> createCollectiveSlice() {
-        return new BasicWritableSlice<K, V>(ONLY_REWRITE_TO_EQUAL, true);
+        return new BasicWritableSlice<>(ONLY_REWRITE_TO_EQUAL, true);
     }
 
     public static <K> WritableSlice<K, Boolean> createSimpleSetSlice() {
-        return new SetSlice<K>(RewritePolicy.DO_NOTHING);
+        return new SetSlice<>(RewritePolicy.DO_NOTHING);
     }
 
     public static <K> WritableSlice<K, Boolean> createCollectiveSetSlice() {
-        return new SetSlice<K>(RewritePolicy.DO_NOTHING, true);
+        return new SetSlice<>(RewritePolicy.DO_NOTHING, true);
     }
 
     public static class SliceBuilder<K, V> {
@@ -115,25 +148,16 @@ public class Slices {
                     }
                 };
             }
-            return new BasicWritableSlice<K, V>(rewritePolicy);
+            return new BasicWritableSlice<>(rewritePolicy);
         }
     }
 
-    public static class SetSlice<K> extends BasicWritableSlice<K, Boolean> {
-
-        protected SetSlice(RewritePolicy rewritePolicy) {
-            this(rewritePolicy, false);
-        }
-
-        protected SetSlice(RewritePolicy rewritePolicy, boolean collective) {
-            super(rewritePolicy, collective);
-        }
-
-        @Override
-        public Boolean computeValue(SlicedMap map, K key, Boolean value, boolean valueNotFound) {
-            Boolean result = super.computeValue(map, key, value, valueNotFound);
-            return result != null ? result : false;
-        }
+    private static <K, V> void logErrorAboutRewritingNonEqualObjects(WritableSlice<K, V> slice, K key, V oldValue, V newValue) {
+        // NOTE: Use BindingTraceContext.TRACK_REWRITES to debug this exception
+        LOG.error("Rewrite at slice " + slice +
+                  " key: " + key +
+                  " old value: " + oldValue + '@' + System.identityHashCode(oldValue) +
+                  " new value: " + newValue + '@' + System.identityHashCode(newValue) +
+                  (key instanceof KtElement ? "\n" + PsiUtilsKt.getElementTextWithContext((KtElement) key) : ""));
     }
-
 }

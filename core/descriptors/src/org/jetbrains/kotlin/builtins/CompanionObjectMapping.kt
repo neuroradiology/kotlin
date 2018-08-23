@@ -17,25 +17,20 @@
 package org.jetbrains.kotlin.builtins
 
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.descriptorUtil.classId
 import java.util.*
 
-class CompanionObjectMapping(private val builtIns: KotlinBuiltIns) {
-    private val classes = linkedSetOf<ClassDescriptor>()
+object CompanionObjectMapping {
+    private val classIds =
+            (PrimitiveType.NUMBER_TYPES.map(KotlinBuiltIns::getPrimitiveFqName) +
+             KotlinBuiltIns.FQ_NAMES.string.toSafe() +
+             KotlinBuiltIns.FQ_NAMES._enum.toSafe()).mapTo(linkedSetOf<ClassId>(), ClassId::topLevel)
 
-    init {
-        for (type in PrimitiveType.NUMBER_TYPES) {
-            classes.add(builtIns.getPrimitiveClassDescriptor(type))
-        }
-        classes.add(builtIns.string)
-        classes.add(builtIns.enum)
-    }
+    fun allClassesWithIntrinsicCompanions(): Set<ClassId> =
+            Collections.unmodifiableSet(classIds)
 
-    fun allClassesWithIntrinsicCompanions(): Set<ClassDescriptor> =
-            Collections.unmodifiableSet(classes)
-
-    fun hasMappingToObject(classDescriptor: ClassDescriptor): Boolean {
-        return DescriptorUtils.isCompanionObject(classDescriptor) &&
-               classDescriptor.containingDeclaration in classes
-    }
+    fun isMappedIntrinsicCompanionObject(classDescriptor: ClassDescriptor): Boolean =
+            DescriptorUtils.isCompanionObject(classDescriptor) && classDescriptor.classId?.outerClassId in classIds
 }

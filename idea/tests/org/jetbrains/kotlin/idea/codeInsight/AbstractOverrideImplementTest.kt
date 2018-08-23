@@ -34,11 +34,12 @@ import org.jetbrains.kotlin.idea.core.overrideImplement.OverrideImplementMembers
 import org.jetbrains.kotlin.idea.core.overrideImplement.OverrideMemberChooserObject
 import org.jetbrains.kotlin.idea.core.overrideImplement.OverrideMembersHandler
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase
-import org.jetbrains.kotlin.idea.test.KotlinLightProjectDescriptor
+import org.jetbrains.kotlin.idea.test.KotlinWithJdkAndRuntimeLightProjectDescriptor
 import org.jetbrains.kotlin.idea.test.dumpTextWithErrors
 import org.jetbrains.kotlin.idea.util.application.executeWriteCommand
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.jetbrains.kotlin.test.TagsTestDataUtil
 import org.jetbrains.kotlin.utils.rethrow
@@ -47,7 +48,7 @@ import java.io.File
 import kotlin.test.assertEquals
 
 abstract class AbstractOverrideImplementTest : KotlinLightCodeInsightFixtureTestCase() {
-    override fun getProjectDescriptor(): LightProjectDescriptor = KotlinLightProjectDescriptor.INSTANCE
+    override fun getProjectDescriptor(): LightProjectDescriptor = KotlinWithJdkAndRuntimeLightProjectDescriptor.INSTANCE
 
     protected fun doImplementFileTest(memberToOverride: String? = null) {
         doFileTest(ImplementMembersHandler(), memberToOverride)
@@ -137,19 +138,10 @@ abstract class AbstractOverrideImplementTest : KotlinLightCodeInsightFixtureTest
             filtered.single()
         }
         else {
-            var candidateToOverride: OverrideMemberChooserObject? = null
-            for (chooserObject in chooserObjects) {
-                if (chooserObject.descriptor.name.asString() == memberToOverride) {
-                    if (candidateToOverride != null) {
-                        throw IllegalStateException("more then one descriptor with name $memberToOverride")
-                    }
-                    candidateToOverride = chooserObject
-                }
+            chooserObjects.single {
+                chooserObject ->
+                chooserObject.descriptor.name.asString() == memberToOverride
             }
-            if (candidateToOverride == null) {
-                throw IllegalStateException("no chooserObjects to override with name $memberToOverride found")
-            }
-            candidateToOverride
         }
 
         performGenerateCommand(classOrObject, listOf(singleToOverride))
@@ -180,8 +172,9 @@ abstract class AbstractOverrideImplementTest : KotlinLightCodeInsightFixtureTest
             classOrObject: KtClassOrObject,
             selectedElements: List<OverrideMemberChooserObject>) {
         try {
+            val copyDoc = InTextDirectivesUtils.isDirectiveDefined(classOrObject.containingFile.text, "// COPY_DOC")
             myFixture.project.executeWriteCommand("") {
-                OverrideImplementMembersHandler.generateMembers(myFixture.editor, classOrObject, selectedElements)
+                OverrideImplementMembersHandler.generateMembers(myFixture.editor, classOrObject, selectedElements, copyDoc)
             }
         }
         catch (throwable: Throwable) {

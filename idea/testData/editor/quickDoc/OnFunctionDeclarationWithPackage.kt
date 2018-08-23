@@ -12,5 +12,7 @@ package test
  */
 fun <caret>testFun(first: String, second: Int) = 12
 
-//INFO: <b>public</b> <b>fun</b> testFun(first: String, second: Int): Int <i>defined in</i> test<p>Test function</p>
-//INFO: <dl><dt><b>Parameters:</b></dt><dd><code>first</code> - Some</dd><dd><code>second</code> - Other</dd></dl>
+//INFO: <div class='definition'><pre><a href="psi_element://test"><code>test</code></a> <font color="808080"><i>OnFunctionDeclarationWithPackage.kt</i></font><br>public fun <b>testFun</b>(
+//INFO:     first: String,
+//INFO:     second: Int
+//INFO: ): Int</pre></div><div class='content'><p>Test function</p></div><table class='sections'><tr><td valign='top' class='section'><p>Params:</td><td><p><code>first</code> - Some<p><code>second</code> - Other</td></table>

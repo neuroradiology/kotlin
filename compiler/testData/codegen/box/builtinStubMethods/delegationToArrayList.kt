@@ -1,3 +1,6 @@
+// IGNORE_BACKEND: JVM_IR
+// TARGET_BACKEND: JVM
+
 import java.util.ArrayList
 
 class A<E> : List<E> by ArrayList<E>()

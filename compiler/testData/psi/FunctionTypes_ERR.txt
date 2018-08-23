@@ -1,14 +1,15 @@
-JetFile: FunctionTypes_ERR.kt
+KtFile: FunctionTypes_ERR.kt
   PACKAGE_DIRECTIVE
     <empty list>
   IMPORT_LIST
     <empty list>
-  PROPERTY
-    PsiElement(val)('val')
+  TYPEALIAS
+    PsiElement(typealias)('typealias')
     PsiWhiteSpace(' ')
-    PsiElement(IDENTIFIER)('v')
-    PsiElement(COLON)(':')
+    PsiElement(IDENTIFIER)('f')
     PsiWhiteSpace(' ')
+    PsiElement(EQ)('=')
+    PsiWhiteSpace('  ')
     TYPE_REFERENCE
       FUNCTION_TYPE
         VALUE_PARAMETER_LIST

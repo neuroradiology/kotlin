@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,24 +16,16 @@
 
 package org.jetbrains.kotlin.js.translate.initializer;
 
-import com.google.dart.compiler.backend.js.ast.*;
+import org.jetbrains.kotlin.js.backend.ast.JsExpression;
+import org.jetbrains.kotlin.js.backend.ast.JsStatement;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor;
 import org.jetbrains.kotlin.js.translate.context.Namer;
 import org.jetbrains.kotlin.js.translate.context.TranslationContext;
-import org.jetbrains.kotlin.js.translate.declaration.ClassTranslator;
-import org.jetbrains.kotlin.js.translate.general.Translation;
 import org.jetbrains.kotlin.js.translate.utils.JsAstUtils;
-import org.jetbrains.kotlin.psi.KtExpression;
-import org.jetbrains.kotlin.psi.KtObjectDeclaration;
-import org.jetbrains.kotlin.psi.KtProperty;
+import org.jetbrains.kotlin.resolve.source.KotlinSourceElementKt;
 
-import java.util.List;
-
-import static org.jetbrains.kotlin.js.translate.utils.BindingUtils.getClassDescriptor;
-import static org.jetbrains.kotlin.js.translate.utils.JsAstUtils.assignment;
 import static org.jetbrains.kotlin.js.translate.utils.TranslationUtils.assignmentToBackingField;
 
 public final class InitializerUtils {
@@ -41,37 +33,22 @@ public final class InitializerUtils {
     }
 
     @NotNull
-    public static JsStatement generateInitializerForProperty(@NotNull TranslationContext context,
+    public static JsStatement generateInitializerForProperty(
+            @NotNull TranslationContext context,
             @NotNull PropertyDescriptor descriptor,
-            @NotNull JsExpression value) {
-        return assignmentToBackingField(context, descriptor, value).makeStmt();
-    }
-
-    @Nullable
-    public static JsStatement generateInitializerForDelegate(@NotNull TranslationContext context, @NotNull KtProperty property) {
-        KtExpression delegate = property.getDelegateExpression();
-        if (delegate != null) {
-            JsExpression value = Translation.translateAsExpression(delegate, context);
-            String name = property.getName();
-            assert name != null: "Delegate property must have name";
-            return JsAstUtils.defineSimpleProperty(Namer.getDelegateName(name), value);
-        }
-        return null;
-    }
-
-    public static void generateObjectInitializer(
-            @NotNull KtObjectDeclaration declaration,
-            @NotNull List<JsStatement> initializers,
-            @NotNull TranslationContext context
+            @NotNull JsExpression value
     ) {
-        JsExpression value = ClassTranslator.generateObjectLiteral(declaration, context);
-        ClassDescriptor descriptor = getClassDescriptor(context.bindingContext(), declaration);
-        JsExpression expression = assignment(new JsNameRef(descriptor.getName().asString(), JsLiteral.THIS), value);
-        initializers.add(expression.makeStmt());
+        JsExpression assignment = assignmentToBackingField(context, descriptor, value);
+        assignment.setSource(KotlinSourceElementKt.getPsi(descriptor.getSource()));
+        return assignment.makeStmt();
     }
 
-    public static JsPropertyInitializer createCompanionObjectInitializer(JsExpression value, TranslationContext context) {
-        JsStringLiteral companionObjectInitStr = context.program().getStringLiteral(Namer.getNameForCompanionObjectInitializer());
-        return new JsPropertyInitializer(companionObjectInitStr, value);
+    @NotNull
+    public static JsStatement generateInitializerForDelegate(
+            @NotNull TranslationContext context,
+            @NotNull PropertyDescriptor descriptor,
+            @NotNull JsExpression value
+    ) {
+        return JsAstUtils.defineSimpleProperty(context.getNameForBackingField(descriptor), value, descriptor.getSource());
     }
 }

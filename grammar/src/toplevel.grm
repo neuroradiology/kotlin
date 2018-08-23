@@ -4,10 +4,9 @@
 Relevant pages: [Packages](packages.html)
 */
 
-
 [start]
 kotlinFile
-  : preamble toplevelObject*
+  : preamble topLevelObject*
   ;
 
 [start]
@@ -24,12 +23,16 @@ fileAnnotations
   ;
 
 fileAnnotation
-  : "@" "file" ":" ("[" annotationEntry+ "]" | annotationEntry)
+  : "@" "file" ":" ("[" unescapedAnnotation+ "]" | unescapedAnnotation)
   ;
 
 packageHeader
   : modifiers "package" SimpleName{"."} SEMI?
   ;
+
+/**
+See [Packages](packages.html)
+*/
 
 import
   : "import" SimpleName{"."} ("." "*" | "as" SimpleName)? SEMI?
@@ -39,28 +42,14 @@ import
 See [Imports](packages.html#imports)
 */
 
-toplevelObject
-  : package
+topLevelObject
   : class
   : object
   : function
   : property
-//  : typeAlias
+  : typeAlias
   ;
 
-package
-  : "package" SimpleName{"."} "{"
-       import*
-       toplevelObject*
-    "}"
-  ;
-
-/**
-See [Packages](packages.html)
-*/
-
-/*
 typeAlias
-  : modifiers "typealias" SimpleName (typeParameters typeConstraints)? "=" type
+  : modifiers "typealias" SimpleName typeParameters? "=" type
   ;
-*/

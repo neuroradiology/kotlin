@@ -13,13 +13,12 @@ Foo<Bar<X>, T, Object> // user type
 */
 
 type
-  : annotations typeDescriptor
+  : typeModifiers typeReference
   ;
 
-// IF YOU CHANGE THIS, please, update TYPE_FIRST in JetParsing
-typeDescriptor
-  : "(" typeDescriptor ")"
-//  : selfType
+// If you change this, consider updating TYPE_REF_FIRST in KotlinParsing
+typeReference
+  : "(" typeReference ")"
   : functionType
   : userType
   : nullableType
@@ -27,26 +26,21 @@ typeDescriptor
   ;
 
 nullableType
-  : typeDescriptor "?"
-
-/*
-selfType
-  : "This"
+  : typeReference "?"
   ;
-*/
 
 userType
-  : ("package" ".")? simpleUserType{"."}
+  : simpleUserType{"."}
   ;
 
 simpleUserType
-  : SimpleName ("<" (optionalProjection type | "*"){","} ">")?
+  : SimpleName ("<" (projection? type | "*"){","} ">")?
   ;
 
-optionalProjection
+projection
   : varianceAnnotation
   ;
 
 functionType
-  : (type ".")? "(" (parameter | modifiers /*lazy out ref*/ type){","} ")" "->" type?
+  : (type ".")? "(" parameter{","}? ")" "->" type
   ;

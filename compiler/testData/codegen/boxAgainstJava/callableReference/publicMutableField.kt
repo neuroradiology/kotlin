@@ -1,4 +1,11 @@
-import publicMutableField as A
+// IGNORE_BACKEND: JVM_IR
+// FILE: A.java
+
+public class A {
+    public int field = 239;
+}
+
+// FILE: 1.kt
 
 fun box(): String {
     val a = A()

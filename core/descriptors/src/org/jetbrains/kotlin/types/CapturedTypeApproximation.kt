@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,16 +18,17 @@ package org.jetbrains.kotlin.types.typesApproximation
 
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
+import org.jetbrains.kotlin.renderer.ClassifierNamePolicy
+import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.resolve.calls.inference.CapturedTypeConstructor
 import org.jetbrains.kotlin.resolve.calls.inference.isCaptured
 import org.jetbrains.kotlin.resolve.descriptorUtil.builtIns
 import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
-import org.jetbrains.kotlin.types.typeUtil.*
-import org.jetbrains.kotlin.utils.addToStdlib.check
+import org.jetbrains.kotlin.types.typeUtil.builtIns
 import java.util.*
 
-data class ApproximationBounds<T>(
+data class ApproximationBounds<out T>(
         val lower: T,
         val upper: T
 )
@@ -42,7 +43,14 @@ private class TypeArgument(
 }
 
 private fun TypeArgument.toTypeProjection(): TypeProjection {
-    assert(isConsistent) { "Only consistent enhanced type propection can be converted to type projection" }
+    assert(isConsistent) {
+        val descriptorRenderer = DescriptorRenderer.withOptions {
+            classifierNamePolicy = ClassifierNamePolicy.FULLY_QUALIFIED
+        }
+        "Only consistent enhanced type projection can be converted to type projection, but " +
+        "[${descriptorRenderer.render(typeParameter)}: <${descriptorRenderer.renderType(inProjection)}, ${descriptorRenderer.renderType(outProjection)}>]" +
+        " was found"
+    }
     fun removeProjectionIfRedundant(variance: Variance) = if (variance == typeParameter.variance) Variance.INVARIANT else variance
     return when {
         inProjection == outProjection -> TypeProjectionImpl(inProjection)
@@ -87,23 +95,31 @@ fun approximateCapturedTypesIfNecessary(typeProjection: TypeProjection?, approxi
 private fun substituteCapturedTypesWithProjections(typeProjection: TypeProjection): TypeProjection? {
     val typeSubstitutor = TypeSubstitutor.create(object : TypeConstructorSubstitution() {
         override fun get(key: TypeConstructor): TypeProjection? {
-            return (key as? CapturedTypeConstructor)?.typeProjection
+            val capturedTypeConstructor = key as? CapturedTypeConstructor ?: return null
+            if (capturedTypeConstructor.typeProjection.isStarProjection) {
+                return TypeProjectionImpl(Variance.OUT_VARIANCE, capturedTypeConstructor.typeProjection.type)
+            }
+            return capturedTypeConstructor.typeProjection
         }
     })
     return typeSubstitutor.substituteWithoutApproximation(typeProjection)
 }
 
+// todo: dynamic & raw type?
 fun approximateCapturedTypes(type: KotlinType): ApproximationBounds<KotlinType> {
     if (type.isFlexible()) {
         val boundsForFlexibleLower = approximateCapturedTypes(type.lowerIfFlexible())
         val boundsForFlexibleUpper = approximateCapturedTypes(type.upperIfFlexible())
 
-        val extraCapabilities = type.flexibility().extraCapabilities
         return ApproximationBounds(
-                DelegatingFlexibleType.create(
-                        boundsForFlexibleLower.lower.lowerIfFlexible(), boundsForFlexibleUpper.lower.upperIfFlexible(), extraCapabilities),
-                DelegatingFlexibleType.create(
-                        boundsForFlexibleLower.upper.lowerIfFlexible(), boundsForFlexibleUpper.upper.upperIfFlexible(), extraCapabilities))
+                KotlinTypeFactory.flexibleType(
+                        boundsForFlexibleLower.lower.lowerIfFlexible(),
+                        boundsForFlexibleUpper.lower.upperIfFlexible()
+                ).inheritEnhancement(type),
+                KotlinTypeFactory.flexibleType(
+                        boundsForFlexibleLower.upper.lowerIfFlexible(),
+                       boundsForFlexibleUpper.upper.upperIfFlexible()
+                ).inheritEnhancement(type))
     }
 
     val typeConstructor = type.constructor

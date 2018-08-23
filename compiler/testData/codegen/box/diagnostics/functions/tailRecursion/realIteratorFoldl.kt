@@ -1,3 +1,7 @@
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// DONT_RUN_GENERATED_CODE: JS
+
 tailrec fun <T, A> Iterator<T>.foldl(acc : A, foldFunction : (e : T, acc : A) -> A) : A =
         if (!hasNext()) acc
         else foldl(foldFunction(next(), acc), foldFunction)

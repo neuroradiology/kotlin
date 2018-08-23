@@ -27,7 +27,7 @@ import org.jetbrains.kotlin.idea.search.allScope
 import org.jetbrains.kotlin.idea.stubindex.KotlinScriptFqnIndex
 import org.jetbrains.kotlin.idea.test.KotlinCodeInsightTestCase
 import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
-import org.jetbrains.kotlin.psi.KtScript
+import org.jetbrains.kotlin.utils.PathUtil
 import org.junit.Assert
 import kotlin.test.assertNotEquals
 
@@ -39,13 +39,13 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
         val runConfiguration = createConfigurationFromElement(script) as KotlinStandaloneScriptRunConfiguration
 
         Assert.assertEquals(script.containingFile.virtualFile.canonicalPath, runConfiguration.filePath)
-        Assert.assertEquals("SimpleScript", runConfiguration.name)
+        Assert.assertEquals("simpleScript.kts", runConfiguration.name)
 
         val javaParameters = getJavaRunParameters(runConfiguration)
         val programParametersList = javaParameters.programParametersList.list
-        val (first, second) = programParametersList
-        Assert.assertEquals("Should pass -script to compiler", "-script", first)
-        Assert.assertTrue("Should pass script file to compiler", second.contains("simpleScript.kts"))
+
+        programParametersList.checkParameter("-script") { it.contains("simpleScript.kts") }
+        programParametersList.checkParameter("-kotlin-home") { it == PathUtil.kotlinPathsForIdeaPlugin.homePath.path }
     }
 
     fun testOnFileRename() {
@@ -53,7 +53,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
         val script = KotlinScriptFqnIndex.instance.get("foo.SimpleScript", project, project.allScope()).single()
         val runConfiguration = createConfigurationFromElement(script, save = true) as KotlinStandaloneScriptRunConfiguration
 
-        Assert.assertEquals("SimpleScript", runConfiguration.name)
+        Assert.assertEquals("simpleScript.kts", runConfiguration.name)
         val scriptVirtualFileBefore = script.containingFile.virtualFile
         val originalPath = scriptVirtualFileBefore.canonicalPath
         val originalWorkingDirectory = scriptVirtualFileBefore.parent.canonicalPath
@@ -62,7 +62,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
 
         RefactoringFactory.getInstance(project).createRename(script.containingFile, "renamedScript.kts").run()
 
-        Assert.assertEquals("RenamedScript", runConfiguration.name)
+        Assert.assertEquals("renamedScript.kts", runConfiguration.name)
         val scriptVirtualFileAfter = script.containingFile.virtualFile
 
         assertEquals(scriptVirtualFileAfter.canonicalPath, runConfiguration.filePath)
@@ -77,7 +77,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
         val script = KotlinScriptFqnIndex.instance.get("foo.Script", project, project.allScope()).single()
         val runConfiguration = createConfigurationFromElement(script, save = true) as KotlinStandaloneScriptRunConfiguration
 
-        Assert.assertEquals("Script", runConfiguration.name)
+        Assert.assertEquals("script.kts", runConfiguration.name)
         val scriptVirtualFileBefore = script.containingFile.virtualFile
         val originalPath = scriptVirtualFileBefore.canonicalPath
         val originalWorkingDirectory = scriptVirtualFileBefore.parent.canonicalPath
@@ -86,7 +86,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
 
         moveScriptFile(script.containingFile)
 
-        Assert.assertEquals("Script", runConfiguration.name)
+        Assert.assertEquals("script.kts", runConfiguration.name)
         val scriptVirtualFileAfter = script.containingFile.virtualFile
 
         assertEquals(scriptVirtualFileAfter.canonicalPath, runConfiguration.filePath)
@@ -101,7 +101,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
         val script = KotlinScriptFqnIndex.instance.get("foo.Script", project, project.allScope()).single()
         val runConfiguration = createConfigurationFromElement(script, save = true) as KotlinStandaloneScriptRunConfiguration
 
-        Assert.assertEquals("Script", runConfiguration.name)
+        Assert.assertEquals("script.kts", runConfiguration.name)
         runConfiguration.workingDirectory = runConfiguration.workingDirectory + "/customWorkingDirectory"
         val scriptVirtualFileBefore = script.containingFile.virtualFile
         val originalPath = scriptVirtualFileBefore.canonicalPath
@@ -112,7 +112,7 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
 
         moveScriptFile(script.containingFile)
 
-        Assert.assertEquals("Script", runConfiguration.name)
+        Assert.assertEquals("script.kts", runConfiguration.name)
         val scriptVirtualFileAfter = script.containingFile.virtualFile
 
         assertEquals(scriptVirtualFileAfter.canonicalPath, runConfiguration.filePath)
@@ -120,6 +120,12 @@ class StandaloneScriptRunConfigurationTest : KotlinCodeInsightTestCase() {
 
         assertNotEquals(scriptVirtualFileAfter.parent.canonicalPath, runConfiguration.workingDirectory)
         assertEquals(originalWorkingDirectory, runConfiguration.workingDirectory)
+    }
+
+    private fun List<String>.checkParameter(name: String, condition: (String) -> Boolean) {
+        val param = find { it == name } ?: throw AssertionError("Should pass $name to compiler")
+        val paramValue = this[this.indexOf(param) + 1]
+        Assert.assertTrue("Check for $name parameter fails: actual value = $paramValue", condition(paramValue))
     }
 
     fun moveScriptFile(scriptFile: PsiFile) {

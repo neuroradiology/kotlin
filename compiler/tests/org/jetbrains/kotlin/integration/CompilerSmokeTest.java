@@ -57,11 +57,15 @@ public class CompilerSmokeTest extends CompilerSmokeTestBase {
         runCompiler("script", "-script", "script.kts", "hi", "there");
     }
 
-    public void testScriptWithClasspath() throws Exception {
-        runCompiler("script", "-cp", new File("lib/javax.inject.jar").getAbsolutePath(), "-script", "script.kts");
+    public void testScriptDashedArgs() throws Exception {
+        runCompiler("script", "-script", "script.kts", "--", "hi", "-name", "Marty", "--", "there");
     }
 
     public void testScriptException() throws Exception {
+        runCompiler("script", "-script", "script.kts");
+    }
+
+    public void testScriptFlushBeforeShutdown() throws Exception {
         runCompiler("script", "-script", "script.kts");
     }
 
@@ -69,5 +73,16 @@ public class CompilerSmokeTest extends CompilerSmokeTestBase {
         String jar = tmpdir.getAbsolutePath() + File.separator + "script.jar";
 
         runCompiler("script", "script.kts", "-d", jar);
+    }
+
+    public void testInlineOnly() throws Exception {
+        String jar = tmpdir.getAbsolutePath() + File.separator + "inlineOnly.jar";
+
+        assertEquals("compilation failed", 0, runCompiler("inlineOnly.compile", "-include-runtime", "inlineOnly.kt", "-d", jar));
+        run("inlineOnly.run", "-cp", jar, "InlineOnly.InlineOnlyKt");
+    }
+
+    public void testPrintVersion() throws Exception {
+        runCompiler("test.compile", "-version");
     }
 }

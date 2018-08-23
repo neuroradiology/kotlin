@@ -1,13 +1,17 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package test.properties.delegation.map
 
-import java.util.*
-import kotlin.properties.*
 import kotlin.test.*
-import org.junit.Test as test
 
 class ValByMapExtensionsTest {
     val map: Map<String, String> = hashMapOf("a" to "all", "b" to "bar", "c" to "code")
     val genericMap = mapOf<String, Any?>("i" to 1, "x" to 1.0)
+    val mmapOut: MutableMap<String, out String> = mutableMapOf("g" to "out", "g1" to "in")
+    val genericMmapOut: MutableMap<String, out Any?> = mmapOut
 
     val a by map
     val b: String by map
@@ -15,23 +19,26 @@ class ValByMapExtensionsTest {
     val d: String? by map
     val e: String by map.withDefault { "default" }
     val f: String? by map.withDefault { null }
+    val g: String by mmapOut
+    val g1: String by genericMmapOut
     // val n: Int by map // prohibited by type system
     val i: Int by genericMap
     val x: Double by genericMap
 
 
-    @test fun doTest() {
+    @Test fun doTest() {
         assertEquals("all", a)
         assertEquals("bar", b)
         assertEquals("code", c)
         assertEquals("default", e)
         assertEquals(null, f)
+        assertEquals("out", g)
+        assertEquals("in", g1)
         assertEquals(1, i)
         assertEquals(1.0, x)
-        assertTrue(assertFails { d } is NoSuchElementException)
+        assertFailsWith<NoSuchElementException> { d }
     }
 }
-
 
 
 class VarByMapExtensionsTest {
@@ -45,7 +52,7 @@ class VarByMapExtensionsTest {
     var a2: String by map2.withDefault { "empty" }
     //var x: Int by map2  // prohibited by type system
 
-    @test fun doTest() {
+    @Test fun doTest() {
         assertEquals("all", a)
         assertEquals(null, b)
         assertEquals(1, c)
@@ -57,14 +64,19 @@ class VarByMapExtensionsTest {
         map2.remove("a2")
         assertEquals("empty", a2)
 
-        map["c"] = "string"
-        // fails { c }  // does not fail in JS due to KT-8135
-
-        map["a"] = null
-        a // fails { a } // does not fail due to KT-8135
-
-        assertTrue(assertFails { d } is NoSuchElementException)
+        assertFailsWith<NoSuchElementException> { d }
         map["d"] = null
         assertEquals(null, d)
+    }
+
+    @Test fun deprecatedAccessors() {
+        assertEquals<Int>(
+            expected = map.getValue(this, VarByMapExtensionsTest::c),
+            actual = map.getValue<Int>(this, VarByMapExtensionsTest::c)
+        )
+        assertEquals<String>(
+            expected = map2.getValue<CharSequence, String>(this, VarByMapExtensionsTest::a2),
+            actual = map2.getValue<String>(this, VarByMapExtensionsTest::a2)
+        )
     }
 }

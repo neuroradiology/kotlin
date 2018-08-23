@@ -1,13 +1,26 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package templates
 
 import templates.Family.*
+import templates.SequenceClass.*
 
-fun sets(): List<GenericFunction> {
-    val templates = arrayListOf<GenericFunction>()
+object SetOps : TemplateGroupBase() {
 
-    templates add f("toMutableSet()") {
-        exclude(Strings)
-        doc { f -> "Returns a mutable set containing all distinct ${f.element.pluralize()} from the given ${f.collection}." }
+    val f_toMutableSet = fn("toMutableSet()") {
+        includeDefault()
+    } builder {
+        doc {
+            """
+            Returns a mutable set containing all distinct ${f.element.pluralize()} from the given ${f.collection}.
+
+            The returned set preserves the element iteration order of the original ${f.collection}.
+            """
+        }
+        sequenceClassification(terminal)
         returns("MutableSet<T>")
         body {
             """
@@ -24,7 +37,6 @@ fun sets(): List<GenericFunction> {
             return set
             """
         }
-        doc(Sequences) { "Returns a mutable set containing all distinct elements from the given sequence." }
         body(Sequences) {
             """
             val set = LinkedHashSet<T>()
@@ -34,9 +46,10 @@ fun sets(): List<GenericFunction> {
         }
     }
 
-    templates add f("distinct()") {
-        exclude(Strings)
-        doc { f ->
+    val f_distinct = fn("distinct()") {
+        includeDefault()
+    } builder {
+        doc {
             """
                 Returns a ${f.mapResult} containing only distinct ${f.element.pluralize()} from the given ${f.collection}.
 
@@ -46,13 +59,17 @@ fun sets(): List<GenericFunction> {
 
         returns("List<T>")
         body { "return this.toMutableSet().toList()" }
-        returns(Sequences) { "Sequence<T>" }
-        body(Sequences) { "return this.distinctBy { it }" }
+        specialFor(Sequences) {
+            sequenceClassification(intermediate, stateful)
+            returns("Sequence<T>")
+            body { "return this.distinctBy { it }" }
+        }
     }
 
-    templates add f("distinctBy(selector: (T) -> K)") {
-        exclude(Strings)
-        doc { f ->
+    val f_distinctBy = fn("distinctBy(selector: (T) -> K)") {
+        includeDefault()
+    } builder {
+        doc {
             """
                 Returns a ${f.mapResult} containing only ${f.element.pluralize()} from the given ${f.collection}
                 having distinct keys returned by the given [selector] function.
@@ -61,7 +78,7 @@ fun sets(): List<GenericFunction> {
                 """
         }
 
-        inline(true)
+        inline()
         typeParam("K")
         returns("List<T>")
         body {
@@ -77,20 +94,27 @@ fun sets(): List<GenericFunction> {
             """
         }
 
-        inline(false, Sequences)
-        returns(Sequences) { "Sequence<T>" }
-        body(Sequences) {
-            """
-            return DistinctSequence(this, selector)
-            """
+        specialFor(Sequences) {
+            inline(Inline.No)
+            returns("Sequence<T>")
+            sequenceClassification(intermediate, stateful)
+            body { """return DistinctSequence(this, selector)""" }
         }
-
     }
 
-    templates add f("union(other: Iterable<T>)") {
+    val f_union = fn("union(other: Iterable<T>)") {
+        include(Family.defaultFamilies - Sequences)
+    } builder {
         infix(true)
-        exclude(Strings, Sequences)
-        doc { "Returns a set containing all distinct elements from both collections." }
+        doc {
+            """
+            Returns a set containing all distinct elements from both collections.
+
+            The returned set preserves the element iteration order of the original ${f.collection}.
+            Those elements of the [other] collection that are unique are iterated in the end
+            in the order of the [other] collection.
+            """
+        }
         returns("Set<T>")
         body {
             """
@@ -101,10 +125,17 @@ fun sets(): List<GenericFunction> {
         }
     }
 
-    templates add f("intersect(other: Iterable<T>)") {
-        infix(true)
-        exclude(Strings, Sequences)
-        doc { "Returns a set containing all elements that are contained by both this set and the specified collection." }
+    val f_intersect = fn("intersect(other: Iterable<T>)") {
+        include(Family.defaultFamilies - Sequences)
+    } builder {
+        infix()
+        doc {
+            """
+            Returns a set containing all elements that are contained by both this set and the specified collection.
+
+            The returned set preserves the element iteration order of the original ${f.collection}.
+            """
+        }
         returns("Set<T>")
         body {
             """
@@ -115,10 +146,17 @@ fun sets(): List<GenericFunction> {
         }
     }
 
-    templates add f("subtract(other: Iterable<T>)") {
-        infix(true)
-        exclude(Strings, Sequences)
-        doc { "Returns a set containing all elements that are contained by this set and not contained by the specified collection." }
+    val f_subtract = fn("subtract(other: Iterable<T>)") {
+        include(Family.defaultFamilies - Sequences)
+    } builder {
+        infix()
+        doc {
+            """
+            Returns a set containing all elements that are contained by this ${f.collection} and not contained by the specified collection.
+
+            The returned set preserves the element iteration order of the original ${f.collection}.
+            """
+        }
         returns("Set<T>")
         body {
             """
@@ -129,5 +167,4 @@ fun sets(): List<GenericFunction> {
         }
     }
 
-    return templates
 }

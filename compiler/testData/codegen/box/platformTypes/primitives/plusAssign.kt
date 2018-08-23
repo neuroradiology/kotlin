@@ -1,5 +1,6 @@
+// IGNORE_BACKEND: JS_IR
 fun box(): String {
-    val l = java.util.ArrayList<Int>()
+    val l = ArrayList<Int>()
     l.add(1)
     var x = l[0]
     x += 1

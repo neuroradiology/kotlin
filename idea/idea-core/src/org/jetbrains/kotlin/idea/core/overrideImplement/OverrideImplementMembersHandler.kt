@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.idea.core.overrideImplement
 
+import com.intellij.codeInsight.FileModificationService
 import com.intellij.codeInsight.hint.HintManager
 import com.intellij.ide.util.MemberChooser
 import com.intellij.lang.LanguageCodeInsightActionHandler
@@ -26,8 +27,8 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptor
-import org.jetbrains.kotlin.idea.quickfix.insertMembersAfter
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptorIfAny
+import org.jetbrains.kotlin.idea.core.insertMembersAfter
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
@@ -35,7 +36,7 @@ import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
 abstract class OverrideImplementMembersHandler : LanguageCodeInsightActionHandler {
 
     fun collectMembersToGenerate(classOrObject: KtClassOrObject): Collection<OverrideMemberChooserObject> {
-        val descriptor = classOrObject.resolveToDescriptor() as? ClassDescriptor ?: return emptySet()
+        val descriptor = classOrObject.resolveToDescriptorIfAny() ?: return emptySet()
         return collectMembersToGenerate(descriptor, classOrObject.project)
     }
 
@@ -66,24 +67,30 @@ abstract class OverrideImplementMembersHandler : LanguageCodeInsightActionHandle
         val elementAtCaret = file.findElementAt(editor.caretModel.offset)
         val classOrObject = elementAtCaret?.getNonStrictParentOfType<KtClassOrObject>() ?: return
 
+        if (!FileModificationService.getInstance().prepareFileForWrite(file)) return
+
         val members = collectMembersToGenerate(classOrObject)
         if (members.isEmpty() && !implementAll) {
             HintManager.getInstance().showErrorHint(editor, getNoMembersFoundHint())
             return
         }
 
-        val selectedElements = if (implementAll) {
-            members
+        val copyDoc: Boolean
+        val selectedElements: Collection<OverrideMemberChooserObject>
+        if (implementAll) {
+            selectedElements = members
+            copyDoc = false
         }
         else {
             val chooser = showOverrideImplementChooser(project, members.toTypedArray()) ?: return
-            chooser.selectedElements ?: return
+            selectedElements = chooser.selectedElements ?: return
+            copyDoc = chooser.isCopyJavadoc
         }
         if (selectedElements.isEmpty()) return
 
         PsiDocumentManager.getInstance(project).commitAllDocuments()
 
-        generateMembers(editor, classOrObject, selectedElements)
+        generateMembers(editor, classOrObject, selectedElements, copyDoc)
     }
 
     override fun invoke(project: Project, editor: Editor, file: PsiFile) {
@@ -93,9 +100,13 @@ abstract class OverrideImplementMembersHandler : LanguageCodeInsightActionHandle
     override fun startInWriteAction(): Boolean = false
 
     companion object {
-        fun generateMembers(editor: Editor?, classOrObject: KtClassOrObject, selectedElements: Collection<OverrideMemberChooserObject>) {
-            val project = classOrObject.project
-            insertMembersAfter(editor, classOrObject, selectedElements.map { it.generateMember(project) })
+        fun generateMembers(
+                editor: Editor?,
+                classOrObject: KtClassOrObject,
+                selectedElements: Collection<OverrideMemberChooserObject>,
+                copyDoc: Boolean
+        ) {
+            insertMembersAfter(editor, classOrObject, selectedElements.map { it.generateMember(classOrObject, copyDoc) })
         }
     }
 }

@@ -73,19 +73,18 @@ public class WrappedValues {
     }
 
     @Nullable
+    @SuppressWarnings("unchecked")
     public static <V> V unescapeThrowable(@Nullable Object value) {
         if (value instanceof ThrowableWrapper) {
             Throwable originThrowable = ((ThrowableWrapper) value).getThrowable();
 
-            if (throwWrappedProcessCanceledException &&
-                    originThrowable.getClass().getName().equals("com.intellij.openapi.progress.ProcessCanceledException")) {
+            if (throwWrappedProcessCanceledException && ExceptionUtilsKt.isProcessCanceledException(originThrowable)) {
                 throw new WrappedProcessCanceledException(originThrowable);
             }
 
             throw ExceptionUtilsKt.rethrow(originThrowable);
         }
 
-        //noinspection unchecked
         return (V) value;
     }
 

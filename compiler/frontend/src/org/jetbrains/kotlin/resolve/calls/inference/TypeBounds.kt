@@ -38,17 +38,17 @@ interface TypeBounds {
     }
 
     class Bound(
-            val typeVariable: TypeVariable,
-            val constrainingType: KotlinType,
-            val kind: BoundKind,
-            val position: ConstraintPosition,
-            val isProper: Boolean,
-            // to prevent infinite recursion in incorporation we store the variables that was substituted to derive this bound
-            val derivedFrom: Set<TypeVariable>
+        val typeVariable: TypeVariable,
+        val constrainingType: KotlinType,
+        val kind: BoundKind,
+        val position: ConstraintPosition,
+        val isProper: Boolean,
+        // to prevent infinite recursion in incorporation we store the variables that was substituted to derive this bound
+        val derivedFrom: Set<TypeVariable>
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
-            if (other == null || javaClass != other.javaClass) return false
+            if (other == null || this::class.java != other::class.java) return false
 
             val bound = other as Bound
 

@@ -16,17 +16,17 @@
 
 package org.jetbrains.kotlin.resolve.typeApproximation
 
+import org.jetbrains.kotlin.builtins.DefaultBuiltIns
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.diagnostics.Severity
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.inference.createCapturedType
-import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
 import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil
 import org.jetbrains.kotlin.test.ConfigurationKind
-import org.jetbrains.kotlin.test.KotlinLiteFixture
 import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
 import org.jetbrains.kotlin.types.TypeProjection
 import org.jetbrains.kotlin.types.TypeProjectionImpl
 import org.jetbrains.kotlin.types.TypeSubstitutor
@@ -36,9 +36,9 @@ import org.jetbrains.kotlin.types.typesApproximation.approximateCapturedTypesIfN
 import java.io.File
 import java.util.*
 
-class CapturedTypeApproximationTest() : KotlinLiteFixture() {
-
-    override fun getTestDataPath() = "compiler/testData/capturedTypeApproximation/"
+class CapturedTypeApproximationTest : KotlinTestWithEnvironment() {
+    private val testDataPath: String
+        get() = KotlinTestUtils.getTestDataPathBase() + "/capturedTypeApproximation/"
 
     override fun createEnvironment(): KotlinCoreEnvironment = createEnvironmentWithMockJdk(ConfigurationKind.JDK_ONLY)
 
@@ -51,7 +51,7 @@ class CapturedTypeApproximationTest() : KotlinLiteFixture() {
         fun analyzeTestFile(testType: String) = run {
             val test = declarationsText.replace("#TestType#", testType)
             val testFile = KtPsiFactory(project).createFile(test)
-            val bindingContext = JvmResolveUtil.analyzeOneFileWithJavaIntegration(testFile).bindingContext
+            val bindingContext = JvmResolveUtil.analyze(testFile, environment).bindingContext
             val functions = bindingContext.getSliceContents(BindingContext.FUNCTION)
             val functionFoo = functions.values.firstOrNull { it.name.asString() == "foo" } ?:
                               throw AssertionError("Function 'foo' is not declared")
@@ -65,7 +65,7 @@ class CapturedTypeApproximationTest() : KotlinLiteFixture() {
         }
 
         fun createTestSubstitutions(typeParameters: List<TypeParameterDescriptor>) = run {
-            val builtIns = JvmPlatform.builtIns
+            val builtIns = DefaultBuiltIns.Instance
             val intType = builtIns.intType
             val stringType = builtIns.stringType
             val t = typeParameters[0]
@@ -171,7 +171,7 @@ class CapturedTypeApproximationTest() : KotlinLiteFixture() {
     }
 
     fun testSimpleT() {
-        doTest("simpleT.txt", "T");
+        doTest("simpleT.txt", "T")
     }
 
     fun testNullableT() {
@@ -179,19 +179,19 @@ class CapturedTypeApproximationTest() : KotlinLiteFixture() {
     }
 
     fun testUseSiteInT() {
-        doTest("useSiteInT.txt", "in T");
+        doTest("useSiteInT.txt", "in T")
     }
 
     fun testUseSiteInNullableT() {
-        doTest("useSiteInNullableT.txt", "in T?");
+        doTest("useSiteInNullableT.txt", "in T?")
     }
 
     fun testUseSiteOutT() {
-        doTest("useSiteOutT.txt", "out T");
+        doTest("useSiteOutT.txt", "out T")
     }
 
     fun testUseSiteOutNullableT() {
-        doTest("useSiteOutNullableT.txt", "out T?");
+        doTest("useSiteOutNullableT.txt", "out T?")
     }
 
     fun testTwoVariables() {

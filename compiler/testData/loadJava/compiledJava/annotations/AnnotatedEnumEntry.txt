@@ -3,7 +3,7 @@ package test
 public final enum class AnnotatedEnumEntry : kotlin.Enum<test.AnnotatedEnumEntry!> {
     @test.AnnotatedEnumEntry.Anno(value = "a") enum entry E1
 
-    @test.AnnotatedEnumEntry.Anno(value = "b") @test.AnnotatedEnumEntry.Anno2() enum entry E2
+    @test.AnnotatedEnumEntry.Anno(value = "b") @test.AnnotatedEnumEntry.Anno2 enum entry E2
 
     enum entry E3
 
@@ -12,6 +12,8 @@ public final enum class AnnotatedEnumEntry : kotlin.Enum<test.AnnotatedEnumEntry
     public final override /*1*/ /*fake_override*/ val ordinal: kotlin.Int
     protected final override /*1*/ /*fake_override*/ fun clone(): kotlin.Any
     public final override /*1*/ /*fake_override*/ fun compareTo(/*0*/ other: test.AnnotatedEnumEntry!): kotlin.Int
+    protected/*protected and package*/ final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun finalize(): kotlin.Unit
+    public final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun getDeclaringClass(): java.lang.Class<test.AnnotatedEnumEntry!>!
 
     public final annotation class Anno : kotlin.Annotation {
         public constructor Anno(/*0*/ value: kotlin.String)
@@ -23,7 +25,6 @@ public final enum class AnnotatedEnumEntry : kotlin.Enum<test.AnnotatedEnumEntry
     }
 
     // Static members
-    @kotlin.Deprecated(level = DeprecationLevel.ERROR, message = "Use 'values()' function instead", replaceWith = kotlin.ReplaceWith(expression = "this.values()", imports = {})) public final /*synthesized*/ val values: kotlin.Array<test.AnnotatedEnumEntry>
     public final /*synthesized*/ fun valueOf(/*0*/ value: kotlin.String): test.AnnotatedEnumEntry
     public final /*synthesized*/ fun values(): kotlin.Array<test.AnnotatedEnumEntry>
 }

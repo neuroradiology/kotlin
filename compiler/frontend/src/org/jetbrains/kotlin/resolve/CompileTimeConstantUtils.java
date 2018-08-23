@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import kotlin.collections.SetsKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
+import org.jetbrains.kotlin.builtins.UnsignedTypes;
 import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.VariableDescriptor;
 import org.jetbrains.kotlin.psi.KtExpression;
@@ -33,6 +34,7 @@ import org.jetbrains.kotlin.resolve.constants.ConstantValue;
 import org.jetbrains.kotlin.resolve.constants.TypedCompileTimeConstant;
 import org.jetbrains.kotlin.resolve.constants.evaluate.ConstantExpressionEvaluator;
 import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.KotlinTypeKt;
 import org.jetbrains.kotlin.types.TypeProjection;
 import org.jetbrains.kotlin.types.TypeUtils;
 
@@ -56,7 +58,8 @@ public class CompileTimeConstantUtils {
             "kotlin.charArrayOf",
             "kotlin.shortArrayOf",
             "kotlin.byteArrayOf",
-            "kotlin.booleanArrayOf"
+            "kotlin.booleanArrayOf",
+            "kotlin.emptyArray"
     );
 
     public static void checkConstructorParametersType(@NotNull List<KtParameter> parameters, @NotNull BindingTrace trace) {
@@ -77,18 +80,19 @@ public class CompileTimeConstantUtils {
     }
 
     private static boolean isAcceptableTypeForAnnotationParameter(@NotNull KotlinType parameterType) {
+        if (KotlinTypeKt.isError(parameterType)) return true;
+
         ClassDescriptor typeDescriptor = TypeUtils.getClassDescriptor(parameterType);
-        if (typeDescriptor == null) {
-            return false;
-        }
+        if (typeDescriptor == null) return false;
 
         if (isEnumClass(typeDescriptor) ||
             isAnnotationClass(typeDescriptor) ||
             KotlinBuiltIns.isKClass(typeDescriptor) ||
             KotlinBuiltIns.isPrimitiveArray(parameterType) ||
             KotlinBuiltIns.isPrimitiveType(parameterType) ||
-            KotlinBuiltIns.isString(parameterType)) {
-                return true;
+            KotlinBuiltIns.isString(parameterType) ||
+            UnsignedTypes.INSTANCE.isUnsignedType(parameterType)) {
+            return true;
         }
 
         if (KotlinBuiltIns.isArray(parameterType)) {
@@ -107,10 +111,11 @@ public class CompileTimeConstantUtils {
                 }
             }
         }
+
         return false;
     }
 
-    public static boolean isArrayMethodCall(@NotNull ResolvedCall<?> resolvedCall) {
+    public static boolean isArrayFunctionCall(@NotNull ResolvedCall<?> resolvedCall) {
         return ARRAY_CALL_NAMES.contains(DescriptorUtils.getFqName(resolvedCall.getCandidateDescriptor()).asString());
     }
 

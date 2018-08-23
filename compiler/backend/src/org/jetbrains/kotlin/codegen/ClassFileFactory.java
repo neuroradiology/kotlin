@@ -16,31 +16,38 @@
 
 package org.jetbrains.kotlin.codegen;
 
-import com.google.common.collect.Lists;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
-import com.intellij.util.Function;
-import com.intellij.util.containers.ContainerUtil;
-import com.intellij.util.io.DataOutputStream;
+import kotlin.Pair;
 import kotlin.collections.CollectionsKt;
+import kotlin.io.FilesKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.TestOnly;
 import org.jetbrains.kotlin.backend.common.output.OutputFile;
 import org.jetbrains.kotlin.backend.common.output.OutputFileCollection;
 import org.jetbrains.kotlin.codegen.state.GenerationState;
-import org.jetbrains.kotlin.load.kotlin.JvmMetadataVersion;
-import org.jetbrains.kotlin.load.kotlin.PackagePartClassUtils;
-import org.jetbrains.kotlin.load.kotlin.PackageParts;
+import org.jetbrains.kotlin.config.AnalysisFlag;
+import org.jetbrains.kotlin.descriptors.ClassDescriptor;
+import org.jetbrains.kotlin.descriptors.DescriptorUtilKt;
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor;
+import org.jetbrains.kotlin.incremental.components.NoLookupLocation;
+import org.jetbrains.kotlin.load.kotlin.ModuleMappingUtilKt;
+import org.jetbrains.kotlin.metadata.ProtoBuf;
+import org.jetbrains.kotlin.metadata.jvm.JvmModuleProtoBuf;
+import org.jetbrains.kotlin.metadata.jvm.deserialization.ModuleMapping;
+import org.jetbrains.kotlin.metadata.jvm.deserialization.ModuleMappingKt;
+import org.jetbrains.kotlin.metadata.jvm.deserialization.PackageParts;
+import org.jetbrains.kotlin.name.ClassId;
 import org.jetbrains.kotlin.name.FqName;
 import org.jetbrains.kotlin.psi.KtFile;
+import org.jetbrains.kotlin.resolve.CompilerDeserializationConfiguration;
+import org.jetbrains.kotlin.resolve.descriptorUtil.DescriptorUtilsKt;
 import org.jetbrains.kotlin.resolve.jvm.diagnostics.JvmDeclarationOrigin;
-import org.jetbrains.kotlin.serialization.jvm.JvmPackageTable;
+import org.jetbrains.kotlin.serialization.StringTableImpl;
 import org.jetbrains.org.objectweb.asm.Type;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.*;
 
@@ -49,15 +56,20 @@ import static org.jetbrains.kotlin.codegen.JvmCodegenUtil.getMappingFileName;
 public class ClassFileFactory implements OutputFileCollection {
     private final GenerationState state;
     private final ClassBuilderFactory builderFactory;
-    private final Map<FqName, PackageCodegen> package2codegen = new HashMap<FqName, PackageCodegen>();
-    private final Map<FqName, MultifileClassCodegen> multifileClass2codegen = new HashMap<FqName, MultifileClassCodegen>();
-    private final Map<String, OutAndSourceFileList> generators = new LinkedHashMap<String, OutAndSourceFileList>();
+    private final Map<String, OutAndSourceFileList> generators = new LinkedHashMap<>();
 
     private boolean isDone = false;
+
+    private final Set<File> sourceFiles = new HashSet<>();
+    private final Map<String, PackageParts> partsGroupedByPackage = new LinkedHashMap<>();
 
     public ClassFileFactory(@NotNull GenerationState state, @NotNull ClassBuilderFactory builderFactory) {
         this.state = state;
         this.builderFactory = builderFactory;
+    }
+
+    public GenerationState getGenerationState() {
+        return state;
     }
 
     @NotNull
@@ -72,125 +84,93 @@ public class ClassFileFactory implements OutputFileCollection {
     public ClassBuilder newVisitor(
             @NotNull JvmDeclarationOrigin origin,
             @NotNull Type asmType,
-            @NotNull Collection<? extends PsiFile> sourceFiles) {
-        String outputFilePath = asmType.getInternalName() + ".class";
-        List<File> ioSourceFiles = toIoFilesIgnoringNonPhysical(sourceFiles);
-        state.getProgress().reportOutput(ioSourceFiles, new File(outputFilePath));
+            @NotNull Collection<? extends PsiFile> sourceFiles
+    ) {
         ClassBuilder answer = builderFactory.newClassBuilder(origin);
-        generators.put(outputFilePath, new ClassBuilderAndSourceFileList(answer, ioSourceFiles));
+        generators.put(
+                asmType.getInternalName() + ".class",
+                new ClassBuilderAndSourceFileList(answer, toIoFilesIgnoringNonPhysical(sourceFiles))
+        );
         return answer;
     }
 
-    void done() {
+    public void done() {
         if (!isDone) {
             isDone = true;
-            Collection<PackageCodegen> packageCodegens = package2codegen.values();
-            Collection<MultifileClassCodegen> multifileClassCodegens = multifileClass2codegen.values();
-            for (MultifileClassCodegen codegen : multifileClassCodegens) {
-                codegen.done();
-            }
-            writeModuleMappings(packageCodegens, multifileClassCodegens);
+            writeModuleMappings();
         }
     }
 
-    private void writeModuleMappings(
-            @NotNull Collection<PackageCodegen> packageCodegens,
-            @NotNull Collection<MultifileClassCodegen> multifileClassCodegens
-    ) {
-        final JvmPackageTable.PackageTable.Builder builder = JvmPackageTable.PackageTable.newBuilder();
+    public void releaseGeneratedOutput() {
+        generators.clear();
+    }
+
+    private void writeModuleMappings() {
+        JvmModuleProtoBuf.Module.Builder builder = JvmModuleProtoBuf.Module.newBuilder();
         String outputFilePath = getMappingFileName(state.getModuleName());
 
-        List<PackageParts> parts = collectGeneratedPackageParts(packageCodegens, multifileClassCodegens);
-
-        Set<File> sourceFiles = new HashSet<File>();
-        // TODO extract common logic
-        for (PackageCodegen codegen : packageCodegens) {
-            sourceFiles.addAll(toIoFilesIgnoringNonPhysical(PackagePartClassUtils.getFilesWithCallables(codegen.getFiles())));
-        }
-        for (MultifileClassCodegen codegen : multifileClassCodegens) {
-            sourceFiles.addAll(toIoFilesIgnoringNonPhysical(PackagePartClassUtils.getFilesWithCallables(codegen.getFiles())));
+        for (PackageParts part : ClassFileUtilsKt.addCompiledPartsAndSort(partsGroupedByPackage.values(), state)) {
+            part.addTo(builder);
         }
 
-        for (PackageParts part : ClassFileUtilsKt.addCompiledPartsAndSort(parts, state)) {
-            PackageParts.Companion.serialize(part, builder);
+        List<String> experimental = state.getLanguageVersionSettings().getFlag(AnalysisFlag.getExperimental());
+        if (!experimental.isEmpty()) {
+            writeExperimentalMarkers(state.getModule(), builder, experimental);
         }
 
-        if (builder.getPackagePartsCount() != 0) {
-            state.getProgress().reportOutput(sourceFiles, new File(outputFilePath));
-            generators.put(outputFilePath, new OutAndSourceFileList(CollectionsKt.toList(sourceFiles)) {
-                @Override
-                public byte[] asBytes(ClassBuilderFactory factory) {
-                    try {
-                        ByteArrayOutputStream moduleMapping = new ByteArrayOutputStream(4096);
-                        DataOutputStream dataOutStream = new DataOutputStream(moduleMapping);
-                        int[] version = JvmMetadataVersion.INSTANCE.toArray();
-                        dataOutStream.writeInt(version.length);
-                        for (int number : version) {
-                            dataOutStream.writeInt(number);
-                        }
-                        builder.build().writeTo(dataOutStream);
-                        dataOutStream.flush();
-                        return moduleMapping.toByteArray();
-                    }
-                    catch (UnsupportedEncodingException e) {
-                        throw new RuntimeException(e);
-                    }
-                    catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
+        JvmModuleProtoBuf.Module moduleProto = builder.build();
+
+        generators.put(outputFilePath, new OutAndSourceFileList(CollectionsKt.toList(sourceFiles)) {
+            @Override
+            public byte[] asBytes(ClassBuilderFactory factory) {
+                return ModuleMappingKt.serializeToByteArray(moduleProto, state.getMetadataVersion().toArray());
+            }
+
+            @Override
+            public String asText(ClassBuilderFactory factory) {
+                try {
+                    return new String(asBytes(factory), "UTF-8");
                 }
-
-                @Override
-                public String asText(ClassBuilderFactory factory) {
-                    try {
-                        return new String(asBytes(factory), "UTF-8");
-                    }
-                    catch (UnsupportedEncodingException e) {
-                        throw new RuntimeException(e);
-                    }
+                catch (UnsupportedEncodingException e) {
+                    throw new RuntimeException(e);
                 }
-            });
-        }
+            }
+        });
     }
 
-    private static List<PackageParts> collectGeneratedPackageParts(
-            @NotNull Collection<PackageCodegen> packageCodegens,
-            @NotNull Collection<MultifileClassCodegen> multifileClassCodegens
+    private static void writeExperimentalMarkers(
+            @NotNull ModuleDescriptor module,
+            @NotNull JvmModuleProtoBuf.Module.Builder builder,
+            @NotNull List<String> experimental
     ) {
-        Map<String, PackageParts> mergedPartsByPackageName = new LinkedHashMap<String, PackageParts>();
-
-        for (PackageCodegen packageCodegen : packageCodegens) {
-            PackageParts generatedParts = packageCodegen.getPackageParts();
-            PackageParts premergedParts = new PackageParts(generatedParts.getPackageFqName());
-            mergedPartsByPackageName.put(generatedParts.getPackageFqName(), premergedParts);
-            premergedParts.getParts().addAll(generatedParts.getParts());
-        }
-
-        for (MultifileClassCodegen multifileClassCodegen : multifileClassCodegens) {
-            PackageParts multifileClassParts = multifileClassCodegen.getPackageParts();
-            PackageParts premergedParts = mergedPartsByPackageName.get(multifileClassParts.getPackageFqName());
-            if (premergedParts == null) {
-                premergedParts = new PackageParts(multifileClassParts.getPackageFqName());
-                mergedPartsByPackageName.put(multifileClassParts.getPackageFqName(), premergedParts);
+        StringTableImpl stringTable = new StringTableImpl();
+        for (String fqName : experimental) {
+            ClassDescriptor descriptor =
+                    DescriptorUtilKt.resolveClassByFqName(module, new FqName(fqName), NoLookupLocation.FOR_ALREADY_TRACKED);
+            if (descriptor != null) {
+                ProtoBuf.Annotation.Builder annotation = ProtoBuf.Annotation.newBuilder();
+                ClassId classId = DescriptorUtilsKt.getClassId(descriptor);
+                if (classId != null) {
+                    annotation.setId(stringTable.getQualifiedClassNameIndex(classId.asString(), false));
+                    builder.addAnnotation(annotation);
+                }
             }
-            premergedParts.getParts().addAll(multifileClassParts.getParts());
         }
-
-        List<PackageParts> result = new ArrayList<PackageParts>();
-        result.addAll(mergedPartsByPackageName.values());
-        return result;
+        Pair<ProtoBuf.StringTable, ProtoBuf.QualifiedNameTable> tables = stringTable.buildProto();
+        builder.setStringTable(tables.getFirst());
+        builder.setQualifiedNameTable(tables.getSecond());
     }
 
     @NotNull
     @Override
     public List<OutputFile> asList() {
         done();
-        return ContainerUtil.map(generators.keySet(), new Function<String, OutputFile>() {
-            @Override
-            public OutputFile fun(String relativeClassFilePath) {
-                return new OutputClassFile(relativeClassFilePath);
-            }
-        });
+        return getCurrentOutput();
+    }
+
+    @NotNull
+    public List<OutputFile> getCurrentOutput() {
+        return CollectionsKt.map(generators.keySet(), OutputClassFile::new);
     }
 
     @Override
@@ -202,11 +182,39 @@ public class ClassFileFactory implements OutputFileCollection {
     @NotNull
     @TestOnly
     public String createText() {
+        return createText(null);
+    }
+
+    @NotNull
+    @TestOnly
+    public String createText(@Nullable String ignorePrefixPath) {
         StringBuilder answer = new StringBuilder();
 
         for (OutputFile file : asList()) {
-            answer.append("@").append(file.getRelativePath()).append('\n');
-            answer.append(file.asText());
+            if (ignorePrefixPath != null && file.getRelativePath().startsWith(ignorePrefixPath)) continue;
+            File relativePath = new File(file.getRelativePath());
+            answer.append("@").append(relativePath).append('\n');
+            switch (FilesKt.getExtension(relativePath)) {
+                case "class":
+                    answer.append(file.asText());
+                    break;
+                case "kotlin_module": {
+                    ModuleMapping mapping = ModuleMappingUtilKt.loadModuleMapping(
+                            ModuleMapping.Companion, file.asByteArray(), relativePath.getPath(),
+                            CompilerDeserializationConfiguration.Default.INSTANCE, version -> {
+                                throw new IllegalStateException("Version of the generated module cannot be incompatible: " + version);
+                            }
+                    );
+                    for (Map.Entry<String, PackageParts> entry : mapping.getPackageFqName2Parts().entrySet()) {
+                        FqName packageFqName = new FqName(entry.getKey());
+                        PackageParts packageParts = entry.getValue();
+                        answer.append("<package ").append(packageFqName).append(": ").append(packageParts.getParts()).append(">\n");
+                    }
+                    break;
+                }
+                default:
+                    throw new UnsupportedOperationException("Unknown OutputFile: " + file);
+            }
         }
 
         return answer.toString();
@@ -215,7 +223,7 @@ public class ClassFileFactory implements OutputFileCollection {
     @NotNull
     @TestOnly
     public Map<String, String> createTextForEachFile() {
-        Map<String, String> answer = new LinkedHashMap<String, String>();
+        Map<String, String> answer = new LinkedHashMap<>();
         for (OutputFile file : asList()) {
             answer.put(file.getRelativePath(), file.asText());
         }
@@ -225,29 +233,32 @@ public class ClassFileFactory implements OutputFileCollection {
     @NotNull
     public PackageCodegen forPackage(@NotNull FqName fqName, @NotNull Collection<KtFile> files) {
         assert !isDone : "Already done!";
-        PackageCodegen codegen = package2codegen.get(fqName);
-        if (codegen == null) {
-            codegen = new PackageCodegen(state, files, fqName);
-            package2codegen.put(fqName, codegen);
-        }
-
-        return codegen;
+        registerSourceFiles(files);
+        return state.getCodegenFactory().createPackageCodegen(state, files, fqName, buildNewPackagePartRegistry(fqName));
     }
 
     @NotNull
     public MultifileClassCodegen forMultifileClass(@NotNull FqName facadeFqName, @NotNull Collection<KtFile> files) {
         assert !isDone : "Already done!";
-        MultifileClassCodegen codegen = multifileClass2codegen.get(facadeFqName);
-        if (codegen == null) {
-            codegen = new MultifileClassCodegen(state, files, facadeFqName);
-            multifileClass2codegen.put(facadeFqName, codegen);
-        }
-        return codegen;
+        registerSourceFiles(files);
+        return state.getCodegenFactory().createMultifileClassCodegen(state, files, facadeFqName, buildNewPackagePartRegistry(facadeFqName.parent()));
+    }
+
+    private PackagePartRegistry buildNewPackagePartRegistry(@NotNull FqName packageFqName) {
+        String packageFqNameAsString = packageFqName.asString();
+        return (partInternalName, facadeInternalName) -> {
+            PackageParts packageParts = partsGroupedByPackage.computeIfAbsent(packageFqNameAsString, PackageParts::new);
+            packageParts.addPart(partInternalName, facadeInternalName);
+        };
+    }
+
+    private void registerSourceFiles(Collection<KtFile> files) {
+        sourceFiles.addAll(toIoFilesIgnoringNonPhysical(files));
     }
 
     @NotNull
     private static List<File> toIoFilesIgnoringNonPhysical(@NotNull Collection<? extends PsiFile> psiFiles) {
-        List<File> result = Lists.newArrayList();
+        List<File> result = new ArrayList<>(psiFiles.size());
         for (PsiFile psiFile : psiFiles) {
             VirtualFile virtualFile = psiFile.getVirtualFile();
             // We ignore non-physical files here, because this code is needed to tell the make what inputs affect which outputs

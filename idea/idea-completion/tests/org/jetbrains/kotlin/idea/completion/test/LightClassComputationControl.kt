@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,13 @@ import com.intellij.openapi.components.ComponentManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.impl.java.stubs.PsiClassStub
 import com.intellij.psi.impl.java.stubs.PsiJavaFileStub
-import org.jetbrains.kotlin.asJava.StubComputationTracker
+import org.jetbrains.kotlin.asJava.builder.LightClassConstructionContext
+import org.jetbrains.kotlin.asJava.builder.StubComputationTracker
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.junit.Assert
 import org.picocontainer.MutablePicoContainer
 import java.util.*
+import java.util.Collections.synchronizedList
 
 object LightClassComputationControl {
     fun testWithControl(project: Project, testText: String, testBody: () -> Unit) {
@@ -32,19 +34,19 @@ object LightClassComputationControl {
                 testText, "// $LIGHT_CLASS_DIRECTIVE"
         ).map { it.trim() }
 
-        val actualFqNames = ArrayList<String>()
+        val actualFqNames = synchronizedList(ArrayList<String>())
         val stubComputationTracker = object : StubComputationTracker {
-            override fun onStubComputed(javaFileStub: PsiJavaFileStub) {
+            override fun onStubComputed(javaFileStub: PsiJavaFileStub, context: LightClassConstructionContext) {
                 val qualifiedName = (javaFileStub.childrenStubs.single() as PsiClassStub<*>).qualifiedName!!
                 actualFqNames.add(qualifiedName)
             }
         }
 
-        project.withServiceRegistered<StubComputationTracker>(stubComputationTracker) {
+        project.withServiceRegistered<StubComputationTracker, Unit>(stubComputationTracker) {
             testBody()
         }
 
-        if (expectedLightClassFqNames.toSortedSet() != actualFqNames.toSortedSet()) {
+        if (expectedLightClassFqNames.toSortedSet() != synchronized(actualFqNames) { actualFqNames.toSortedSet() }) {
             Assert.fail(
                     "Expected to compute: ${expectedLightClassFqNames.prettyToString()}\n" +
                     "Actually computed: ${actualFqNames.prettyToString()}\n" +
@@ -58,13 +60,13 @@ object LightClassComputationControl {
     private fun List<String>.prettyToString() = if (isEmpty()) "<empty>" else joinToString()
 }
 
-private inline fun <reified T : Any> ComponentManager.withServiceRegistered(instance: T, body: () -> Unit) {
+inline fun <reified T : Any, R> ComponentManager.withServiceRegistered(instance: T, body: () -> R): R {
     val picoContainer = picoContainer as MutablePicoContainer
     val key = T::class.java.name
     try {
         picoContainer.unregisterComponent(key)
         picoContainer.registerComponentInstance(key, instance)
-        body()
+        return body()
     }
     finally {
         picoContainer.unregisterComponent(key)

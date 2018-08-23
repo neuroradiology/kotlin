@@ -19,51 +19,57 @@ package org.jetbrains.kotlin.idea.quickfix
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.idea.KotlinBundle
-import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.refactoring.changeSignature.*
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptorIfAny
+import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinChangeSignatureConfiguration
+import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinMethodDescriptor
+import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinTypeInfo
+import org.jetbrains.kotlin.idea.refactoring.changeSignature.runChangeSignature
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
-import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 import org.jetbrains.kotlin.types.KotlinType
 
-class ChangeParameterTypeFix(element: KtParameter, private val type: KotlinType) : KotlinQuickFixAction<KtParameter>(element) {
+class ChangeParameterTypeFix(element: KtParameter, type: KotlinType) : KotlinQuickFixAction<KtParameter>(element) {
+    private val typePresentation = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.renderType(type)
+    private val typeInfo = KotlinTypeInfo(isCovariant = false, text = IdeDescriptorRenderers.SOURCE_CODE_NOT_NULL_TYPE_APPROXIMATION.renderType(type))
+
     private val containingDeclarationName: String?
     private val isPrimaryConstructorParameter: Boolean
 
     init {
         val declaration = PsiTreeUtil.getParentOfType(element, KtNamedDeclaration::class.java)
-        val declarationFQName = declaration?.fqName
-        isPrimaryConstructorParameter = declaration is KtPrimaryConstructor
-        containingDeclarationName = if (declarationFQName != null) declarationFQName.asString() else declaration?.name
+        this.containingDeclarationName = declaration?.fqName?.asString() ?: declaration?.name
+        this.isPrimaryConstructorParameter = declaration is KtPrimaryConstructor
     }
 
-    override fun isAvailable(project: Project, editor: Editor?, file: PsiFile): Boolean {
-        return super.isAvailable(project, editor, file) && containingDeclarationName != null
+    override fun startInWriteAction(): Boolean = false
+
+    override fun isAvailable(project: Project, editor: Editor?, file: KtFile): Boolean {
+        return containingDeclarationName != null
     }
 
     override fun getText(): String {
-        val renderedType = IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.renderType(type)
+        val element = element ?: return ""
         return if (isPrimaryConstructorParameter)
-            KotlinBundle.message("change.primary.constructor.parameter.type", element.name, containingDeclarationName, renderedType)
+            "Change parameter '${element.name}' type of primary constructor of class '$containingDeclarationName' to '$typePresentation'"
         else
-            KotlinBundle.message("change.function.parameter.type", element.name, containingDeclarationName, renderedType)
+            "Change parameter '${element.name}' type of function '$containingDeclarationName' to '$typePresentation'"
     }
 
     override fun getFamilyName() = KotlinBundle.message("change.type.family")
 
-    public override operator fun invoke(project: Project, editor: Editor?, file: KtFile) {
+    override fun invoke(project: Project, editor: Editor?, file: KtFile) {
+        val element = element ?: return
         val function = element.getStrictParentOfType<KtFunction>() ?: return
         val parameterIndex = function.valueParameters.indexOf(element)
-        val context = function.analyze()
-        val descriptor = context[BindingContext.DECLARATION_TO_DESCRIPTOR, function] as? FunctionDescriptor ?: return
+        val descriptor = function.resolveToDescriptorIfAny(BodyResolveMode.FULL) as? FunctionDescriptor ?: return
         val configuration = object : KotlinChangeSignatureConfiguration {
             override fun configure(originalDescriptor: KotlinMethodDescriptor) = originalDescriptor.apply {
-                parameters[if (receiver != null) parameterIndex + 1 else parameterIndex].currentTypeInfo = KotlinTypeInfo(false, type)
+                parameters[if (receiver != null) parameterIndex + 1 else parameterIndex].currentTypeInfo = typeInfo
             }
 
             override fun performSilently(affectedFunctions: Collection<PsiElement>) = true

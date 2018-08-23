@@ -37,14 +37,12 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
         companion object {
             fun create(element: PsiElement): TreeElement? {
                 val tokenType = element.tokenType
-                val treeElement = when {
+                return when {
                     element is PsiWhiteSpace -> if (element.textContains('\n')) LineBreakTreeElement() else null
                     element is PsiComment -> CommentTreeElement.create(element)
                     tokenType != null -> TokenTreeElement(tokenType)
                     else -> if (element.textLength > 0) StandardTreeElement() else null // don't save empty elements
                 }
-//                treeElement?.debugText = element.getText()
-                return treeElement
             }
         }
 
@@ -184,7 +182,12 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
         get() = getCopyableUserData(SAVED_TREE_KEY)
         set(value) = putCopyableUserData(SAVED_TREE_KEY, value)
 
+    var isFinished = false
+        private set
+
     fun deleteCommentsInside(element: PsiElement) {
+        assert(!isFinished)
+
         element.accept(object : PsiRecursiveElementVisitor() {
             override fun visitComment(comment: PsiComment) {
                 val treeElement = comment.savedTreeElement
@@ -196,6 +199,7 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
     }
 
     fun elementCreatedByText(createdElement: PsiElement, original: PsiElement, rangeInOriginal: TextRange) {
+        assert(!isFinished)
         assert(createdElement.textLength == rangeInOriginal.length)
         assert(createdElement.text == original.text.substring(rangeInOriginal.startOffset, rangeInOriginal.endOffset))
 
@@ -235,6 +239,7 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
     }
 
     fun restore(resultElements: PsiChildRange, forceAdjustIndent: Boolean = false) {
+        assert(!isFinished)
         assert(!resultElements.isEmpty)
 
         if (commentsToRestore.isNotEmpty() || lineBreaksToRestore.isNotEmpty()) {
@@ -278,9 +283,12 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
             val document = psiDocumentManager.getDocument(file)
             if (document != null) {
                 psiDocumentManager.doPostponedOperationsAndUnblockDocument(document)
+                psiDocumentManager.commitDocument(document)
             }
             CodeStyleManager.getInstance(project).adjustLineIndent(file, resultElements.textRange)
         }
+
+        isFinished = true
     }
 
     private fun restoreComments(resultElements: PsiChildRange) {
@@ -302,6 +310,18 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
                     if (commentTreeElement.spaceBefore.isNotEmpty()) {
                         parent.addAfter(psiFactory.createWhiteSpace(commentTreeElement.spaceBefore), anchorElement)
                     }
+
+                    // make sure that there is a line break after EOL_COMMENT
+                    if (restored.tokenType == KtTokens.EOL_COMMENT) {
+                        val whiteSpace = restored.nextLeaf(skipEmptyElements = true) as? PsiWhiteSpace
+                        if (whiteSpace == null) {
+                            parent.addAfter(psiFactory.createWhiteSpace("\n"), restored)
+                        }
+                        else if (!whiteSpace.textContains('\n')) {
+                            val newWhiteSpace = psiFactory.createWhiteSpace("\n" + whiteSpace.text)
+                            whiteSpace.replace(newWhiteSpace)
+                        }
+                    }
                 }
                 else {
                     restored = parent.addBefore(comment, anchorElement) as PsiComment
@@ -311,7 +331,7 @@ class CommentSaver(originalElements: PsiChildRange, private val saveLineBreaks: 
                 }
             }
             else {
-                restored = putAbandonedCommentsAfter.parent.addAfter(comment, putAbandonedCommentsAfter) as PsiComment
+                restored = putAbandonedCommentsAfter.parent.addBefore(comment, putAbandonedCommentsAfter) as PsiComment
                 putAbandonedCommentsAfter = restored
             }
 

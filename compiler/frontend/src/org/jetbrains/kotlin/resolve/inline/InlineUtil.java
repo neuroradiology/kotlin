@@ -17,29 +17,55 @@
 package org.jetbrains.kotlin.resolve.inline;
 
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.builtins.FunctionTypesKt;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.resolve.BindingContext;
-import org.jetbrains.kotlin.resolve.BindingTrace;
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils;
 import org.jetbrains.kotlin.resolve.calls.callUtil.CallUtilKt;
+import org.jetbrains.kotlin.resolve.calls.context.ResolutionContext;
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMapping;
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatch;
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall;
 
 public class InlineUtil {
-    public static boolean isInlineLambdaParameter(@NotNull ParameterDescriptor valueParameterOrReceiver) {
+
+    public static boolean isInlineParameterExceptNullability(@NotNull ParameterDescriptor valueParameterOrReceiver) {
         return !(valueParameterOrReceiver instanceof ValueParameterDescriptor
                  && ((ValueParameterDescriptor) valueParameterOrReceiver).isNoinline()) &&
-               KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(valueParameterOrReceiver.getOriginal().getType());
+               FunctionTypesKt.isBuiltinFunctionalType(valueParameterOrReceiver.getOriginal().getType());
+    }
+
+    public static boolean isInlineParameter(@NotNull ParameterDescriptor valueParameterOrReceiver) {
+        return isInlineParameterExceptNullability(valueParameterOrReceiver) &&
+               !valueParameterOrReceiver.getOriginal().getType().isMarkedNullable();
     }
 
     public static boolean isInline(@Nullable DeclarationDescriptor descriptor) {
-        return descriptor instanceof SimpleFunctionDescriptor && getInlineStrategy(descriptor).isInline();
+        return descriptor instanceof FunctionDescriptor && getInlineStrategy((FunctionDescriptor) descriptor).isInline();
+    }
+
+    public static boolean hasInlineAccessors(@NotNull PropertyDescriptor propertyDescriptor) {
+        PropertyGetterDescriptor getter = propertyDescriptor.getGetter();
+        PropertySetterDescriptor setter = propertyDescriptor.getSetter();
+        return getter != null && getter.isInline() || setter != null && setter.isInline();
+    }
+
+    public static boolean isPropertyWithAllAccessorsAreInline(@NotNull DeclarationDescriptor descriptor) {
+        if (!(descriptor instanceof PropertyDescriptor)) return false;
+
+        PropertyGetterDescriptor getter = ((PropertyDescriptor) descriptor).getGetter();
+        if (getter == null || !getter.isInline()) return false;
+
+        if (((PropertyDescriptor) descriptor).isVar()) {
+            PropertySetterDescriptor setter = ((PropertyDescriptor) descriptor).getSetter();
+            return setter != null && setter.isInline();
+        }
+
+        return true;
     }
 
     public static boolean isInlineOrContainingInline(@Nullable DeclarationDescriptor descriptor) {
@@ -49,9 +75,8 @@ public class InlineUtil {
     }
 
     @NotNull
-    public static InlineStrategy getInlineStrategy(@NotNull DeclarationDescriptor descriptor) {
-        if (descriptor instanceof FunctionDescriptor &&
-            ((FunctionDescriptor) descriptor).isInline()) {
+    private static InlineStrategy getInlineStrategy(@NotNull FunctionDescriptor descriptor) {
+        if (descriptor.isInline()) {
             return InlineStrategy.AS_FUNCTION;
         }
 
@@ -61,19 +86,26 @@ public class InlineUtil {
     public static boolean checkNonLocalReturnUsage(
             @NotNull DeclarationDescriptor fromFunction,
             @NotNull KtExpression startExpression,
-            @NotNull BindingTrace trace
+            @NotNull ResolutionContext<?> context
     ) {
-        PsiElement containingFunction = PsiTreeUtil.getParentOfType(startExpression, KtClassOrObject.class, KtDeclarationWithBody.class);
+        PsiElement containingFunction = context.getContextParentOfType(startExpression, KtClassOrObject.class, KtDeclarationWithBody.class);
         if (containingFunction == null) {
             return false;
         }
 
-        DeclarationDescriptor containingFunctionDescriptor = trace.get(BindingContext.DECLARATION_TO_DESCRIPTOR, containingFunction);
-        if (containingFunctionDescriptor == null) {
-            return false;
-        }
+        return checkNonLocalReturnUsage(
+                fromFunction, context.trace.get(BindingContext.DECLARATION_TO_DESCRIPTOR, containingFunction), containingFunction,
+                context.trace.getBindingContext()
+        );
+    }
 
-        BindingContext bindingContext = trace.getBindingContext();
+    public static boolean checkNonLocalReturnUsage(
+            @NotNull DeclarationDescriptor fromFunction,
+            @Nullable DeclarationDescriptor containingFunctionDescriptor,
+            @Nullable PsiElement containingFunction,
+            @NotNull BindingContext bindingContext
+    ) {
+        if (containingFunctionDescriptor == null) return false;
 
         while (canBeInlineArgument(containingFunction) && fromFunction != containingFunctionDescriptor) {
             if (!isInlinedArgument((KtFunction) containingFunction, bindingContext, true)) {
@@ -126,7 +158,7 @@ public class InlineUtil {
         if (!(mapping instanceof ArgumentMatch)) return null;
 
         ValueParameterDescriptor parameter = ((ArgumentMatch) mapping).getValueParameter();
-        return isInlineLambdaParameter(parameter) ? parameter : null;
+        return isInlineParameter(parameter) ? parameter : null;
     }
 
     public static boolean canBeInlineArgument(@Nullable PsiElement functionalExpression) {
@@ -141,7 +173,7 @@ public class InlineUtil {
     public static boolean isArrayConstructorWithLambda(@NotNull CallableDescriptor descriptor) {
         return descriptor.getValueParameters().size() == 2 &&
                descriptor instanceof ConstructorDescriptor &&
-               KotlinBuiltIns.isArrayOrPrimitiveArray(((ConstructorDescriptor) descriptor).getContainingDeclaration());
+               KotlinBuiltIns.isArrayOrPrimitiveArray(((ConstructorDescriptor) descriptor).getConstructedClass());
     }
 
     @Nullable
@@ -173,5 +205,11 @@ public class InlineUtil {
         }
 
         return false;
+    }
+
+    public static boolean isInlinableParameterExpression(@Nullable KtExpression deparenthesized) {
+        return deparenthesized instanceof KtLambdaExpression ||
+               deparenthesized instanceof KtNamedFunction ||
+               deparenthesized instanceof KtCallableReferenceExpression;
     }
 }

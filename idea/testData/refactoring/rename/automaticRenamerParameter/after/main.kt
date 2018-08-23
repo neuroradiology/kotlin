@@ -1,17 +1,17 @@
 package testing
 
 interface Trait {
-    open fun foo(aa: Int, b: String) {
+    open fun foo(a: Int, b: String) {
     }
 }
 
 open class Super {
-    open fun foo(aa: Int, b: String) {
+    open fun foo(a: Int, b: String) {
     }
 }
 
 open class Middle : Super(), Trait {
-    override fun foo(/*rename*/aa: Int, b: String) {
+    override fun foo(aa: Int, b: String) {
     }
 }
 

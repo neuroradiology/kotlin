@@ -17,7 +17,7 @@
 package org.jetbrains.kotlin.load.kotlin;
 
 import com.intellij.openapi.util.Ref;
-import kotlin.jvm.functions.Function3;
+import kotlin.jvm.functions.Function4;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.SourceElement;
@@ -38,15 +38,18 @@ import static org.jetbrains.org.objectweb.asm.Opcodes.ASM5;
 
 public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
     private final ClassId classId;
+    private final int classVersion;
     private final KotlinClassHeader classHeader;
     private final InnerClassesInfo innerClasses;
 
     protected FileBasedKotlinClass(
             @NotNull ClassId classId,
+            int classVersion,
             @NotNull KotlinClassHeader classHeader,
             @NotNull InnerClassesInfo innerClasses
     ) {
         this.classId = classId;
+        this.classVersion = classVersion;
         this.classHeader = classHeader;
         this.innerClasses = innerClasses;
     }
@@ -66,7 +69,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
 
         public void add(@NotNull String name, @Nullable String outerName, @Nullable String innerName) {
             if (map == null) {
-                map = new HashMap<String, OuterAndInnerName>();
+                map = new HashMap<>();
             }
             map.put(name, new OuterAndInnerName(outerName, innerName));
         }
@@ -84,15 +87,17 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
     @Nullable
     public static <T extends FileBasedKotlinClass> T create(
             @NotNull byte[] fileContents,
-            @NotNull Function3<ClassId, KotlinClassHeader, InnerClassesInfo, T> factory
+            @NotNull Function4<ClassId, Integer, KotlinClassHeader, InnerClassesInfo, T> factory
     ) {
-        final ReadKotlinClassHeaderAnnotationVisitor readHeaderVisitor = new ReadKotlinClassHeaderAnnotationVisitor();
-        final Ref<String> classNameRef = Ref.create();
-        final InnerClassesInfo innerClasses = new InnerClassesInfo();
+        ReadKotlinClassHeaderAnnotationVisitor readHeaderVisitor = new ReadKotlinClassHeaderAnnotationVisitor();
+        Ref<String> classNameRef = Ref.create();
+        Ref<Integer> classVersion = Ref.create();
+        InnerClassesInfo innerClasses = new InnerClassesInfo();
         new ClassReader(fileContents).accept(new ClassVisitor(ASM5) {
             @Override
             public void visit(int version, int access, @NotNull String name, String signature, String superName, String[] interfaces) {
                 classNameRef.set(name);
+                classVersion.set(version);
             }
 
             @Override
@@ -118,13 +123,17 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
         if (header == null) return null;
 
         ClassId id = resolveNameByInternalName(className, innerClasses);
-        return factory.invoke(id, header, innerClasses);
+        return factory.invoke(id, classVersion.get(), header, innerClasses);
     }
 
     @NotNull
     @Override
     public ClassId getClassId() {
         return classId;
+    }
+
+    public int getClassVersion() {
+        return classVersion;
     }
 
     @NotNull
@@ -134,8 +143,9 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
     }
 
     @Override
-    public void loadClassAnnotations(@NotNull final AnnotationVisitor annotationVisitor) {
-        new ClassReader(getFileContents()).accept(new ClassVisitor(ASM5) {
+    public void loadClassAnnotations(@NotNull AnnotationVisitor annotationVisitor, @Nullable byte[] cachedContents) {
+        byte[] fileContents = cachedContents != null ? cachedContents : getFileContents();
+        new ClassReader(fileContents).accept(new ClassVisitor(ASM5) {
             @Override
             public org.jetbrains.org.objectweb.asm.AnnotationVisitor visitAnnotation(@NotNull String desc, boolean visible) {
                 return convertAnnotationVisitor(annotationVisitor, desc, innerClasses);
@@ -149,7 +159,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
     }
 
     @Nullable
-    private static org.jetbrains.org.objectweb.asm.AnnotationVisitor convertAnnotationVisitor(
+    public static org.jetbrains.org.objectweb.asm.AnnotationVisitor convertAnnotationVisitor(
             @NotNull AnnotationVisitor visitor, @NotNull String desc, @NotNull InnerClassesInfo innerClasses
     ) {
         AnnotationArgumentVisitor v = visitor.visitAnnotation(resolveNameByDesc(desc, innerClasses), SourceElement.NO_SOURCE);
@@ -158,7 +168,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
 
     @NotNull
     private static org.jetbrains.org.objectweb.asm.AnnotationVisitor convertAnnotationVisitor(
-            @NotNull final AnnotationArgumentVisitor v, @NotNull final InnerClassesInfo innerClasses
+            @NotNull AnnotationArgumentVisitor v, @NotNull InnerClassesInfo innerClasses
     ) {
         return new org.jetbrains.org.objectweb.asm.AnnotationVisitor(ASM5) {
             @Override
@@ -168,7 +178,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
 
             @Override
             public org.jetbrains.org.objectweb.asm.AnnotationVisitor visitArray(String name) {
-                final AnnotationArrayArgumentVisitor arv = v.visitArray(Name.identifier(name));
+                AnnotationArrayArgumentVisitor arv = v.visitArray(Name.identifier(name));
                 return arv == null ? null : new org.jetbrains.org.objectweb.asm.AnnotationVisitor(ASM5) {
                     @Override
                     public void visit(String name, @NotNull Object value) {
@@ -206,11 +216,12 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
     }
 
     @Override
-    public void visitMembers(@NotNull final MemberVisitor memberVisitor) {
-        new ClassReader(getFileContents()).accept(new ClassVisitor(ASM5) {
+    public void visitMembers(@NotNull MemberVisitor memberVisitor, @Nullable byte[] cachedContents) {
+        byte[] fileContents = cachedContents != null ? cachedContents : getFileContents();
+        new ClassReader(fileContents).accept(new ClassVisitor(ASM5) {
             @Override
             public FieldVisitor visitField(int access, @NotNull String name, @NotNull String desc, String signature, Object value) {
-                final AnnotationVisitor v = memberVisitor.visitField(Name.identifier(name), desc, value);
+                AnnotationVisitor v = memberVisitor.visitField(Name.identifier(name), desc, value);
                 if (v == null) return null;
 
                 return new FieldVisitor(ASM5) {
@@ -228,7 +239,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
 
             @Override
             public MethodVisitor visitMethod(int access, @NotNull String name, @NotNull String desc, String signature, String[] exceptions) {
-                final MethodAnnotationVisitor v = memberVisitor.visitMethod(Name.identifier(name), desc);
+                MethodAnnotationVisitor v = memberVisitor.visitMethod(Name.identifier(name), desc);
                 if (v == null) return null;
 
                 return new MethodVisitor(ASM5) {
@@ -265,7 +276,7 @@ public abstract class FileBasedKotlinClass implements KotlinJvmBinaryClass {
             return ClassId.topLevel(new FqName(name.replace('/', '.')));
         }
 
-        List<String> classes = new ArrayList<String>(1);
+        List<String> classes = new ArrayList<>(1);
         boolean local = false;
         
         while (true) {

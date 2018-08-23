@@ -59,12 +59,12 @@ class LazyClasspathWatcher(classpath: Iterable<String>,
         thread(isDaemon = true, start = true) {
             try {
                 fileIds = classpath
-                        .map { File(it) }
+                        .map(::File)
                         .asSequence()
                         .flatMap { it.walk().filter(::isClasspathFile) }
                         .map { FileId(it, it.lastModified(), it.md5Digest()) }
                         .toList()
-                val nowMs = TimeUnit.MILLISECONDS.toMillis(System.nanoTime())
+                val nowMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
                 lastUpdate.set(nowMs)
                 lastDigestUpdate.set(nowMs)
             }
@@ -80,7 +80,7 @@ class LazyClasspathWatcher(classpath: Iterable<String>,
 
     val isChanged: Boolean get() {
         if (lastChangedStatus.get()) return true
-        val nowMs = TimeUnit.MILLISECONDS.toMillis(System.nanoTime())
+        val nowMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
         if (nowMs - lastUpdate.get() < checkPeriod) return false
 
         val checkDigest = nowMs - lastDigestUpdate.get() > digestCheckPeriod
@@ -106,7 +106,7 @@ class LazyClasspathWatcher(classpath: Iterable<String>,
                     true // io error considered as change
                 }
             } != null
-        lastUpdate.set(TimeUnit.MILLISECONDS.toMillis(System.nanoTime()))
+        lastUpdate.set(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()))
         if (checkDigest) lastDigestUpdate.set(lastUpdate.get())
 
         return changed

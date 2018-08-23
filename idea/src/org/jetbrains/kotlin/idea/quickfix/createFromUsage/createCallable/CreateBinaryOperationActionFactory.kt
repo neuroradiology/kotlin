@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,16 +17,17 @@
 package org.jetbrains.kotlin.idea.quickfix.createFromUsage.createCallable
 
 import org.jetbrains.kotlin.diagnostics.Diagnostic
-import org.jetbrains.kotlin.idea.project.platform
+import org.jetbrains.kotlin.idea.project.builtIns
 import org.jetbrains.kotlin.idea.quickfix.createFromUsage.callableBuilder.*
 import org.jetbrains.kotlin.lexer.KtToken
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
+import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.types.Variance
 import org.jetbrains.kotlin.types.expressions.OperatorConventions
 import java.util.*
 
-object CreateBinaryOperationActionFactory: CreateCallableMemberFromUsageFactory<KtBinaryExpression>() {
+object CreateBinaryOperationActionFactory : CreateCallableMemberFromUsageFactory<KtBinaryExpression>() {
     override fun getElementOfInterest(diagnostic: Diagnostic): KtBinaryExpression? {
         return diagnostic.psiElement.parent as? KtBinaryExpression
     }
@@ -46,7 +47,7 @@ object CreateBinaryOperationActionFactory: CreateCallableMemberFromUsageFactory<
         val receiverExpr = if (inOperation) rightExpr else leftExpr
         val argumentExpr = if (inOperation) leftExpr else rightExpr
 
-        val builtIns = element.platform.builtIns
+        val builtIns = element.builtIns
         val receiverType = TypeInfo(receiverExpr, Variance.IN_VARIANCE)
         val returnType = when {
             inOperation -> TypeInfo.ByType(builtIns.booleanType, Variance.INVARIANT).noSubstitutions()
@@ -54,8 +55,13 @@ object CreateBinaryOperationActionFactory: CreateCallableMemberFromUsageFactory<
             else -> TypeInfo(element, Variance.OUT_VARIANCE)
         }
         val parameters = Collections.singletonList(ParameterInfo(TypeInfo(argumentExpr, Variance.IN_VARIANCE)))
-        return FunctionInfo(operationName, receiverType, returnType, parameterInfos = parameters,
-                            isOperator = token != KtTokens.IDENTIFIER,
-                            isInfix = true)
+        val isOperator = token != KtTokens.IDENTIFIER
+        return FunctionInfo(
+                operationName,
+                receiverType,
+                returnType,
+                parameterInfos = parameters,
+                modifierList = KtPsiFactory(element).createModifierList(if (isOperator) KtTokens.OPERATOR_KEYWORD else KtTokens.INFIX_KEYWORD)
+        )
     }
 }

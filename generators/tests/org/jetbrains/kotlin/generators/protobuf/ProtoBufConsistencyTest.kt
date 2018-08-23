@@ -16,13 +16,12 @@
 
 package org.jetbrains.kotlin.generators.protobuf
 
-import junit.framework.TestCase
-import com.google.protobuf.GeneratedMessage.GeneratedExtension
-import java.lang.reflect.ParameterizedType
-import com.google.protobuf.Descriptors
-import kotlin.test.fail
 import com.google.common.collect.LinkedHashMultimap
+import junit.framework.TestCase
+import org.jetbrains.kotlin.protobuf.Descriptors
+import org.jetbrains.kotlin.protobuf.GeneratedMessage.GeneratedExtension
 import java.lang.reflect.Modifier
+import java.lang.reflect.ParameterizedType
 
 class ProtoBufConsistencyTest : TestCase() {
     fun testExtensionNumbersDoNotIntersect() {
@@ -32,7 +31,7 @@ class ProtoBufConsistencyTest : TestCase() {
 
         for (protoPath in PROTO_PATHS) {
             val classFqName = protoPath.packageName + "." + protoPath.debugClassName
-            val klass = javaClass.classLoader.loadClass(classFqName) ?: error("Class not found: $classFqName")
+            val klass = this::class.java.classLoader.loadClass(classFqName) ?: error("Class not found: $classFqName")
             for (field in klass.declaredFields) {
                 if (Modifier.isStatic(field.modifiers) && field.type == GeneratedExtension::class.java) {
                     // The only place where type information for an extension is stored is the field's declared generic type.

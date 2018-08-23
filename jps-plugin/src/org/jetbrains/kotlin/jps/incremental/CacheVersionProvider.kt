@@ -19,19 +19,31 @@ package org.jetbrains.kotlin.jps.incremental
 import org.jetbrains.jps.builders.BuildTarget
 import org.jetbrains.jps.builders.storage.BuildDataPaths
 import org.jetbrains.jps.incremental.ModuleBuildTarget
-import org.jetbrains.kotlin.incremental.*
+import org.jetbrains.kotlin.incremental.CacheVersion
+import org.jetbrains.kotlin.incremental.dataContainerCacheVersion
+import org.jetbrains.kotlin.incremental.normalCacheVersion
 import java.io.File
 
 
-class CacheVersionProvider(private val paths: BuildDataPaths) {
+class CacheVersionProvider(
+    private val paths: BuildDataPaths,
+    private val isIncrementalCompilationEnabled: Boolean
+) {
     private val BuildTarget<*>.dataRoot: File
         get() = paths.getTargetDataRoot(this)
 
-    fun normalVersion(target: ModuleBuildTarget): CacheVersion = normalCacheVersion(target.dataRoot)
+    fun normalVersion(target: ModuleBuildTarget): CacheVersion = normalCacheVersion(target.dataRoot, isIncrementalCompilationEnabled)
 
-    fun experimentalVersion(target: ModuleBuildTarget): CacheVersion = experimentalCacheVersion(target.dataRoot)
+    fun dataContainerVersion(): CacheVersion = dataContainerCacheVersion(KotlinDataContainerTarget.dataRoot, isIncrementalCompilationEnabled)
 
-    fun dataContainerVersion(): CacheVersion = dataContainerCacheVersion(KotlinDataContainerTarget.dataRoot)
+    fun allVersions(targets: Iterable<ModuleBuildTarget>): Iterable<CacheVersion> {
+        val versions = arrayListOf<CacheVersion>()
+        versions.add(dataContainerCacheVersion(KotlinDataContainerTarget.dataRoot, isIncrementalCompilationEnabled))
 
-    fun allVersions(targets: Iterable<ModuleBuildTarget>): Iterable<CacheVersion> = allCachesVersions(KotlinDataContainerTarget.dataRoot, targets.map { it.dataRoot } )
+        for (dataRoot in targets.map { it.dataRoot }) {
+            versions.add(normalCacheVersion(dataRoot, isIncrementalCompilationEnabled))
+        }
+
+        return versions
+    }
 }

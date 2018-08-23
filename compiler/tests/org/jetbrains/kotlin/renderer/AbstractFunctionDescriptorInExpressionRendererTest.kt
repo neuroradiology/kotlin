@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package org.jetbrains.kotlin.renderer
 
 import com.intellij.openapi.editor.impl.DocumentImpl
 import com.intellij.openapi.util.io.FileUtil
-import com.intellij.testFramework.UsefulTestCase
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.impl.FunctionExpressionDescriptor
@@ -28,9 +27,10 @@ import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.KtTreeVisitorVoid
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil
-import org.jetbrains.kotlin.resolve.lazy.KotlinTestWithEnvironment
 import org.jetbrains.kotlin.test.ConfigurationKind
 import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
+import org.jetbrains.kotlin.test.testFramework.KtUsefulTestCase
 import org.jetbrains.kotlin.utils.addIfNotNull
 import java.io.File
 
@@ -38,7 +38,7 @@ abstract class AbstractFunctionDescriptorInExpressionRendererTest : KotlinTestWi
     fun doTest(path: String) {
         val fileText = FileUtil.loadFile(File(path), true)
         val file = KtPsiFactory(project).createFile(fileText)
-        val bindingContext = JvmResolveUtil.analyzeOneFileWithJavaIntegration(file).bindingContext
+        val bindingContext = JvmResolveUtil.analyze(file, environment).bindingContext
 
         val descriptors = arrayListOf<DeclarationDescriptor>()
 
@@ -54,14 +54,15 @@ abstract class AbstractFunctionDescriptorInExpressionRendererTest : KotlinTestWi
         })
 
         val renderer = DescriptorRenderer.withOptions {
-            nameShortness = NameShortness.FULLY_QUALIFIED
+            classifierNamePolicy = ClassifierNamePolicy.FULLY_QUALIFIED
             modifiers = DescriptorRendererModifier.ALL
             verbose = true
+            annotationArgumentsRenderingPolicy = AnnotationArgumentsRenderingPolicy.UNLESS_EMPTY
         }
         val renderedDescriptors = descriptors.map { renderer.render(it) }.joinToString(separator = "\n")
 
         val document = DocumentImpl(file.text)
-        UsefulTestCase.assertSameLines(KotlinTestUtils.getLastCommentedLines(document), renderedDescriptors.toString())
+        KtUsefulTestCase.assertSameLines(KotlinTestUtils.getLastCommentedLines(document), renderedDescriptors.toString())
     }
 
     override fun createEnvironment(): KotlinCoreEnvironment {

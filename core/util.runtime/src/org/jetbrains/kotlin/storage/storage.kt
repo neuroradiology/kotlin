@@ -18,20 +18,23 @@ package org.jetbrains.kotlin.storage
 
 import kotlin.reflect.KProperty
 
-interface MemoizedFunctionToNotNull<P, R : Any> : Function1<P, R> {
+interface MemoizedFunctionToNotNull<in P, out R : Any> : Function1<P, R> {
     fun isComputed(key: P): Boolean
 }
 
-interface MemoizedFunctionToNullable<P, R : Any> : Function1<P, R?> {
+interface MemoizedFunctionToNullable<in P, out R : Any> : Function1<P, R?> {
     fun isComputed(key: P): Boolean
 }
 
-interface NotNullLazyValue<T : Any> : Function0<T> {
+interface NotNullLazyValue<out T : Any> : Function0<T> {
     fun isComputed(): Boolean
     fun isComputing(): Boolean
+
+    // Only for debugging
+    fun renderDebugInformation(): String = ""
 }
 
-interface NullableLazyValue<T : Any> : Function0<T?> {
+interface NullableLazyValue<out T : Any> : Function0<T?> {
     fun isComputed(): Boolean
     fun isComputing(): Boolean
 }
@@ -39,3 +42,11 @@ interface NullableLazyValue<T : Any> : Function0<T?> {
 operator fun <T : Any> NotNullLazyValue<T>.getValue(_this: Any?, p: KProperty<*>): T = invoke()
 
 operator fun <T : Any> NullableLazyValue<T>.getValue(_this: Any?, p: KProperty<*>): T? = invoke()
+
+interface CacheWithNullableValues<in K, V : Any> {
+    fun computeIfAbsent(key: K, computation: () -> V?): V?
+}
+
+interface CacheWithNotNullValues<in K, V : Any> {
+    fun computeIfAbsent(key: K, computation: () -> V): V
+}

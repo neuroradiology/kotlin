@@ -17,47 +17,45 @@
 package org.jetbrains.kotlin.idea.refactoring.rename
 
 import com.intellij.psi.PsiElement
+import com.intellij.refactoring.JavaRefactoringSettings
 import com.intellij.refactoring.listeners.RefactoringElementListener
 import com.intellij.usageView.UsageInfo
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
-import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptor
-import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinChangeSignatureConfiguration
-import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinMethodDescriptor
-import org.jetbrains.kotlin.idea.refactoring.changeSignature.modify
-import org.jetbrains.kotlin.idea.refactoring.changeSignature.runChangeSignature
-import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.asJava.namedUnwrappedElement
+import org.jetbrains.kotlin.descriptors.VariableDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.unsafeResolveToDescriptor
+import org.jetbrains.kotlin.psi.KtFunction
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtParameter
-import org.jetbrains.kotlin.psi.psiUtil.getElementTextWithContext
-import org.jetbrains.kotlin.resolve.OverrideResolver
+import org.jetbrains.kotlin.utils.SmartList
 
 class RenameKotlinParameterProcessor : RenameKotlinPsiProcessor() {
-    override fun canProcessElement(element: PsiElement): Boolean {
-        return element is KtParameter && element.parent.parent is KtNamedFunction
+    override fun canProcessElement(element: PsiElement) = element is KtParameter && element.ownerFunction is KtFunction
+
+    override fun isToSearchInComments(psiElement: PsiElement) = JavaRefactoringSettings.getInstance().RENAME_SEARCH_IN_COMMENTS_FOR_VARIABLE
+
+    override fun setToSearchInComments(element: PsiElement, enabled: Boolean) {
+        JavaRefactoringSettings.getInstance().RENAME_SEARCH_IN_COMMENTS_FOR_VARIABLE = enabled
     }
 
-    override fun renameElement(element: PsiElement, newName: String, usages: Array<out UsageInfo>, listener: RefactoringElementListener?) {
-        val function = (element as KtParameter).parent.parent as KtNamedFunction
-        val paramIndex = function.valueParameters.indexOf(element)
-        assert(paramIndex != -1, { "couldn't find parameter in parent ${element.getElementTextWithContext()}" })
+    override fun findCollisions(
+            element: PsiElement,
+            newName: String,
+            allRenames: MutableMap<out PsiElement, String>,
+            result: MutableList<UsageInfo>
+    ) {
+        val declaration = element.namedUnwrappedElement as? KtNamedDeclaration ?: return
+        val descriptor = declaration.unsafeResolveToDescriptor() as VariableDescriptor
 
-        val functionDescriptor = function.resolveToDescriptor() as? FunctionDescriptor ?: return
-        val parameterDescriptor = functionDescriptor.valueParameters[paramIndex]
+        val collisions = SmartList<UsageInfo>()
+        checkRedeclarations(descriptor, newName, collisions)
+        checkOriginalUsagesRetargeting(declaration, newName, result, collisions)
+        checkNewNameUsagesRetargeting(declaration, newName, collisions)
+        result += collisions
+    }
 
-        val parameterNameChangedOnOverride = parameterDescriptor.overriddenDescriptors.any {
-            overriddenParameter -> OverrideResolver.shouldReportParameterNameOverrideWarning(parameterDescriptor, overriddenParameter)
-        }
+    override fun renameElement(element: PsiElement, newName: String, usages: Array<UsageInfo>, listener: RefactoringElementListener?) {
+        super.renameElement(element, newName, usages, listener)
 
-        val changeSignatureConfiguration = object : KotlinChangeSignatureConfiguration {
-            override fun configure(originalDescriptor: KotlinMethodDescriptor): KotlinMethodDescriptor {
-                val paramInfoIndex = if (functionDescriptor.extensionReceiverParameter != null) paramIndex + 1 else paramIndex
-                return originalDescriptor.modify { it.renameParameter(paramInfoIndex, newName) }
-            }
-
-            override fun performSilently(affectedFunctions: Collection<PsiElement>) = true
-
-            override fun forcePerformForSelectedFunctionOnly() = parameterNameChangedOnOverride
-        }
-
-        runChangeSignature(element.project, functionDescriptor, changeSignatureConfiguration, element, "Rename parameter")
+        usages.forEach { (it as? KtResolvableCollisionUsageInfo)?.apply() }
     }
 }

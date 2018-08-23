@@ -1,9 +1,7 @@
-// "Create extension property 'foo'" "true"
+// "Create extension property 'A.foo'" "true"
 // ERROR: Unresolved reference: foo
 
 import package1.A
-
-val package2.A.foo: Any
 
 class X {
     init {
@@ -11,3 +9,8 @@ class X {
         val foo = y.foo
     }
 }
+
+private val package2.A.foo: Any
+    get() {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }

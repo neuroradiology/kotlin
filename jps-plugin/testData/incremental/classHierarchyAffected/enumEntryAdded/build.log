@@ -2,6 +2,7 @@
 
 Cleaning output files:
   out/production/module/Enum.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/Enum.kt
@@ -16,6 +17,7 @@ Cleaning output files:
   out/production/module/GetRandomEnumEntryKt.class
   out/production/module/META-INF/module.kotlin_module
   out/production/module/UseEnumImplicitlyKt.class
+  out/production/module/UseKt$WhenMappings.class
   out/production/module/UseKt.class
 End of files
 Compiling files:
@@ -26,7 +28,7 @@ End of files
 Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
-when expression must be exhaustive, add necessary 'C' branch or 'else' branch instead
+'when' expression must be exhaustive, add necessary 'C' branch or 'else' branch instead
 
 ================ Step #2 =================
 

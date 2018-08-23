@@ -23,7 +23,9 @@ import org.jetbrains.kotlin.descriptors.annotations.Annotations;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.types.KotlinType;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SimpleFunctionDescriptorImpl extends FunctionDescriptorImpl implements SimpleFunctionDescriptor {
     protected SimpleFunctionDescriptorImpl(
@@ -59,8 +61,28 @@ public class SimpleFunctionDescriptorImpl extends FunctionDescriptorImpl impleme
             @Nullable Modality modality,
             @NotNull Visibility visibility
     ) {
+        return initialize(receiverParameterType, dispatchReceiverParameter, typeParameters, unsubstitutedValueParameters,
+                          unsubstitutedReturnType, modality, visibility, null);
+    }
+
+    @NotNull
+    public SimpleFunctionDescriptorImpl initialize(
+            @Nullable KotlinType receiverParameterType,
+            @Nullable ReceiverParameterDescriptor dispatchReceiverParameter,
+            @NotNull List<? extends TypeParameterDescriptor> typeParameters,
+            @NotNull List<ValueParameterDescriptor> unsubstitutedValueParameters,
+            @Nullable KotlinType unsubstitutedReturnType,
+            @Nullable Modality modality,
+            @NotNull Visibility visibility,
+            @Nullable Map<? extends UserDataKey<?>, ?> userData
+    ) {
         super.initialize(receiverParameterType, dispatchReceiverParameter, typeParameters, unsubstitutedValueParameters,
                          unsubstitutedReturnType, modality, visibility);
+
+        if (userData != null && !userData.isEmpty()) {
+            userDataMap = new LinkedHashMap<UserDataKey<?>, Object>(userData);
+        }
+
         return this;
     }
 
@@ -77,16 +99,16 @@ public class SimpleFunctionDescriptorImpl extends FunctionDescriptorImpl impleme
             @Nullable FunctionDescriptor original,
             @NotNull Kind kind,
             @Nullable Name newName,
-            boolean preserveSource
+            @NotNull Annotations annotations,
+            @NotNull SourceElement source
     ) {
         return new SimpleFunctionDescriptorImpl(
                 newOwner,
                 (SimpleFunctionDescriptor) original,
-                // TODO : safeSubstitute
-                getAnnotations(),
+                annotations,
                 newName != null ? newName : getName(),
                 kind,
-                getSourceToUseForCopy(preserveSource, original)
+                source
         );
     }
 
@@ -99,43 +121,13 @@ public class SimpleFunctionDescriptorImpl extends FunctionDescriptorImpl impleme
             Kind kind,
             boolean copyOverrides
     ) {
-        //noinspection ConstantConditions
-        return (SimpleFunctionDescriptor) newCopyBuilder()
-                    .setOwner(newOwner)
-                    .setModality(modality)
-                    .setVisibility(visibility)
-                    .setKind(kind)
-                    .setCopyOverrides(copyOverrides)
-                    .build();
+        return (SimpleFunctionDescriptor) super.copy(newOwner, modality, visibility, kind, copyOverrides);
     }
 
     @NotNull
     @Override
-    public SimpleFunctionDescriptor createRenamedCopy(@NotNull Name name) {
-        //noinspection ConstantConditions
-        return (SimpleFunctionDescriptor) newCopyBuilder().setName(name).setSignatureChange().setPreserveSourceElement().build();
-    }
-
-    @NotNull
-    @Override
-    public SimpleFunctionDescriptor createCopyWithNewValueParameters(@NotNull List<ValueParameterDescriptor> valueParameters) {
-        //noinspection ConstantConditions
-        return (SimpleFunctionDescriptor) newCopyBuilder()
-                                            .setValueParameters(valueParameters)
-                                            .setSignatureChange().setPreserveSourceElement().build();
-    }
-
-    @NotNull
-    @Override
-    public SimpleFunctionDescriptor createCopyWithNewTypeParameters(@NotNull List<TypeParameterDescriptor> typeParameters) {
-        //noinspection ConstantConditions
-        return (SimpleFunctionDescriptor) newCopyBuilder().setTypeParameters(typeParameters).build();
-    }
-
-    @NotNull
-    @Override
-    public SimpleFunctionDescriptor createHiddenCopyToOvercomeSignatureClash() {
-        //noinspection ConstantConditions
-        return (SimpleFunctionDescriptor) newCopyBuilder().setHidden().build();
+    public CopyBuilder<? extends SimpleFunctionDescriptor> newCopyBuilder() {
+        //noinspection unchecked
+        return (CopyBuilder<? extends SimpleFunctionDescriptor>) super.newCopyBuilder();
     }
 }

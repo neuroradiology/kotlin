@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,35 +16,18 @@
 
 package org.jetbrains.kotlin.js.inline.util
 
-import com.google.dart.compiler.backend.js.ast.JsLiteral.*
-import com.google.dart.compiler.backend.js.ast.*
-import com.google.dart.compiler.backend.js.ast.metadata.typeCheck
+import org.jetbrains.kotlin.js.backend.ast.*
+import org.jetbrains.kotlin.js.backend.ast.metadata.SideEffectKind
+import org.jetbrains.kotlin.js.backend.ast.metadata.sideEffects
 import org.jetbrains.kotlin.js.translate.utils.jsAstUtils.any
 
-fun JsExpression.canHaveSideEffect(): Boolean =
-        any { it is JsExpression && it.canHaveOwnSideEffect() }
+fun JsExpression.canHaveSideEffect(localVars: Set<JsName>) =
+        any { it is JsExpression && it.canHaveOwnSideEffect(localVars) }
 
-fun JsExpression.canHaveOwnSideEffect(): Boolean =
-    when (this) {
-        is JsValueLiteral,
-        is JsConditional,
-        is JsArrayAccess,
-        is JsArrayLiteral,
-        is JsNameRef -> false
-        is JsBinaryOperation -> operator.isAssignment
-        is JsInvocation -> !isFunctionCreatorInvocation(this)
-        else -> true
-    }
-
-fun JsExpression.needToAlias(): Boolean =
-        any { it is JsExpression && it.shouldHaveOwnAlias() }
-
-fun JsExpression.shouldHaveOwnAlias(): Boolean =
-        when (this) {
-            is JsThisRef,
-            is JsConditional,
-            is JsBinaryOperation,
-            is JsArrayLiteral -> true
-            is JsInvocation -> if (typeCheck == null) canHaveSideEffect() else false
-            else -> canHaveOwnSideEffect()
-        }
+fun JsExpression.canHaveOwnSideEffect(vars: Set<JsName>) = when (this) {
+    is JsConditional,
+    is JsLiteral -> false
+    is JsBinaryOperation -> operator.isAssignment
+    is JsNameRef -> name !in vars && sideEffects != SideEffectKind.PURE
+    else -> sideEffects != SideEffectKind.PURE
+}

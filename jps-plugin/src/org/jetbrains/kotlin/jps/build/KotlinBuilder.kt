@@ -17,78 +17,88 @@
 package org.jetbrains.kotlin.jps.build
 
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.util.Key
-import com.intellij.openapi.util.io.FileUtil
 import com.intellij.util.containers.ContainerUtil
-import com.intellij.util.containers.MultiMap
-import gnu.trove.THashSet
 import org.jetbrains.jps.ModuleChunk
 import org.jetbrains.jps.builders.BuildTarget
 import org.jetbrains.jps.builders.DirtyFilesHolder
+import org.jetbrains.jps.builders.FileProcessor
+import org.jetbrains.jps.builders.impl.DirtyFilesHolderBase
 import org.jetbrains.jps.builders.java.JavaBuilderUtil
 import org.jetbrains.jps.builders.java.JavaSourceRootDescriptor
 import org.jetbrains.jps.incremental.*
 import org.jetbrains.jps.incremental.ModuleLevelBuilder.ExitCode.*
 import org.jetbrains.jps.incremental.java.JavaBuilder
-import org.jetbrains.jps.incremental.messages.BuildMessage
-import org.jetbrains.jps.incremental.messages.CompilerMessage
 import org.jetbrains.jps.incremental.storage.BuildDataManager
 import org.jetbrains.jps.model.JpsProject
 import org.jetbrains.jps.model.java.JpsJavaClasspathKind
 import org.jetbrains.jps.model.java.JpsJavaExtensionService
 import org.jetbrains.jps.model.module.JpsModule
 import org.jetbrains.kotlin.build.GeneratedFile
-import org.jetbrains.kotlin.build.GeneratedJvmClass
-import org.jetbrains.kotlin.build.isModuleMappingFile
-import org.jetbrains.kotlin.cli.common.KotlinVersion
 import org.jetbrains.kotlin.cli.common.arguments.CommonCompilerArguments
-import org.jetbrains.kotlin.cli.common.messages.CompilerMessageLocation
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
-import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.*
-import org.jetbrains.kotlin.cli.common.messages.MessageCollector
-import org.jetbrains.kotlin.cli.common.messages.OutputMessageUtil
-import org.jetbrains.kotlin.compilerRunner.CompilerEnvironment
-import org.jetbrains.kotlin.compilerRunner.KotlinCompilerRunner
-import org.jetbrains.kotlin.compilerRunner.OutputItemsCollectorImpl
-import org.jetbrains.kotlin.config.CompilerRunnerConstants
-import org.jetbrains.kotlin.config.CompilerRunnerConstants.INTERNAL_ERROR_PREFIX
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.ERROR
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.INFO
+import org.jetbrains.kotlin.cli.common.messages.MessageCollectorUtil
+import org.jetbrains.kotlin.compilerRunner.*
 import org.jetbrains.kotlin.config.IncrementalCompilation
+import org.jetbrains.kotlin.config.KotlinModuleKind
 import org.jetbrains.kotlin.config.Services
 import org.jetbrains.kotlin.daemon.common.isDaemonEnabled
 import org.jetbrains.kotlin.incremental.*
+import org.jetbrains.kotlin.incremental.components.ExpectActualTracker
 import org.jetbrains.kotlin.incremental.components.LookupTracker
-import org.jetbrains.kotlin.jps.JpsKotlinCompilerSettings
 import org.jetbrains.kotlin.jps.incremental.*
-import org.jetbrains.kotlin.load.kotlin.incremental.components.IncrementalCache
-import org.jetbrains.kotlin.load.kotlin.incremental.components.IncrementalCompilationComponents
-import org.jetbrains.kotlin.modules.TargetId
+import org.jetbrains.kotlin.jps.model.kotlinKind
+import org.jetbrains.kotlin.jps.platforms.KotlinJvmModuleBuildTarget
+import org.jetbrains.kotlin.jps.platforms.KotlinModuleBuildTarget
+import org.jetbrains.kotlin.jps.platforms.kotlinBuildTargets
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.progress.CompilationCanceledException
-import org.jetbrains.kotlin.progress.CompilationCanceledStatus
-import org.jetbrains.kotlin.utils.JsLibraryUtils
+import org.jetbrains.kotlin.preloading.ClassCondition
+import org.jetbrains.kotlin.utils.KotlinPaths
+import org.jetbrains.kotlin.utils.KotlinPathsFromHomeDir
 import org.jetbrains.kotlin.utils.PathUtil
-import org.jetbrains.kotlin.utils.keysToMap
-import org.jetbrains.org.objectweb.asm.ClassReader
+import org.jetbrains.kotlin.utils.keysToMapExceptNulls
 import java.io.File
 import java.util.*
+import kotlin.collections.HashSet
 
 class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
     companion object {
-        @JvmField val KOTLIN_BUILDER_NAME: String = "Kotlin Builder"
+        const val KOTLIN_BUILDER_NAME: String = "Kotlin Builder"
 
         val LOG = Logger.getInstance("#org.jetbrains.kotlin.jps.build.KotlinBuilder")
+        const val SKIP_CACHE_VERSION_CHECK_PROPERTY = "kotlin.jps.skip.cache.version.check"
+        const val JPS_KOTLIN_HOME_PROPERTY = "jps.kotlin.home"
+
+        val classesToLoadByParent: ClassCondition
+            get() = ClassCondition { className ->
+                className.startsWith("org.jetbrains.kotlin.load.kotlin.incremental.components.")
+                        || className.startsWith("org.jetbrains.kotlin.incremental.components.")
+                        || className.startsWith("org.jetbrains.kotlin.incremental.js")
+                        || className == "org.jetbrains.kotlin.config.Services"
+                        || className.startsWith("org.apache.log4j.") // For logging from compiler
+                        || className == "org.jetbrains.kotlin.progress.CompilationCanceledStatus"
+                        || className == "org.jetbrains.kotlin.progress.CompilationCanceledException"
+                        || className == "org.jetbrains.kotlin.modules.TargetId"
+                        || className == "org.jetbrains.kotlin.cli.common.ExitCode"
+            }
     }
 
     private val statisticsLogger = TeamcityStatisticsLogger()
 
     override fun getPresentableName() = KOTLIN_BUILDER_NAME
 
-    override fun getCompilableFileExtensions() = arrayListOf("kt")
+    override fun getCompilableFileExtensions() = arrayListOf("kt", "kts")
 
     override fun buildStarted(context: CompileContext) {
         LOG.debug("==========================================")
-        LOG.info("is Kotlin incremental compilation enabled: ${IncrementalCompilation.isEnabled()}")
-        LOG.info("is Kotlin experimental incremental compilation enabled: ${IncrementalCompilation.isExperimental()}")
+        LOG.info("is Kotlin incremental compilation enabled for JVM: ${IncrementalCompilation.isEnabledForJvm()}")
+        LOG.info("is Kotlin incremental compilation enabled for JS: ${IncrementalCompilation.isEnabledForJs()}")
+        if (IncrementalCompilation.isEnabledForJs()) {
+            val messageCollector = MessageCollectorAdapter(context, null)
+            messageCollector.report(CompilerMessageSeverity.INFO, "Using experimental incremental compilation for Kotlin/JS")
+        }
+
         LOG.info("is Kotlin compiler daemon enabled: ${isDaemonEnabled()}")
 
         val historyLabel = context.getBuilderParameter("history label")
@@ -104,6 +114,11 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
     override fun chunkBuildStarted(context: CompileContext, chunk: ModuleChunk) {
         super.chunkBuildStarted(context, chunk)
 
+        if (chunk.isDummy(context)) return
+
+        val buildLogger = context.testingContext?.buildLogger
+        buildLogger?.buildStarted(context, chunk)
+
         if (JavaBuilderUtil.isForcedRecompilationAllJavaModules(context)) return
 
         val targets = chunk.targets
@@ -112,70 +127,177 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
 
         if (targets.none { hasKotlin[it] == true }) return
 
-        val cacheVersionsProvider = CacheVersionProvider(dataManager.dataPaths)
-        val allVersions = cacheVersionsProvider.allVersions(targets)
-        val actions = allVersions.map { it.checkVersion() }.toSet()
+        val roundDirtyFiles = KotlinDirtySourceFilesHolder(
+            chunk,
+            context,
+            object : DirtyFilesHolderBase<JavaSourceRootDescriptor, ModuleBuildTarget>(context) {
+                override fun processDirtyFiles(processor: FileProcessor<JavaSourceRootDescriptor, ModuleBuildTarget>) {
+                    FSOperations.processFilesToRecompile(context, chunk, processor)
+                }
+            }
+        )
+        val fsOperations = FSOperationsHelper(context, chunk, roundDirtyFiles, LOG)
 
-        val fsOperations = FSOperationsHelper(context, chunk, LOG)
-        applyActionsOnCacheVersionChange(actions, cacheVersionsProvider, context, dataManager, targets, fsOperations)
+        val jpsRepresentativeTarget = chunk.representativeTarget()
+        val representativeTarget = context.kotlinBuildTargets[jpsRepresentativeTarget]
+        if (representativeTarget == null) {
+            LOG.warn("Unable to find Kotlin build target for JPS target ${jpsRepresentativeTarget.presentableName}")
+        }
+        if (System.getProperty(SKIP_CACHE_VERSION_CHECK_PROPERTY) == null && representativeTarget != null) {
+            val cacheVersionsProvider = CacheVersionProvider(dataManager.dataPaths, representativeTarget.isIncrementalCompilationEnabled)
+            val actions = checkCachesVersions(context, cacheVersionsProvider, chunk)
+            applyActionsOnCacheVersionChange(actions, cacheVersionsProvider, context, dataManager, targets, fsOperations)
+            if (CacheVersion.Action.REBUILD_ALL_KOTLIN in actions) {
+                return
+            }
+        }
+
+        // try to perform a lookup
+        // request rebuild if storage is corrupted
+        try {
+            dataManager.withLookupStorage {
+                it.get(LookupSymbol("<#NAME#>", "<#SCOPE#>"))
+            }
+        } catch (e: Exception) {
+            // todo: report to Intellij when IDEA-187115 is implemented
+            LOG.info(e)
+            markAllKotlinForRebuild(context, fsOperations, "Lookup storage is corrupted")
+            return
+        }
+
+        markAdditionalFilesForInitialRound(chunk, context, fsOperations, roundDirtyFiles)
+        buildLogger?.afterBuildStarted(context, chunk)
     }
 
+    private fun markAdditionalFilesForInitialRound(
+        chunk: ModuleChunk,
+        context: CompileContext,
+        fsOperations: FSOperationsHelper,
+        dirtyFilesHolder: KotlinDirtySourceFilesHolder
+    ) {
+        val representativeTarget = context.kotlinBuildTargets[chunk.representativeTarget()] ?: return
 
-    override fun chunkBuildFinished(context: CompileContext?, chunk: ModuleChunk?) {
+        val incrementalCaches = getIncrementalCaches(chunk, context)
+        val messageCollector = MessageCollectorAdapter(context, representativeTarget)
+        val environment = createCompileEnvironment(
+            representativeTarget,
+            incrementalCaches,
+            LookupTracker.DO_NOTHING,
+            ExpectActualTracker.DoNothing,
+            chunk,
+            messageCollector
+        ) ?: return
+
+        val removedClasses = HashSet<String>()
+        for (target in chunk.targets) {
+            val cache = incrementalCaches[target] ?: continue
+            val dirtyFiles = dirtyFilesHolder.getDirtyFiles(target)
+            val removedFiles = dirtyFilesHolder.getRemovedFiles(target)
+
+            val existingClasses = JpsKotlinCompilerRunner().classesFqNamesByFiles(environment, dirtyFiles)
+            val previousClasses = cache.classesFqNamesBySources(dirtyFiles + removedFiles)
+            for (jvmClassName in previousClasses) {
+                val fqName = jvmClassName.asString()
+                if (fqName !in existingClasses) {
+                    removedClasses.add(fqName)
+                }
+            }
+        }
+
+        val changesCollector = ChangesCollector()
+        removedClasses.forEach { changesCollector.collectSignature(FqName(it), areSubclassesAffected = true) }
+        val affectedByRemovedClasses = changesCollector.getDirtyFiles(incrementalCaches.values, context.projectDescriptor.dataManager)
+
+        fsOperations.markFilesForCurrentRound(affectedByRemovedClasses)
+    }
+
+    private fun checkCachesVersions(
+        context: CompileContext,
+        cacheVersionsProvider: CacheVersionProvider,
+        chunk: ModuleChunk
+    ): Set<CacheVersion.Action> {
+        val targets = chunk.targets
+        val dataManager = context.projectDescriptor.dataManager
+
+        val allVersions = cacheVersionsProvider.allVersions(targets)
+        val actions = allVersions.map { it.checkVersion() }.toMutableSet()
+
+        val kotlinModuleBuilderTarget = context.kotlinBuildTargets[chunk.representativeTarget()]!!
+        kotlinModuleBuilderTarget.checkCachesVersions(chunk, dataManager, actions)
+
+        return actions
+    }
+
+    override fun chunkBuildFinished(context: CompileContext, chunk: ModuleChunk) {
         super.chunkBuildFinished(context, chunk)
+
+        if (chunk.isDummy(context)) return
 
         LOG.debug("------------------------------------------")
     }
 
     override fun build(
-            context: CompileContext,
-            chunk: ModuleChunk,
-            dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-            outputConsumer: ModuleLevelBuilder.OutputConsumer
+        context: CompileContext,
+        chunk: ModuleChunk,
+        dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
+        outputConsumer: ModuleLevelBuilder.OutputConsumer
     ): ModuleLevelBuilder.ExitCode {
-        val messageCollector = MessageCollectorAdapter(context)
-        val fsOperations = FSOperationsHelper(context, chunk, LOG)
+        if (chunk.isDummy(context))
+            return NOTHING_DONE
+
+        val kotlinTarget = context.kotlinBuildTargets[chunk.representativeTarget()] ?: return OK
+        val messageCollector = MessageCollectorAdapter(context, kotlinTarget)
+
+        // New mpp project model: modules which is imported from sources sets of the compilations shouldn't be compiled for now.
+        // It should be compiled only as one of source root of target compilation, which is added in [KotlinSourceRootProvider].
+        if (chunk.modules.any { it.kotlinKind == KotlinModuleKind.SOURCE_SET_HOLDER }) {
+            if (chunk.modules.size > 1) {
+                messageCollector.report(
+                    CompilerMessageSeverity.ERROR,
+                    "Cyclically dependent modules is not supported in multiplatform projects"
+                )
+                return ABORT
+            }
+
+            return NOTHING_DONE
+        }
+
+        val kotlinDirtyFilesHolder = KotlinDirtySourceFilesHolder(chunk, context, dirtyFilesHolder)
+        val fsOperations = FSOperationsHelper(context, chunk, kotlinDirtyFilesHolder, LOG)
 
         try {
-            val proposedExitCode = doBuild(chunk, context, dirtyFilesHolder, messageCollector, outputConsumer, fsOperations)
+            val proposedExitCode =
+                doBuild(chunk, kotlinTarget, context, kotlinDirtyFilesHolder, messageCollector, outputConsumer, fsOperations)
 
             val actualExitCode = if (proposedExitCode == OK && fsOperations.hasMarkedDirty) ADDITIONAL_PASS_REQUIRED else proposedExitCode
 
-            LOG.info("Build result: " + actualExitCode)
+            LOG.debug("Build result: $actualExitCode")
 
-            context.testingContext?.run {
-                buildLogger.buildFinished(actualExitCode)
-            }
+            context.testingContext?.buildLogger?.buildFinished(actualExitCode)
 
             return actualExitCode
-        }
-        catch (e: StopBuildException) {
-            LOG.info("Caught exception: " + e)
+        } catch (e: StopBuildException) {
+            LOG.info("Caught exception: $e")
             throw e
-        }
-        catch (e: Throwable) {
-            LOG.info("Caught exception: " + e)
-
-            messageCollector.report(
-                    CompilerMessageSeverity.EXCEPTION,
-                    OutputMessageUtil.renderException(e),
-                    CompilerMessageLocation.NO_LOCATION
-            )
+        } catch (e: Throwable) {
+            LOG.info("Caught exception: $e")
+            MessageCollectorUtil.reportException(messageCollector, e)
             return ABORT
         }
     }
 
     private fun doBuild(
-            chunk: ModuleChunk,
-            context: CompileContext,
-            dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-            messageCollector: MessageCollectorAdapter,
-            outputConsumer: OutputConsumer,
-            fsOperations: FSOperationsHelper
+        chunk: ModuleChunk,
+        representativeTarget: KotlinModuleBuildTarget<*>,
+        context: CompileContext,
+        kotlinDirtyFilesHolder: KotlinDirtySourceFilesHolder,
+        messageCollector: MessageCollectorAdapter,
+        outputConsumer: OutputConsumer,
+        fsOperations: FSOperationsHelper
     ): ModuleLevelBuilder.ExitCode {
         // Workaround for Android Studio
-        if (!JavaBuilder.IS_ENABLED[context, true] && !JpsUtils.isJsKotlinModule(chunk.representativeTarget())) {
-            messageCollector.report(INFO, "Kotlin JPS plugin is disabled", CompilerMessageLocation.NO_LOCATION)
+        if (representativeTarget is KotlinJvmModuleBuildTarget && !JavaBuilder.IS_ENABLED[context, true]) {
+            messageCollector.report(INFO, "Kotlin JPS plugin is disabled")
             return NOTHING_DONE
         }
 
@@ -185,9 +307,14 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
         val hasKotlin = HasKotlinMarker(dataManager)
         val rebuildAfterCacheVersionChanged = RebuildAfterCacheVersionChangeMarker(dataManager)
         val isChunkRebuilding = JavaBuilderUtil.isForcedRecompilationAllJavaModules(context)
-                                || targets.any { rebuildAfterCacheVersionChanged[it] == true }
+                || targets.any { rebuildAfterCacheVersionChanged[it] == true }
 
-        if (!hasKotlinDirtyOrRemovedFiles(dirtyFilesHolder, chunk)) {
+        if (kotlinDirtyFilesHolder.hasDirtyOrRemovedFiles) {
+            if (!isChunkRebuilding && !representativeTarget.isIncrementalCompilationEnabled) {
+                targets.forEach { rebuildAfterCacheVersionChanged[it] = true }
+                return CHUNK_REBUILD_REQUIRED
+            }
+        } else {
             if (isChunkRebuilding) {
                 targets.forEach { hasKotlin[it] = false }
             }
@@ -196,34 +323,39 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
             return NOTHING_DONE
         }
 
-        messageCollector.report(INFO, "Kotlin JPS plugin version " + KotlinVersion.VERSION, CompilerMessageLocation.NO_LOCATION)
-
         val targetsWithoutOutputDir = targets.filter { it.outputDir == null }
         if (targetsWithoutOutputDir.isNotEmpty()) {
-            messageCollector.report(ERROR, "Output directory not specified for " + targetsWithoutOutputDir.joinToString(), CompilerMessageLocation.NO_LOCATION)
+            messageCollector.report(ERROR, "Output directory not specified for " + targetsWithoutOutputDir.joinToString())
             return ABORT
         }
 
         val project = projectDescriptor.project
-        val lookupTracker = getLookupTracker(project)
+        val lookupTracker = getLookupTracker(project, representativeTarget)
+        val exceptActualTracer = ExpectActualTrackerImpl()
         val incrementalCaches = getIncrementalCaches(chunk, context)
-        val environment = createCompileEnvironment(incrementalCaches, lookupTracker, context)
-        if (!environment.success()) {
-            environment.reportErrorsTo(messageCollector)
-            return ABORT
+        val environment = createCompileEnvironment(
+            representativeTarget,
+            incrementalCaches,
+            lookupTracker,
+            exceptActualTracer,
+            chunk,
+            messageCollector
+        ) ?: return ABORT
+
+        val commonArguments = representativeTarget.compilerArgumentsForChunk(chunk).apply {
+            reportOutputFiles = true
+            version = true // Always report the version to help diagnosing user issues if they submit the compiler output
         }
 
-        val commonArguments = JpsKotlinCompilerSettings.getCommonCompilerArguments(project)
-        commonArguments.verbose = true // Make compiler report source to output files mapping
-
-        val allCompiledFiles = getAllCompiledFilesContainer(context)
-        val filesToCompile = KotlinSourceFileCollector.getDirtySourceFiles(dirtyFilesHolder)
-
-        LOG.debug("Compiling files: ${filesToCompile.values()}")
+        if (LOG.isDebugEnabled) {
+            LOG.debug("Compiling files: ${kotlinDirtyFilesHolder.allDirtyFiles}")
+        }
 
         val start = System.nanoTime()
-        val outputItemCollector = doCompileModuleChunk(allCompiledFiles, chunk, commonArguments, context, dirtyFilesHolder,
-                                                       environment, filesToCompile, incrementalCaches, messageCollector, project)
+        val outputItemCollector = doCompileModuleChunk(
+            chunk, representativeTarget, commonArguments, context, kotlinDirtyFilesHolder, fsOperations,
+            environment, incrementalCaches
+        )
 
         statisticsLogger.registerStatistic(chunk, System.nanoTime() - start)
 
@@ -235,18 +367,17 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
         if (compilationErrors) {
             LOG.info("Compiled with errors")
             return ABORT
-        }
-        else {
+        } else {
             LOG.info("Compiled successfully")
         }
 
-        val generatedFiles = getGeneratedFiles(chunk, outputItemCollector)
+        val generatedFiles = getGeneratedFiles(context, chunk, environment.outputItemsCollector)
 
         registerOutputItems(outputConsumer, generatedFiles)
-        saveVersions(context, chunk)
+        representativeTarget.saveVersions(context, chunk, commonArguments)
 
         if (targets.any { hasKotlin[it] == null }) {
-            fsOperations.markChunk(recursively = false, kotlinOnly = true, excludeFiles = filesToCompile.values().toSet())
+            fsOperations.markChunk(recursively = false, kotlinOnly = true, excludeFiles = kotlinDirtyFilesHolder.allDirtyFiles)
         }
 
         for (target in targets) {
@@ -254,72 +385,74 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
             rebuildAfterCacheVersionChanged.clean(target)
         }
 
-        if (JpsUtils.isJsKotlinModule(chunk.representativeTarget())) {
-            copyJsLibraryFilesIfNeeded(chunk, project)
-            return OK
+        chunk.targets.forEach {
+            context.kotlinBuildTargets[it]?.doAfterBuild()
         }
 
-        @Suppress("REIFIED_TYPE_UNSAFE_SUBSTITUTION")
-        val generatedClasses = generatedFiles.filterIsInstance<GeneratedJvmClass<ModuleBuildTarget>>()
-        val additionalPassRequired = updateJavaMappings(chunk, compilationErrors, context, dirtyFilesHolder, filesToCompile, generatedClasses, incrementalCaches)
+        representativeTarget.updateChunkMappings(
+            chunk,
+            kotlinDirtyFilesHolder,
+            generatedFiles,
+            incrementalCaches
+        )
 
-        if (!IncrementalCompilation.isEnabled()) {
+        if (!representativeTarget.isIncrementalCompilationEnabled) {
             return OK
         }
 
         context.checkCanceled()
 
-        val changesInfo = updateKotlinIncrementalCache(compilationErrors, incrementalCaches, generatedFiles)
-        updateLookupStorage(chunk, lookupTracker, dataManager, dirtyFilesHolder, filesToCompile)
+        environment.withProgressReporter { progress ->
+            progress.progress("performing incremental compilation analysis")
 
-        if (isChunkRebuilding) {
-            return OK
+            val changesCollector = ChangesCollector()
+
+            for ((target, files) in generatedFiles) {
+                val kotlinModuleBuilderTarget = context.kotlinBuildTargets[target]!!
+                kotlinModuleBuilderTarget.updateCaches(incrementalCaches[target]!!, files, changesCollector, environment)
+            }
+
+            updateLookupStorage(lookupTracker, dataManager, kotlinDirtyFilesHolder)
+
+            if (!isChunkRebuilding) {
+                changesCollector.processChangesUsingLookups(
+                    kotlinDirtyFilesHolder.allDirtyFiles,
+                    dataManager,
+                    fsOperations,
+                    incrementalCaches.values
+                )
+            }
         }
 
-        processChanges(filesToCompile.values().toSet(), allCompiledFiles, dataManager, incrementalCaches.values, changesInfo, fsOperations)
-        incrementalCaches.values.forEach { it.cleanDirtyInlineFunctions() }
-
-        return if (additionalPassRequired) ADDITIONAL_PASS_REQUIRED else OK
+        return OK
     }
 
     private fun applyActionsOnCacheVersionChange(
-            actions: Set<CacheVersion.Action>,
-            cacheVersionsProvider: CacheVersionProvider,
-            context: CompileContext,
-            dataManager: BuildDataManager,
-            targets: MutableSet<ModuleBuildTarget>,
-            fsOperations: FSOperationsHelper
+        actions: Set<CacheVersion.Action>,
+        cacheVersionsProvider: CacheVersionProvider,
+        context: CompileContext,
+        dataManager: BuildDataManager,
+        targets: MutableSet<ModuleBuildTarget>,
+        fsOperations: FSOperationsHelper
     ) {
-        val buildTargetIndex = context.projectDescriptor.buildTargetIndex
-        val allTargets = buildTargetIndex.allTargets.filterIsInstance<ModuleBuildTarget>().toSet()
         val hasKotlin = HasKotlinMarker(dataManager)
-        val rebuildAfterCacheVersionChanged = RebuildAfterCacheVersionChangeMarker(dataManager)
+        val sortedActions = actions.sorted()
 
-        for (status in actions.sorted()) {
+        context.testingContext?.buildLogger?.actionsOnCacheVersionChanged(sortedActions)
+
+        for (status in sortedActions) {
             when (status) {
                 CacheVersion.Action.REBUILD_ALL_KOTLIN -> {
-                    LOG.info("Kotlin global lookup map format changed, so rebuild all kotlin")
-                    val project = context.projectDescriptor.project
-                    val sourceRoots = project.modules.flatMap { it.sourceRoots }
-
-                    for (sourceRoot in sourceRoots) {
-                        val ktFiles = sourceRoot.file.walk().filter { KotlinSourceFileCollector.isKotlinSourceFile(it) }
-                        fsOperations.markFiles(ktFiles.asIterable())
-                    }
-
-                    for (target in allTargets) {
-                        dataManager.getKotlinCache(target).clean()
-                        rebuildAfterCacheVersionChanged[target] = true
-                    }
-
-                    dataManager.getStorage(KotlinDataContainerTarget, JpsLookupStorageProvider).clean()
+                    markAllKotlinForRebuild(context, fsOperations, "Kotlin global lookup map format changed")
                     return
                 }
                 CacheVersion.Action.REBUILD_CHUNK -> {
                     LOG.info("Clearing caches for " + targets.joinToString { it.presentableName })
+                    val rebuildAfterCacheVersionChanged = RebuildAfterCacheVersionChangeMarker(dataManager)
 
+                    val kotlinBuildTargets = context.kotlinBuildTargets
                     for (target in targets) {
-                        dataManager.getKotlinCache(target).clean()
+                        dataManager.getKotlinCache(kotlinBuildTargets[target])?.clean()
                         hasKotlin.clean(target)
                         rebuildAfterCacheVersionChanged[target] = true
                     }
@@ -331,20 +464,14 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
                 CacheVersion.Action.CLEAN_NORMAL_CACHES -> {
                     LOG.info("Clearing caches for all targets")
 
-                    for (target in allTargets) {
-                        dataManager.getKotlinCache(target).clean()
-                    }
-                }
-                CacheVersion.Action.CLEAN_EXPERIMENTAL_CACHES -> {
-                    LOG.info("Clearing experimental caches for all targets")
-
-                    for (target in allTargets) {
-                        dataManager.getKotlinCache(target).cleanExperimental()
+                    val kotlinBuildTargets = context.kotlinBuildTargets
+                    for (target in context.allTargets()) {
+                        dataManager.getKotlinCache(kotlinBuildTargets[target])?.clean()
                     }
                 }
                 CacheVersion.Action.CLEAN_DATA_CONTAINER -> {
                     LOG.info("Clearing lookup cache")
-                    dataManager.getStorage(KotlinDataContainerTarget, JpsLookupStorageProvider).clean()
+                    dataManager.cleanLookupStorage(LOG)
                     cacheVersionsProvider.dataContainerVersion().clean()
                 }
                 else -> {
@@ -354,543 +481,266 @@ class KotlinBuilder : ModuleLevelBuilder(BuilderCategory.SOURCE_PROCESSOR) {
         }
     }
 
-    private fun saveVersions(context: CompileContext, chunk: ModuleChunk) {
+    private fun CompileContext.allTargets() =
+        projectDescriptor.buildTargetIndex.allTargets.filterIsInstanceTo<ModuleBuildTarget, MutableSet<ModuleBuildTarget>>(HashSet())
+
+    private fun markAllKotlinForRebuild(context: CompileContext, fsOperations: FSOperationsHelper, reason: String) {
+        LOG.info("Rebuilding all Kotlin: $reason")
+        val project = context.projectDescriptor.project
+        val sourceRoots = project.modules.flatMap { it.sourceRoots }
         val dataManager = context.projectDescriptor.dataManager
-        val targets = chunk.targets
-        val cacheVersionsProvider = CacheVersionProvider(dataManager.dataPaths)
-        cacheVersionsProvider.allVersions(targets).forEach { it.saveIfNeeded() }
+        val rebuildAfterCacheVersionChanged = RebuildAfterCacheVersionChangeMarker(dataManager)
+
+        for (sourceRoot in sourceRoots) {
+            val ktFiles = sourceRoot.file.walk().filter { it.isKotlinSourceFile }
+            fsOperations.markFiles(ktFiles.toList())
+        }
+
+        val kotlinBuildTargets = context.kotlinBuildTargets
+        for (target in context.allTargets()) {
+            dataManager.getKotlinCache(kotlinBuildTargets[target])?.clean()
+            rebuildAfterCacheVersionChanged[target] = true
+        }
+
+        dataManager.cleanLookupStorage(LOG)
     }
 
     private fun doCompileModuleChunk(
-            allCompiledFiles: MutableSet<File>, chunk: ModuleChunk, commonArguments: CommonCompilerArguments, context: CompileContext,
-            dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>, environment: CompilerEnvironment,
-            filesToCompile: MultiMap<ModuleBuildTarget, File>, incrementalCaches: Map<ModuleBuildTarget, IncrementalCacheImpl<*>>,
-            messageCollector: MessageCollectorAdapter, project: JpsProject
-    ): OutputItemsCollectorImpl? {
+        chunk: ModuleChunk,
+        representativeTarget: KotlinModuleBuildTarget<*>,
+        commonArguments: CommonCompilerArguments,
+        context: CompileContext,
+        dirtyFilesHolder: KotlinDirtySourceFilesHolder,
+        fsOperations: FSOperationsHelper,
+        environment: JpsCompilerEnvironment,
+        incrementalCaches: Map<ModuleBuildTarget, JpsIncrementalCache>
+    ): OutputItemsCollector? {
 
-        if (JpsUtils.isJsKotlinModule(chunk.representativeTarget())) {
-            LOG.debug("Compiling to JS ${filesToCompile.values().size} files in ${filesToCompile.keySet().joinToString { it.presentableName }}")
-            return compileToJs(chunk, commonArguments, environment, messageCollector, project)
+        fun concatenate(strings: Array<String>?, cp: List<String>) = arrayOf(*strings.orEmpty(), *cp.toTypedArray())
+
+        for (argumentProvider in ServiceLoader.load(KotlinJpsCompilerArgumentsProvider::class.java)) {
+            val jpsModuleBuildTarget = representativeTarget.jpsModuleBuildTarget
+            // appending to pluginOptions
+            commonArguments.pluginOptions = concatenate(
+                commonArguments.pluginOptions,
+                argumentProvider.getExtraArguments(jpsModuleBuildTarget, context)
+            )
+            // appending to classpath
+            commonArguments.pluginClasspaths = concatenate(
+                commonArguments.pluginClasspaths,
+                argumentProvider.getClasspath(jpsModuleBuildTarget, context)
+            )
+
+            LOG.debug("Plugin loaded: ${argumentProvider::class.java.simpleName}")
         }
 
-        if (IncrementalCompilation.isEnabled()) {
+        if (representativeTarget.isIncrementalCompilationEnabled) {
             for (target in chunk.targets) {
-                val cache = incrementalCaches[target]!!
-                val removedAndDirtyFiles = filesToCompile[target] + dirtyFilesHolder.getRemovedFiles(target).map { File(it) }
-                cache.markOutputClassesDirty(removedAndDirtyFiles)
+                val cache = incrementalCaches[target]
+                val targetDirtyFiles = dirtyFilesHolder.byTarget[target]
+
+                if (cache != null && targetDirtyFiles != null) {
+                    val complementaryFiles = cache.clearComplementaryFilesMapping(targetDirtyFiles.dirty + targetDirtyFiles.removed)
+                    fsOperations.markFilesForCurrentRound(target, complementaryFiles)
+
+                    cache.markDirty(targetDirtyFiles.dirty + targetDirtyFiles.removed)
+                }
             }
         }
 
-        val representativeTarget = chunk.representativeTarget()
+        val isDoneSomething = representativeTarget.compileModuleChunk(chunk, commonArguments, dirtyFilesHolder, environment)
 
-        fun concatenate(strings: Array<String>?, cp: List<String>) = arrayOf(*(strings ?: emptyArray()), *cp.toTypedArray())
-
-        for (argumentProvider in ServiceLoader.load(KotlinJpsCompilerArgumentsProvider::class.java)) {
-            // appending to pluginOptions
-            commonArguments.pluginOptions = concatenate(commonArguments.pluginOptions,
-                                                        argumentProvider.getExtraArguments(representativeTarget, context))
-            // appending to classpath
-            commonArguments.pluginClasspaths = concatenate(commonArguments.pluginClasspaths,
-                                                           argumentProvider.getClasspath(representativeTarget, context))
-
-            messageCollector.report(
-                    INFO,
-                    "Plugin loaded: ${argumentProvider.javaClass.simpleName}",
-                    CompilerMessageLocation.NO_LOCATION
-            )
-        }
-
-        return compileToJvm(allCompiledFiles, chunk, commonArguments, context, dirtyFilesHolder, environment, filesToCompile, messageCollector)
+        return if (isDoneSomething) environment.outputItemsCollector else null
     }
 
     private fun createCompileEnvironment(
-            incrementalCaches: Map<ModuleBuildTarget, IncrementalCache>,
-            lookupTracker: LookupTracker,
-            context: CompileContext
-    ): CompilerEnvironment {
-        val compilerServices = Services.Builder()
-                .register(IncrementalCompilationComponents::class.java,
-                          IncrementalCompilationComponentsImpl(incrementalCaches.mapKeys { TargetId(it.key) }, lookupTracker))
-                .register(CompilationCanceledStatus::class.java, object : CompilationCanceledStatus {
-                    override fun checkCanceled() {
-                        if (context.cancelStatus.isCanceled) throw CompilationCanceledException()
-                    }
-                })
-                .build()
+        kotlinModuleBuilderTarget: KotlinModuleBuildTarget<*>,
+        incrementalCaches: Map<ModuleBuildTarget, JpsIncrementalCache>,
+        lookupTracker: LookupTracker,
+        exceptActualTracer: ExpectActualTracker,
+        chunk: ModuleChunk,
+        messageCollector: MessageCollectorAdapter
+    ): JpsCompilerEnvironment? {
+        val compilerServices = with(Services.Builder()) {
+            kotlinModuleBuilderTarget.makeServices(this, incrementalCaches, lookupTracker, exceptActualTracer)
+            build()
+        }
 
-        return CompilerEnvironment.getEnvironmentFor(
-                PathUtil.getKotlinPathsForJpsPluginOrJpsTests(),
-                { className ->
-                    className.startsWith("org.jetbrains.kotlin.load.kotlin.incremental.components.")
-                    || className.startsWith("org.jetbrains.kotlin.incremental.components.")
-                    || className == "org.jetbrains.kotlin.config.Services"
-                    || className.startsWith("org.apache.log4j.") // For logging from compiler
-                    || className == "org.jetbrains.kotlin.progress.CompilationCanceledStatus"
-                    || className == "org.jetbrains.kotlin.progress.CompilationCanceledException"
-                    || className == "org.jetbrains.kotlin.modules.TargetId"
-                },
-                compilerServices
+        val paths = computeKotlinPathsForJpsPlugin()
+        if (paths == null || !paths.homePath.exists()) {
+            messageCollector.report(
+                ERROR, "Cannot find kotlinc home. Make sure the plugin is properly installed, " +
+                        "or specify $JPS_KOTLIN_HOME_PROPERTY system property"
+            )
+            return null
+        }
+
+        return JpsCompilerEnvironment(
+            paths,
+            compilerServices,
+            classesToLoadByParent,
+            messageCollector,
+            OutputItemsCollectorImpl(),
+            ProgressReporterImpl(kotlinModuleBuilderTarget.context, chunk)
         )
     }
 
+    // When JPS is run on TeamCity, it can not rely on Kotlin plugin layout,
+    // so the path to Kotlin is specified in a system property
+    private fun computeKotlinPathsForJpsPlugin(): KotlinPaths? {
+        if (System.getProperty("kotlin.jps.tests").equals("true", ignoreCase = true)) {
+            return PathUtil.kotlinPathsForDistDirectory
+        }
+
+        val jpsKotlinHome = System.getProperty(JPS_KOTLIN_HOME_PROPERTY)
+        if (jpsKotlinHome != null) {
+            return KotlinPathsFromHomeDir(File(jpsKotlinHome))
+        }
+
+        val jar = PathUtil.pathUtilJar.takeIf(File::exists)
+        if (jar?.name == "kotlin-jps-plugin.jar") {
+            val pluginHome = jar.parentFile.parentFile.parentFile
+            return KotlinPathsFromHomeDir(File(pluginHome, PathUtil.HOME_FOLDER_NAME))
+        }
+
+        return null
+    }
+
     private fun getGeneratedFiles(
-            chunk: ModuleChunk,
-            outputItemCollector: OutputItemsCollectorImpl
-    ): List<GeneratedFile<ModuleBuildTarget>> {
+        context: CompileContext,
+        chunk: ModuleChunk,
+        outputItemCollector: OutputItemsCollectorImpl
+    ): Map<ModuleBuildTarget, List<GeneratedFile>> {
         // If there's only one target, this map is empty: get() always returns null, and the representativeTarget will be used below
         val sourceToTarget = HashMap<File, ModuleBuildTarget>()
         if (chunk.targets.size > 1) {
             for (target in chunk.targets) {
-                for (file in KotlinSourceFileCollector.getAllKotlinSourceFiles(target)) {
-                    sourceToTarget.put(file, target)
+                context.kotlinBuildTargets[target]?.sourceFiles?.forEach {
+                    sourceToTarget[it] = target
                 }
             }
         }
 
-        val result = ArrayList<GeneratedFile<ModuleBuildTarget>>()
-
         val representativeTarget = chunk.representativeTarget()
-        for (outputItem in outputItemCollector.outputs) {
-            val sourceFiles = outputItem.sourceFiles
-            val outputFile = outputItem.outputFile
-            val target =
-                    sourceFiles.firstOrNull()?.let { sourceToTarget[it] } ?:
-                    chunk.targets.filter { it.outputDir?.let { outputFile.startsWith(it) } ?: false }.singleOrNull() ?:
-                    representativeTarget
+        fun SimpleOutputItem.target() =
+            sourceFiles.firstOrNull()?.let { sourceToTarget[it] } ?: chunk.targets.singleOrNull {
+                it.outputDir?.let {
+                    outputFile.startsWith(it)
+                } ?: false
+            } ?: representativeTarget
 
-            if (outputFile.name.endsWith(".class")) {
-                result.add(GeneratedJvmClass(target, sourceFiles, outputFile))
-            }
-            else {
-                result.add(GeneratedFile<ModuleBuildTarget>(target, sourceFiles, outputFile))
-            }
-        }
-        return result
+        return outputItemCollector.outputs.groupBy(SimpleOutputItem::target, SimpleOutputItem::toGeneratedFile)
     }
 
-    private fun updateJavaMappings(
-            chunk: ModuleChunk,
-            compilationErrors: Boolean,
-            context: CompileContext,
-            dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-            filesToCompile: MultiMap<ModuleBuildTarget, File>,
-            generatedClasses: List<GeneratedJvmClass<ModuleBuildTarget>>,
-            incrementalCaches: Map<ModuleBuildTarget, JpsIncrementalCacheImpl>
-    ): Boolean {
-        val previousMappings = context.projectDescriptor.dataManager.mappings
-        val delta = previousMappings.createDelta()
-        val callback = delta.callback
-        val targetDirtyFiles: Map<ModuleBuildTarget, Set<File>> = chunk.targets.keysToMap {
-            val files = HashSet<File>()
-            dirtyFilesHolder.getRemovedFiles(it).mapTo(files, ::File)
-            files.addAll(filesToCompile.get(it))
-            files
-        }
-
-        fun getOldSourceFiles(generatedClass: GeneratedJvmClass<ModuleBuildTarget>): Set<File> {
-            val cache = incrementalCaches[generatedClass.target] ?: return emptySet()
-            val className = generatedClass.outputClass.className
-
-            if (!cache.isMultifileFacade(className)) return emptySet()
-
-            val name = previousMappings.getName(className.internalName)
-            return previousMappings.getClassSources(name)?.toSet() ?: emptySet()
-        }
-
-        for (generatedClass in generatedClasses) {
-            val sourceFiles = THashSet(FileUtil.FILE_HASHING_STRATEGY)
-            sourceFiles.addAll(getOldSourceFiles(generatedClass))
-            sourceFiles.removeAll(targetDirtyFiles[generatedClass.target] ?: emptySet())
-            sourceFiles.addAll(generatedClass.sourceFiles)
-
-            callback.associate(
-                    FileUtil.toSystemIndependentName(generatedClass.outputFile.canonicalPath),
-                    sourceFiles.map { FileUtil.toSystemIndependentName(it.canonicalPath) },
-                    ClassReader(generatedClass.outputClass.fileContents)
-            )
-        }
-
-        val allCompiled = filesToCompile.values()
-        val compiledInThisRound = if (compilationErrors) listOf<File>() else allCompiled
-
-        return JavaBuilderUtil.updateMappings(context, delta, dirtyFilesHolder, chunk, allCompiled, compiledInThisRound)
-    }
-
-    private fun registerOutputItems(outputConsumer: ModuleLevelBuilder.OutputConsumer, generatedFiles: List<GeneratedFile<ModuleBuildTarget>>) {
-        for (generatedFile in generatedFiles) {
-            outputConsumer.registerOutputFile(generatedFile.target, generatedFile.outputFile, generatedFile.sourceFiles.map { it.path })
-        }
-    }
-
-    private fun updateKotlinIncrementalCache(
-            compilationErrors: Boolean,
-            incrementalCaches: Map<ModuleBuildTarget, JpsIncrementalCacheImpl>,
-            generatedFiles: List<GeneratedFile<ModuleBuildTarget>>
-    ): CompilationResult {
-
-        assert(IncrementalCompilation.isEnabled()) { "updateKotlinIncrementalCache should not be called when incremental compilation disabled" }
-
-        var changesInfo = CompilationResult.NO_CHANGES
-        for (generatedFile in generatedFiles) {
-            val ic = incrementalCaches[generatedFile.target]!!
-            val newChangesInfo =
-                    if (generatedFile is GeneratedJvmClass<ModuleBuildTarget>) {
-                        ic.saveFileToCache(generatedFile)
-                    }
-                    else if (generatedFile.outputFile.isModuleMappingFile()) {
-                        ic.saveModuleMappingToCache(generatedFile.sourceFiles, generatedFile.outputFile)
-                    }
-                    else {
-                        continue
-                    }
-
-            changesInfo += newChangesInfo
-        }
-
-        if (!compilationErrors) {
-            incrementalCaches.values.forEach {
-                val newChangesInfo = it.clearCacheForRemovedClasses()
-                changesInfo += newChangesInfo
+    private fun registerOutputItems(outputConsumer: OutputConsumer, outputItems: Map<ModuleBuildTarget, List<GeneratedFile>>) {
+        for ((target, outputs) in outputItems) {
+            for (output in outputs) {
+                outputConsumer.registerOutputFile(target, output.outputFile, output.sourceFiles.map { it.path })
             }
         }
-
-        return changesInfo
     }
 
     private fun updateLookupStorage(
-            chunk: ModuleChunk,
-            lookupTracker: LookupTracker,
-            dataManager: BuildDataManager,
-            dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-            filesToCompile: MultiMap<ModuleBuildTarget, File>
+        lookupTracker: LookupTracker,
+        dataManager: BuildDataManager,
+        dirtyFilesHolder: KotlinDirtySourceFilesHolder
     ) {
-        if (!IncrementalCompilation.isExperimental()) return
+        if (lookupTracker !is LookupTrackerImpl)
+            throw AssertionError("Lookup tracker is expected to be LookupTrackerImpl, got ${lookupTracker::class.java}")
 
-        if (lookupTracker !is LookupTrackerImpl) throw AssertionError("Lookup tracker is expected to be LookupTrackerImpl, got ${lookupTracker.javaClass}")
-
-        val lookupStorage = dataManager.getStorage(KotlinDataContainerTarget, JpsLookupStorageProvider)
-
-        val removedFiles = chunk.targets.flatMap { KotlinSourceFileCollector.getRemovedKotlinFiles(dirtyFilesHolder, it) }
-        lookupStorage.removeLookupsFrom(filesToCompile.values().asSequence() + removedFiles.asSequence())
-
-        lookupStorage.addAll(lookupTracker.lookups.entrySet(), lookupTracker.pathInterner.values)
-    }
-
-    // if null is returned, nothing was done
-    private fun compileToJs(chunk: ModuleChunk,
-                            commonArguments: CommonCompilerArguments,
-                            environment: CompilerEnvironment,
-                            messageCollector: MessageCollectorAdapter,
-                            project: JpsProject
-    ): OutputItemsCollectorImpl? {
-        val outputItemCollector = OutputItemsCollectorImpl()
-
-        val representativeTarget = chunk.representativeTarget()
-        if (chunk.modules.size > 1) {
-            // We do not support circular dependencies, but if they are present, we do our best should not break the build,
-            // so we simply yield a warning and report NOTHING_DONE
-            messageCollector.report(
-                    WARNING,
-                    "Circular dependencies are not supported. The following JS modules depend on each other: "
-                    + chunk.modules.map { it.name }.joinToString(", ") + ". "
-                    + "Kotlin is not compiled for these modules",
-                    CompilerMessageLocation.NO_LOCATION
-            )
-            return null
-        }
-
-        val sourceFiles = KotlinSourceFileCollector.getAllKotlinSourceFiles(representativeTarget)
-        if (sourceFiles.isEmpty()) {
-            return null
-        }
-
-        val outputDir = KotlinBuilderModuleScriptGenerator.getOutputDirSafe(representativeTarget)
-
-        val moduleName = representativeTarget.module.name
-        val outputFile = JpsJsModuleUtils.getOutputFile(outputDir, moduleName)
-        val libraryFiles = JpsJsModuleUtils.getLibraryFilesAndDependencies(representativeTarget)
-        val compilerSettings = JpsKotlinCompilerSettings.getCompilerSettings(project)
-        val k2JsArguments = JpsKotlinCompilerSettings.getK2JsCompilerArguments(project)
-
-        KotlinCompilerRunner.runK2JsCompiler(commonArguments, k2JsArguments, compilerSettings, messageCollector, environment, outputItemCollector, sourceFiles, libraryFiles, outputFile)
-        return outputItemCollector
-    }
-
-    private fun copyJsLibraryFilesIfNeeded(chunk: ModuleChunk, project: JpsProject) {
-        val representativeTarget = chunk.representativeTarget()
-        val outputDir = KotlinBuilderModuleScriptGenerator.getOutputDirSafe(representativeTarget)
-        val compilerSettings = JpsKotlinCompilerSettings.getCompilerSettings(project)
-        if (compilerSettings.copyJsLibraryFiles) {
-            val outputLibraryRuntimeDirectory = File(outputDir, compilerSettings.outputDirectoryForJsLibraryFiles).absolutePath
-            val libraryFilesToCopy = arrayListOf<String>()
-            JpsJsModuleUtils.getLibraryFiles(representativeTarget, libraryFilesToCopy)
-            JsLibraryUtils.copyJsFilesFromLibraries(libraryFilesToCopy, outputLibraryRuntimeDirectory)
-        }
-    }
-
-    // if null is returned, nothing was done
-    private fun compileToJvm(allCompiledFiles: MutableSet<File>,
-                             chunk: ModuleChunk,
-                             commonArguments: CommonCompilerArguments,
-                             context: CompileContext,
-                             dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-                             environment: CompilerEnvironment,
-                             filesToCompile: MultiMap<ModuleBuildTarget, File>, messageCollector: MessageCollectorAdapter
-    ): OutputItemsCollectorImpl? {
-        val outputItemCollector = OutputItemsCollectorImpl()
-
-        if (chunk.modules.size > 1) {
-            messageCollector.report(
-                    WARNING,
-                    "Circular dependencies are only partially supported. The following modules depend on each other: "
-                    + chunk.modules.map { it.name }.joinToString(", ") + ". "
-                    + "Kotlin will compile them, but some strange effect may happen",
-                    CompilerMessageLocation.NO_LOCATION
-            )
-        }
-
-        allCompiledFiles.addAll(filesToCompile.values())
-
-        val processedTargetsWithRemoved = getProcessedTargetsWithRemovedFilesContainer(context)
-
-        var totalRemovedFiles = 0
-        for (target in chunk.targets) {
-            val removedFilesInTarget = KotlinSourceFileCollector.getRemovedKotlinFiles(dirtyFilesHolder, target)
-            if (!removedFilesInTarget.isEmpty()) {
-                if (processedTargetsWithRemoved.add(target)) {
-                    totalRemovedFiles += removedFilesInTarget.size
-                }
-            }
-        }
-
-        val moduleFile = KotlinBuilderModuleScriptGenerator.generateModuleDescription(context, chunk, filesToCompile, totalRemovedFiles != 0)
-        if (moduleFile == null) {
-            KotlinBuilder.LOG.debug("Not compiling, because no files affected: " + filesToCompile.keySet().joinToString { it.presentableName })
-            // No Kotlin sources found
-            return null
-        }
-
-        val project = context.projectDescriptor.project
-        val k2JvmArguments = JpsKotlinCompilerSettings.getK2JvmCompilerArguments(project)
-        val compilerSettings = JpsKotlinCompilerSettings.getCompilerSettings(project)
-
-        KotlinBuilder.LOG.debug("Compiling to JVM ${filesToCompile.values().size} files"
-                                + (if (totalRemovedFiles == 0) "" else " ($totalRemovedFiles removed files)")
-                                + " in " + filesToCompile.keySet().joinToString { it.presentableName })
-
-        KotlinCompilerRunner.runK2JvmCompiler(commonArguments, k2JvmArguments, compilerSettings, messageCollector, environment, moduleFile, outputItemCollector)
-        moduleFile.delete()
-
-        return outputItemCollector
-    }
-
-    class MessageCollectorAdapter(private val context: CompileContext) : MessageCollector {
-
-        override fun report(severity: CompilerMessageSeverity, message: String, location: CompilerMessageLocation) {
-            var prefix = ""
-            if (severity == EXCEPTION) {
-                prefix = INTERNAL_ERROR_PREFIX
-            }
-            context.processMessage(CompilerMessage(
-                    CompilerRunnerConstants.KOTLIN_COMPILER_NAME,
-                    kind(severity),
-                    prefix + message + renderLocationIfNeeded(location),
-                    location.path,
-                    -1, -1, -1,
-                    location.line.toLong(), location.column.toLong()
-            ))
-        }
-
-        private fun renderLocationIfNeeded(location: CompilerMessageLocation): String {
-            if (location == CompilerMessageLocation.NO_LOCATION) return ""
-
-            // Sometimes we report errors in JavaScript library stubs, i.e. files like core/javautil.kt
-            // IDEA can't find these files, and does not display paths in Messages View, so we add the position information
-            // to the error message itself:
-            val pathname = "" + location.path
-            return if (File(pathname).exists()) "" else " ($location)"
-        }
-
-        private fun kind(severity: CompilerMessageSeverity): BuildMessage.Kind {
-            return when (severity) {
-                INFO -> BuildMessage.Kind.INFO
-                ERROR, EXCEPTION -> BuildMessage.Kind.ERROR
-                WARNING -> BuildMessage.Kind.WARNING
-                LOGGING -> BuildMessage.Kind.PROGRESS
-                else -> throw IllegalArgumentException("Unsupported severity: " + severity)
-            }
+        dataManager.withLookupStorage { lookupStorage ->
+            lookupStorage.removeLookupsFrom(dirtyFilesHolder.allDirtyFiles.asSequence() + dirtyFilesHolder.allRemovedFilesFiles.asSequence())
+            lookupStorage.addAll(lookupTracker.lookups.entrySet(), lookupTracker.pathInterner.values)
         }
     }
 }
 
-private fun processChanges(
-        compiledFiles: Set<File>,
-        allCompiledFiles: MutableSet<File>,
-        dataManager: BuildDataManager,
-        caches: Collection<JpsIncrementalCacheImpl>,
-        compilationResult: CompilationResult,
-        fsOperations: FSOperationsHelper
+private class JpsICReporter : ICReporter {
+    override fun report(message: () -> String) {
+        if (KotlinBuilder.LOG.isDebugEnabled) {
+            KotlinBuilder.LOG.debug(message())
+        }
+    }
+}
+
+private fun ChangesCollector.processChangesUsingLookups(
+    compiledFiles: Set<File>,
+    dataManager: BuildDataManager,
+    fsOperations: FSOperationsHelper,
+    caches: Iterable<JpsIncrementalCache>
 ) {
-    if (IncrementalCompilation.isExperimental()) {
-        compilationResult.doProcessChangesUsingLookups(compiledFiles, dataManager, fsOperations, caches)
-    }
-    else {
-        compilationResult.doProcessChanges(compiledFiles, allCompiledFiles, caches, fsOperations)
-    }
+    val allCaches = caches.flatMap { it.thisWithDependentCaches }
+    val reporter = JpsICReporter()
+
+    reporter.report { "Start processing changes" }
+
+    val dirtyFiles = getDirtyFiles(allCaches, dataManager)
+    fsOperations.markInChunkOrDependents(dirtyFiles.asIterable(), excludeFiles = compiledFiles)
+
+    reporter.report { "End of processing changes" }
 }
 
-private fun CompilationResult.doProcessChanges(
-        compiledFiles: Set<File>,
-        allCompiledFiles: MutableSet<File>,
-        caches: Collection<JpsIncrementalCacheImpl>,
-        fsOperations: FSOperationsHelper
-) {
-    KotlinBuilder.LOG.debug("compilationResult = $this")
-
-    when {
-        inlineAdded -> {
-            allCompiledFiles.clear()
-            fsOperations.markChunk(recursively = true, kotlinOnly = true, excludeFiles = compiledFiles)
-            return
-        }
-        constantsChanged -> {
-            fsOperations.markChunk(recursively = true, kotlinOnly = false, excludeFiles = allCompiledFiles)
-            return
-        }
-        protoChanged -> {
-            fsOperations.markChunk(recursively = false, kotlinOnly = true, excludeFiles = allCompiledFiles)
-        }
+private fun ChangesCollector.getDirtyFiles(
+    caches: Iterable<IncrementalCacheCommon>,
+    dataManager: BuildDataManager
+): Set<File> {
+    val reporter = JpsICReporter()
+    val (dirtyLookupSymbols, dirtyClassFqNames) = getDirtyData(caches, reporter)
+    val dirtyFilesFromLookups = dataManager.withLookupStorage {
+        mapLookupSymbolsToFiles(it, dirtyLookupSymbols, reporter)
     }
-
-    if (inlineChanged) {
-        val files = caches.flatMap { it.getFilesToReinline() }
-        fsOperations.markFiles(files, excludeFiles = compiledFiles)
-    }
+    return dirtyFilesFromLookups + mapClassesFqNamesToFiles(caches, dirtyClassFqNames, reporter)
 }
 
-private fun CompilationResult.doProcessChangesUsingLookups(
-        compiledFiles: Set<File>,
-        dataManager: BuildDataManager,
-        fsOperations: FSOperationsHelper,
-        caches: Collection<IncrementalCacheImpl<*>>
-) {
-    val dirtyLookupSymbols = HashSet<LookupSymbol>()
-    val dirtyClassesFqNames = HashSet<FqName>()
-    val lookupStorage = dataManager.getStorage(KotlinDataContainerTarget, JpsLookupStorageProvider)
-    val allCaches: Sequence<IncrementalCacheImpl<*>> = caches.asSequence().flatMap { it.dependentsWithThis }
-
-    KotlinBuilder.LOG.debug("Start processing changes")
-
-    for (change in changes) {
-        KotlinBuilder.LOG.debug("Process $change")
-
-        if (change is ChangeInfo.SignatureChanged) {
-            val fqNames = if (!change.areSubclassesAffected) listOf(change.fqName) else withSubtypes(change.fqName, allCaches)
-
-            for (classFqName in fqNames) {
-                assert(!classFqName.isRoot) { "classFqName is root when processing $change" }
-
-                val scope = classFqName.parent().asString()
-                val name = classFqName.shortName().identifier
-                dirtyLookupSymbols.add(LookupSymbol(name, scope))
-            }
-        }
-        else if (change is ChangeInfo.MembersChanged) {
-            val fqNames = withSubtypes(change.fqName, allCaches)
-            // need to recompile subtypes because changed member might break override
-            dirtyClassesFqNames.addAll(fqNames)
-
-            change.names.forAllPairs(fqNames) { name, fqName ->
-                dirtyLookupSymbols.add(LookupSymbol(name, fqName.asString()))
-            }
-        }
-    }
-
-    val dirtyFiles = HashSet<File>()
-
-    for (lookup in dirtyLookupSymbols) {
-        val affectedFiles = lookupStorage.get(lookup).map(::File)
-
-        KotlinBuilder.LOG.debug { "${lookup.scope}#${lookup.name} caused recompilation of: $affectedFiles" }
-
-        dirtyFiles.addAll(affectedFiles)
-    }
-
-    for (cache in allCaches) {
-        for (dirtyClassFqName in dirtyClassesFqNames) {
-            val srcFile = cache.getSourceFileIfClass(dirtyClassFqName) ?: continue
-            dirtyFiles.add(srcFile)
-        }
-    }
-
-    fsOperations.markFiles(dirtyFiles.asIterable(), excludeFiles = compiledFiles)
-    KotlinBuilder.LOG.debug("End of processing changes")
-}
-
-/**
- * Returns type with its subtypes transitively
- *
- * For example:
- *    open class A
- *    open class B : A()
- *    class C : B()
- * withSubtypes(A) will return [A, B, C]
- */
-private fun withSubtypes(
-        typeFqName: FqName,
-        caches: Sequence<IncrementalCacheImpl<*>>
-): Set<FqName> {
-    val types = LinkedList(listOf(typeFqName))
-    val subtypes = hashSetOf<FqName>()
-
-    while (types.isNotEmpty()) {
-        val unprocessedType = types.pollFirst()
-
-        caches.flatMap { it.getSubtypesOf(unprocessedType) }
-              .filter { it !in subtypes }
-              .forEach { types.addLast(it) }
-
-        subtypes.add(unprocessedType)
-    }
-
-    return subtypes
-}
-
-private fun getLookupTracker(project: JpsProject): LookupTracker {
+private fun getLookupTracker(project: JpsProject, representativeTarget: KotlinModuleBuildTarget<*>): LookupTracker {
     val testLookupTracker = project.testingContext?.lookupTracker ?: LookupTracker.DO_NOTHING
 
-    if (IncrementalCompilation.isExperimental()) return LookupTrackerImpl(testLookupTracker)
+    if (representativeTarget.isIncrementalCompilationEnabled) return LookupTrackerImpl(testLookupTracker)
 
     return testLookupTracker
 }
 
-private fun getIncrementalCaches(chunk: ModuleChunk, context: CompileContext): Map<ModuleBuildTarget, JpsIncrementalCacheImpl> {
-    val dependentTargets = getDependentTargets(chunk, context)
-
+private fun getIncrementalCaches(
+    chunk: ModuleChunk,
+    context: CompileContext
+): Map<ModuleBuildTarget, JpsIncrementalCache> {
     val dataManager = context.projectDescriptor.dataManager
-    val chunkCaches = chunk.targets.keysToMap { dataManager.getKotlinCache(it) }
-    val dependentCaches = dependentTargets.map { dataManager.getKotlinCache(it) }
+    val kotlinBuildTargets = context.kotlinBuildTargets
+
+    val chunkCaches = chunk.targets.keysToMapExceptNulls {
+        dataManager.getKotlinCache(kotlinBuildTargets[it])
+    }
+
+    val dependentTargets = getDependentTargets(chunkCaches.keys, context)
+
+    val dependentCaches = dependentTargets.mapNotNull {
+        dataManager.getKotlinCache(kotlinBuildTargets[it])
+    }
 
     for (chunkCache in chunkCaches.values) {
         for (dependentCache in dependentCaches) {
-            chunkCache.addDependentCache(dependentCache)
+            chunkCache.addJpsDependentCache(dependentCache)
         }
     }
 
     return chunkCaches
 }
 
-private fun getDependentTargets(
-        compilingChunk: ModuleChunk,
-        context: CompileContext
+fun getDependentTargets(
+    compilingChunkTargets: Set<ModuleBuildTarget>,
+    context: CompileContext
 ): Set<ModuleBuildTarget> {
-    val classpathKind = JpsJavaClasspathKind.compile(compilingChunk.targets.any { it.isTests })
+    if (compilingChunkTargets.isEmpty()) return setOf()
+
+    val compilingChunkModules: Set<JpsModule> = compilingChunkTargets.mapTo(mutableSetOf()) { it.module }
+    val compilingChunkIsTests = compilingChunkTargets.any { it.isTests }
+    val classpathKind = JpsJavaClasspathKind.compile(compilingChunkIsTests)
 
     fun dependsOnCompilingChunk(target: BuildTarget<*>): Boolean {
-        if (target !is ModuleBuildTarget) return false
+        if (target !is ModuleBuildTarget || compilingChunkIsTests && !target.isTests) return false
 
         val dependencies = getDependenciesRecursively(target.module, classpathKind)
-        return ContainerUtil.intersects(dependencies, compilingChunk.modules)
+        return ContainerUtil.intersects(dependencies, compilingChunkModules)
     }
 
     val dependentTargets = HashSet<ModuleBuildTarget>()
@@ -898,7 +748,7 @@ private fun getDependentTargets(
 
     // skip chunks that are compiled before compilingChunk
     while (sortedChunks.hasNext()) {
-        if (sortedChunks.next().targets == compilingChunk.targets) break
+        if (sortedChunks.next().targets == compilingChunkTargets) break
     }
 
     // process chunks that compiled after compilingChunk
@@ -912,51 +762,4 @@ private fun getDependentTargets(
 }
 
 private fun getDependenciesRecursively(module: JpsModule, kind: JpsJavaClasspathKind): Set<JpsModule> =
-        JpsJavaExtensionService.dependencies(module).includedIn(kind).recursivelyExportedOnly().modules
-
-// TODO: investigate thread safety
-private val ALL_COMPILED_FILES_KEY = Key.create<MutableSet<File>>("_all_kotlin_compiled_files_")
-private fun getAllCompiledFilesContainer(context: CompileContext): MutableSet<File> {
-    var allCompiledFiles = ALL_COMPILED_FILES_KEY.get(context)
-    if (allCompiledFiles == null) {
-        allCompiledFiles = THashSet(FileUtil.FILE_HASHING_STRATEGY)
-        ALL_COMPILED_FILES_KEY.set(context, allCompiledFiles)
-    }
-    return allCompiledFiles
-}
-
-// TODO: investigate thread safety
-private val PROCESSED_TARGETS_WITH_REMOVED_FILES = Key.create<MutableSet<ModuleBuildTarget>>("_processed_targets_with_removed_files_")
-private fun getProcessedTargetsWithRemovedFilesContainer(context: CompileContext): MutableSet<ModuleBuildTarget> {
-    var set = PROCESSED_TARGETS_WITH_REMOVED_FILES.get(context)
-    if (set == null) {
-        set = HashSet<ModuleBuildTarget>()
-        PROCESSED_TARGETS_WITH_REMOVED_FILES.set(context, set)
-    }
-    return set
-}
-
-private fun hasKotlinDirtyOrRemovedFiles(
-        dirtyFilesHolder: DirtyFilesHolder<JavaSourceRootDescriptor, ModuleBuildTarget>,
-        chunk: ModuleChunk
-): Boolean {
-    if (!dirtyFilesHolder.hasDirtyFiles() && !dirtyFilesHolder.hasRemovedFiles()) return false
-
-    if (!KotlinSourceFileCollector.getDirtySourceFiles(dirtyFilesHolder).isEmpty) return true
-
-    return chunk.targets.any { KotlinSourceFileCollector.getRemovedKotlinFiles(dirtyFilesHolder, it).isNotEmpty() }
-}
-
-private inline fun <T, R> Iterable<T>.forAllPairs(other: Iterable<R>, fn: (T, R)->Unit) {
-    for (t in this) {
-        for (r in other) {
-            fn(t, r)
-        }
-    }
-}
-
-private inline fun Logger.debug(message: ()->String) {
-    if (isDebugEnabled) {
-        debug(message())
-    }
-}
+    JpsJavaExtensionService.dependencies(module).includedIn(kind).recursivelyExportedOnly().modules

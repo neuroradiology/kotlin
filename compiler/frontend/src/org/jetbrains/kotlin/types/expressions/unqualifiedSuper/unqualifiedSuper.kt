@@ -31,13 +31,13 @@ import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtSuperExpression
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.TypeUtils
-import org.jetbrains.kotlin.utils.addToStdlib.singletonList
+import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
 
 
 fun resolveUnqualifiedSuperFromExpressionContext(
-        superExpression: KtSuperExpression,
-        supertypes: Collection<KotlinType>,
-        anyType: KotlinType
+    superExpression: KtSuperExpression,
+    supertypes: Collection<KotlinType>,
+    anyType: KotlinType
 ): Collection<KotlinType> {
     val parentElement = superExpression.parent
 
@@ -49,19 +49,17 @@ fun resolveUnqualifiedSuperFromExpressionContext(
                 val calleeExpression = selectorExpression.calleeExpression
                 if (calleeExpression is KtSimpleNameExpression) {
                     val calleeName = calleeExpression.getReferencedNameAsName()
-                    val location = NoLookupLocation.WHEN_TYPING
-                    if (isCallingMethodOfAny(selectorExpression, calleeName)) {
-                        return resolveSupertypesForMethodOfAny(supertypes, calleeName, location, anyType)
-                    }
-                    else {
-                        return resolveSupertypesByCalleeName(supertypes, calleeName, location)
+                    return if (isCallingMethodOfAny(selectorExpression, calleeName)) {
+                        resolveSupertypesForMethodOfAny(supertypes, calleeName, anyType)
+                    } else {
+                        resolveSupertypesByCalleeName(supertypes, calleeName)
                     }
                 }
             }
             is KtSimpleNameExpression -> {
                 // super.x: x can be a property only
                 // NB there are no properties in kotlin.Any
-                return resolveSupertypesByPropertyName(supertypes, selectorExpression.getReferencedNameAsName(), NoLookupLocation.WHEN_TYPING)
+                return resolveSupertypesByPropertyName(supertypes, selectorExpression.getReferencedNameAsName())
             }
         }
     }
@@ -72,11 +70,11 @@ fun resolveUnqualifiedSuperFromExpressionContext(
 private val ARITY_OF_METHODS_OF_ANY = hashMapOf("hashCode" to 0, "equals" to 1, "toString" to 0)
 
 private fun isCallingMethodOfAny(callExpression: KtCallExpression, calleeName: Name): Boolean =
-        ARITY_OF_METHODS_OF_ANY.getOrElse(calleeName.asString(), { -1 }) == callExpression.valueArguments.size
+    ARITY_OF_METHODS_OF_ANY.getOrElse(calleeName.asString(), { -1 }) == callExpression.valueArguments.size
 
 fun isPossiblyAmbiguousUnqualifiedSuper(superExpression: KtSuperExpression, supertypes: Collection<KotlinType>): Boolean =
-        supertypes.size > 1 ||
-        (supertypes.size == 1 && supertypes.single().isInterface() && isCallingMethodOfAnyWithSuper(superExpression))
+    supertypes.size > 1 ||
+            (supertypes.size == 1 && supertypes.single().isInterface() && isCallingMethodOfAnyWithSuper(superExpression))
 
 private fun isCallingMethodOfAnyWithSuper(superExpression: KtSuperExpression): Boolean {
     val parent = superExpression.parent
@@ -94,51 +92,75 @@ private fun isCallingMethodOfAnyWithSuper(superExpression: KtSuperExpression): B
     return false
 }
 
-private fun KotlinType.isInterface(): Boolean =
-        TypeUtils.getClassDescriptor(this)?.kind == ClassKind.INTERFACE
+private val LOOKUP_LOCATION = NoLookupLocation.WHEN_GET_SUPER_MEMBERS
 
-private fun resolveSupertypesForMethodOfAny(supertypes: Collection<KotlinType>, calleeName: Name, location: LookupLocation, anyType: KotlinType): Collection<KotlinType> {
-    val typesWithConcreteOverride = resolveSupertypesByMembers(supertypes, false) { getFunctionMembers(it, calleeName, location) }
+private fun KotlinType.isInterface(): Boolean =
+    TypeUtils.getClassDescriptor(this)?.kind == ClassKind.INTERFACE
+
+private fun resolveSupertypesForMethodOfAny(
+    supertypes: Collection<KotlinType>,
+    calleeName: Name,
+    anyType: KotlinType
+): Collection<KotlinType> {
+    val typesWithConcreteOverride = resolveSupertypesByMembers(supertypes, false) {
+        getFunctionMembers(it, calleeName, LOOKUP_LOCATION)
+    }
     return if (typesWithConcreteOverride.isNotEmpty())
         typesWithConcreteOverride
     else
-        anyType.singletonList()
+        listOf(anyType)
 }
 
-private fun resolveSupertypesByCalleeName(supertypes: Collection<KotlinType>, calleeName: Name, location: LookupLocation): Collection<KotlinType> =
-        resolveSupertypesByMembers(supertypes, true) { getFunctionMembers(it, calleeName, location) + getPropertyMembers(it, calleeName, location) }
+private fun resolveSupertypesByCalleeName(supertypes: Collection<KotlinType>, calleeName: Name): Collection<KotlinType> =
+    resolveSupertypesByMembers(supertypes, true) {
+        getFunctionMembers(it, calleeName, LOOKUP_LOCATION) +
+                getPropertyMembers(it, calleeName, LOOKUP_LOCATION)
+    }
 
-private fun resolveSupertypesByPropertyName(supertypes: Collection<KotlinType>, propertyName: Name, location: LookupLocation): Collection<KotlinType> =
-        resolveSupertypesByMembers(supertypes, true) { getPropertyMembers(it, propertyName, location) }
+private fun resolveSupertypesByPropertyName(supertypes: Collection<KotlinType>, propertyName: Name): Collection<KotlinType> =
+    resolveSupertypesByMembers(supertypes, true) {
+        getPropertyMembers(it, propertyName, LOOKUP_LOCATION)
+    }
 
 private inline fun resolveSupertypesByMembers(
-        supertypes: Collection<KotlinType>,
-        allowArbitraryMembers: Boolean,
-        getMembers: (KotlinType) -> Collection<MemberDescriptor>
+    supertypes: Collection<KotlinType>,
+    allowNonConcreteMembers: Boolean,
+    getMembers: (KotlinType) -> Collection<MemberDescriptor>
 ): Collection<KotlinType> {
     val typesWithConcreteMembers = SmartList<KotlinType>()
-    val typesWithArbitraryMembers = SmartList<KotlinType>()
+    val typesWithNonConcreteMembers = SmartList<KotlinType>()
 
     for (supertype in supertypes) {
         val members = getMembers(supertype)
         if (members.isNotEmpty()) {
-            typesWithArbitraryMembers.add(supertype)
-            if (members.any { isConcreteMember(supertype, it) }) {
+            if (members.any { isConcreteMember(supertype, it) })
                 typesWithConcreteMembers.add(supertype)
-            }
+            else
+                typesWithNonConcreteMembers.add(supertype)
         }
     }
 
-    return if (typesWithConcreteMembers.isNotEmpty()) typesWithConcreteMembers
-        else if (allowArbitraryMembers) typesWithArbitraryMembers
-        else emptyList<KotlinType>()
+    typesWithConcreteMembers.removeAll { typeWithConcreteMember ->
+        typesWithNonConcreteMembers.any { typeWithNonConcreteMember ->
+            KotlinTypeChecker.DEFAULT.isSubtypeOf(typeWithNonConcreteMember, typeWithConcreteMember)
+        }
+    }
+
+    return when {
+        typesWithConcreteMembers.isNotEmpty() ->
+            typesWithConcreteMembers
+        allowNonConcreteMembers ->
+            typesWithNonConcreteMembers
+        else ->
+            emptyList()
+    }
 }
 
 private fun getFunctionMembers(type: KotlinType, name: Name, location: LookupLocation): Collection<MemberDescriptor> =
-        type.memberScope.getContributedFunctions(name, location)
+    type.memberScope.getContributedFunctions(name, location)
 
 private fun getPropertyMembers(type: KotlinType, name: Name, location: LookupLocation): Collection<MemberDescriptor> =
-        type.memberScope.getContributedVariables(name, location).filterIsInstanceTo(SmartList<MemberDescriptor>())
+    type.memberScope.getContributedVariables(name, location).filterIsInstanceTo(SmartList<MemberDescriptor>())
 
 private fun isConcreteMember(supertype: KotlinType, memberDescriptor: MemberDescriptor): Boolean {
     // "Concrete member" is a function or a property that is not abstract,

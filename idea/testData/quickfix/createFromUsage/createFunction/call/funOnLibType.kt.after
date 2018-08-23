@@ -1,4 +1,4 @@
-// "Create extension function 'foo'" "true"
+// "Create extension function 'Int.foo'" "true"
 // WITH_RUNTIME
 
 class A<T>(val n: T)
@@ -7,6 +7,6 @@ fun test() {
     val a: A<Int> = 2.foo(A(1))
 }
 
-fun Int.foo(a: A<Int>): A<Int> {
-    throw UnsupportedOperationException("not implemented") //To change body of created functions use File | Settings | File Templates.
+private fun Int.foo(a: A<Int>): A<Int> {
+    TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
 }

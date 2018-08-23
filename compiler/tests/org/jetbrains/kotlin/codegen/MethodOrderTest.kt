@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,11 @@
 package org.jetbrains.kotlin.codegen
 
 import junit.framework.TestCase
-import org.jetbrains.asm4.ClassReader
-import org.jetbrains.asm4.ClassVisitor
-import org.jetbrains.asm4.MethodVisitor
-import org.jetbrains.asm4.Opcodes
 import org.jetbrains.kotlin.test.ConfigurationKind
+import org.jetbrains.org.objectweb.asm.ClassReader
+import org.jetbrains.org.objectweb.asm.ClassVisitor
+import org.jetbrains.org.objectweb.asm.MethodVisitor
+import org.jetbrains.org.objectweb.asm.Opcodes
 import java.util.*
 
 class MethodOrderTest: CodegenTestCase() {
@@ -104,6 +104,58 @@ class MethodOrderTest: CodegenTestCase() {
                         "access\$getA\$p(LOuter;)I",
                         "access\$c(LOuter;)V"
                 )
+        )
+    }
+
+    fun testDeterministicDefaultMethodImplOrder() {
+        doTest(
+                """
+                    interface Base<K, V> {
+                        fun getSize(): Int = 5
+                        fun size(): Int = getSize()
+                        fun getKeys(): Int = 4
+                        fun keySet() = getKeys()
+                        fun getEntries(): Int = 3
+                        fun entrySet() = getEntries()
+                        fun getValues(): Int = 2
+                        fun values() = getValues()
+
+                        fun removeEldestEntry(eldest: Any?): Boolean
+                    }
+
+                    class MinMap<K, V> : Base<K, V> {
+                        override fun removeEldestEntry(eldest: Any?) = true
+                    }
+                """,
+                "MinMap",
+                listOf("removeEldestEntry(Ljava/lang/Object;)Z", "<init>()V", "getSize()I", "size()I", "getKeys()I", "keySet()I", "getEntries()I", "entrySet()I", "getValues()I", "values()I")
+        )
+    }
+
+    fun testBridgeOrder() {
+        doTest(
+            """
+                interface IrElement
+                class IrClassContext
+
+                interface IrElementVisitor<out R, in D> {
+                    fun visitElement(element: IrElement, data: D): R
+                }
+
+                interface IrElementTransformer<in D> : IrElementVisitor<IrElement, D> {
+                    override fun visitElement(element: IrElement, data: D): IrElement =
+                            element.also { throw RuntimeException() }
+                }
+
+                abstract class ClassLowerWithContext : IrElementTransformer<IrClassContext?>
+            """,
+            "ClassLowerWithContext",
+            listOf(
+                "<init>()V",
+                "visitElement(LIrElement;LIrClassContext;)LIrElement;",
+                "visitElement(LIrElement;Ljava/lang/Object;)Ljava/lang/Object;",
+                "visitElement(LIrElement;Ljava/lang/Object;)LIrElement;"
+            )
         )
     }
 

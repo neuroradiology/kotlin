@@ -1,5 +1,4 @@
-// "Create extension property 'foo'" "true"
-// ERROR: Property must be initialized
+// "Create extension property 'Int.foo'" "true"
 // WITH_RUNTIME
 
 class A<T>(val n: T)

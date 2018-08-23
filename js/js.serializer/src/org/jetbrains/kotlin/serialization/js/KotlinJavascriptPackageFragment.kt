@@ -16,38 +16,85 @@
 
 package org.jetbrains.kotlin.serialization.js
 
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
+import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
+import org.jetbrains.kotlin.descriptors.SourceFile
+import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.deserialization.NameResolverImpl
+import org.jetbrains.kotlin.metadata.js.JsProtoBuf
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.serialization.ProtoBuf
-import org.jetbrains.kotlin.serialization.deserialization.DeserializedPackageFragment
-import org.jetbrains.kotlin.serialization.deserialization.NameResolverImpl
-import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedPackageMemberScope
+import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.serialization.deserialization.*
+import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedContainerSource
 import org.jetbrains.kotlin.storage.StorageManager
-import java.io.InputStream
+import org.jetbrains.kotlin.storage.getValue
+import org.jetbrains.kotlin.utils.JsMetadataVersion
 
 class KotlinJavascriptPackageFragment(
-        fqName: FqName,
-        storageManager: StorageManager,
-        module: ModuleDescriptor,
-        loadResource: (path: String) -> InputStream?
-) : DeserializedPackageFragment(fqName, storageManager, module, KotlinJavascriptSerializedResourcePaths, loadResource) {
-    override val nameResolver = NameResolverImpl.read(loadResourceSure(serializedResourcePaths.getStringTableFilePath(fqName)))
+    fqName: FqName,
+    storageManager: StorageManager,
+    module: ModuleDescriptor,
+    proto: ProtoBuf.PackageFragment,
+    header: JsProtoBuf.Header,
+    metadataVersion: JsMetadataVersion,
+    configuration: DeserializationConfiguration
+) : DeserializedPackageFragmentImpl(
+    fqName, storageManager, module, proto, metadataVersion, JsContainerSource(fqName, header, configuration)
+) {
+    val fileMap: Map<Int, FileHolder> =
+        proto.getExtension(JsProtoBuf.packageFragmentFiles).fileList.withIndex().associate { (index, file) ->
+            (if (file.hasId()) file.id else index) to FileHolder(file.annotationList)
+        }
 
-    override val classIdToProto: Map<ClassId, ProtoBuf.Class>? get() = null
+    private lateinit var annotationDeserializer: AnnotationDeserializer
 
-    override fun computeMemberScope(): DeserializedPackageMemberScope {
-        val packageStream = loadResourceSure(serializedResourcePaths.getPackageFilePath(fqName))
-        val packageProto = ProtoBuf.Package.parseFrom(packageStream, serializedResourcePaths.extensionRegistry)
-        return DeserializedPackageMemberScope(
-                this, packageProto, nameResolver, packagePartSource = null, components = components, classNames = { loadClassNames() }
-        )
+    override fun initialize(components: DeserializationComponents) {
+        super.initialize(components)
+        this.annotationDeserializer = AnnotationDeserializer(components.moduleDescriptor, components.notFoundClasses)
     }
 
-    private fun loadClassNames(): Collection<Name> {
-        val classesStream = loadResourceSure(KotlinJavascriptSerializedResourcePaths.getClassesInPackageFilePath(fqName))
-        val classesProto = JsProtoBuf.Classes.parseFrom(classesStream, serializedResourcePaths.extensionRegistry)
-        return classesProto.classNameList?.map { id -> nameResolver.getName(id) } ?: listOf()
+    fun getContainingFileAnnotations(descriptor: DeclarationDescriptor): List<AnnotationDescriptor> {
+        if (DescriptorUtils.getParentOfType(descriptor, PackageFragmentDescriptor::class.java) != this) {
+            throw IllegalArgumentException("Provided descriptor $descriptor does not belong to this package $this")
+        }
+        val fileId = descriptor.extractFileId()
+
+        return fileId?.let { fileMap[it] }?.annotations.orEmpty()
+    }
+
+    inner class FileHolder(private val annotationsProto: List<ProtoBuf.Annotation>) {
+        val annotations: List<AnnotationDescriptor> by storageManager.createLazyValue {
+            annotationsProto.map { annotationDeserializer.deserializeAnnotation(it, nameResolver) }
+        }
+    }
+
+    class JsContainerSource(
+        private val fqName: FqName,
+        header: JsProtoBuf.Header,
+        configuration: DeserializationConfiguration
+    ) : DeserializedContainerSource {
+        val annotations: List<ClassId> =
+            if (header.annotationCount == 0) emptyList()
+            else NameResolverImpl(header.strings, header.qualifiedNames).let { nameResolver ->
+                // TODO: read arguments of module annotations
+                header.annotationList.map { annotation -> nameResolver.getClassId(annotation.id) }
+            }
+
+        // TODO
+        override fun getContainingFile(): SourceFile = SourceFile.NO_SOURCE_FILE
+
+        // This is null because we look for incompatible libraries in dependencies in the beginning of the compilation anyway,
+        // and refuse to compile against them completely
+        override val incompatibility: IncompatibleVersionErrorData<*>?
+            get() = null
+
+        override val isPreReleaseInvisible: Boolean =
+            configuration.reportErrorsOnPreReleaseDependencies && (header.flags and 1) != 0
+
+        override val presentableString: String
+            get() = "Package '$fqName'"
     }
 }

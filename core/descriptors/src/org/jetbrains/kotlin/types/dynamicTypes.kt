@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,9 @@
 package org.jetbrains.kotlin.types
 
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.descriptors.annotations.Annotations
+import org.jetbrains.kotlin.renderer.DescriptorRenderer
+import org.jetbrains.kotlin.renderer.DescriptorRendererOptions
 import org.jetbrains.kotlin.types.typeUtil.builtIns
 
 open class DynamicTypesSettings {
@@ -29,45 +32,19 @@ class DynamicTypesAllowed: DynamicTypesSettings() {
         get() = true
 }
 
-interface Dynamicity : TypeCapability
+fun KotlinType.isDynamic(): Boolean = unwrap() is DynamicType
 
-fun KotlinType.isDynamic(): Boolean = this.getCapability(Dynamicity::class.java) != null
+fun createDynamicType(builtIns: KotlinBuiltIns) = DynamicType(builtIns, Annotations.EMPTY)
 
-fun createDynamicType(builtIns: KotlinBuiltIns) = object : DelegatingFlexibleType(
-        builtIns.nothingType,
-        builtIns.nullableAnyType,
-        DynamicTypeCapabilities
-) {}
+class DynamicType(builtIns: KotlinBuiltIns, override val annotations: Annotations) : FlexibleType(builtIns.nothingType, builtIns.nullableAnyType) {
+    override val delegate: SimpleType get() = upperBound
 
-object DynamicTypeCapabilities : FlexibleTypeCapabilities {
-    override val id: String get() = "kotlin.DynamicType"
+    // Nullability has no effect on dynamics
+    override fun makeNullableAsSpecified(newNullability: Boolean): DynamicType = this
 
-    override fun <T : TypeCapability> getCapability(capabilityClass: Class<T>, jetType: KotlinType, flexibility: Flexibility): T? {
-        @Suppress("UNCHECKED_CAST")
-        return if (capabilityClass in Impl.capabilityClasses) Impl(flexibility) as T else null
-    }
+    override val isMarkedNullable: Boolean get() = false
 
-    private class Impl(flexibility: Flexibility) : Dynamicity, Specificity, NullAwareness, FlexibleTypeDelegation {
-        companion object {
-            internal val capabilityClasses = hashSetOf(
-                    Dynamicity::class.java,
-                    Specificity::class.java,
-                    NullAwareness::class.java,
-                    FlexibleTypeDelegation::class.java
-            )
-        }
+    override fun replaceAnnotations(newAnnotations: Annotations): DynamicType = DynamicType(delegate.builtIns, newAnnotations)
 
-        override val delegateType: KotlinType = flexibility.upperBound
-
-        override fun getSpecificityRelationTo(otherType: KotlinType): Specificity.Relation {
-            return if (!otherType.isDynamic()) Specificity.Relation.LESS_SPECIFIC else Specificity.Relation.DONT_KNOW
-        }
-
-        override fun makeNullableAsSpecified(nullable: Boolean): KotlinType {
-            // Nullability has no effect on dynamics
-            return createDynamicType(delegateType.builtIns)
-        }
-
-        override fun computeIsNullable() = false
-    }
+    override fun render(renderer: DescriptorRenderer, options: DescriptorRendererOptions): String = "dynamic"
 }

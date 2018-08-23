@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,12 @@
 
 package org.jetbrains.kotlin.resolve.calls.tasks;
 
-import com.google.common.collect.Sets;
 import com.intellij.lang.ASTNode;
 import com.intellij.psi.PsiElement;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.*;
+import org.jetbrains.kotlin.diagnostics.Diagnostic;
 import org.jetbrains.kotlin.diagnostics.DiagnosticUtilsKt;
 import org.jetbrains.kotlin.lexer.KtToken;
 import org.jetbrains.kotlin.lexer.KtTokens;
@@ -43,6 +44,7 @@ import org.jetbrains.kotlin.types.Variance;
 import org.jetbrains.kotlin.types.expressions.OperatorConventions;
 
 import java.util.Collection;
+import java.util.HashSet;
 
 import static org.jetbrains.kotlin.diagnostics.Errors.*;
 import static org.jetbrains.kotlin.resolve.BindingContext.AMBIGUOUS_REFERENCE_TARGET;
@@ -62,7 +64,7 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
 
     @Override
     public <D extends CallableDescriptor> void recordAmbiguity(@NotNull BindingTrace trace, @NotNull Collection<? extends ResolvedCall<D>> candidates) {
-        Collection<D> descriptors = Sets.newHashSet();
+        Collection<D> descriptors = new HashSet<>();
         for (ResolvedCall<D> candidate : candidates) {
             descriptors.add(candidate.getCandidateDescriptor());
         }
@@ -103,14 +105,13 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
     }
 
     @Override
-    public void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount) {
+    public void wrongNumberOfTypeArguments(
+            @NotNull BindingTrace trace, int expectedTypeArgumentCount, @NotNull CallableDescriptor descriptor
+    ) {
         KtTypeArgumentList typeArgumentList = call.getTypeArgumentList();
-        if (typeArgumentList != null) {
-            trace.report(WRONG_NUMBER_OF_TYPE_ARGUMENTS.on(typeArgumentList, expectedTypeArgumentCount));
-        }
-        else {
-            trace.report(WRONG_NUMBER_OF_TYPE_ARGUMENTS.on(reference, expectedTypeArgumentCount));
-        }
+        trace.report(WRONG_NUMBER_OF_TYPE_ARGUMENTS.on(
+                typeArgumentList != null ? typeArgumentList : reference, expectedTypeArgumentCount, descriptor
+        ));
     }
 
     @Override
@@ -174,18 +175,7 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
         else {
             PsiElement callElement = call.getCallElement();
             if (callElement instanceof KtBinaryExpression) {
-                KtBinaryExpression binaryExpression = (KtBinaryExpression)callElement;
-                KtSimpleNameExpression operationReference = binaryExpression.getOperationReference();
-
-                Name operationString = operationReference.getReferencedNameElementType() == KtTokens.IDENTIFIER ?
-                                       Name.identifier(operationReference.getText()) :
-                                       OperatorConventions.getNameForOperationSymbol((KtToken) operationReference.getReferencedNameElementType());
-
-                KtExpression left = binaryExpression.getLeft();
-                KtExpression right = binaryExpression.getRight();
-                if (left != null && right != null) {
-                    trace.report(UNSAFE_INFIX_CALL.on(reference, left.getText(), operationString.asString(), right.getText()));
-                }
+                reportUnsafeCallOnBinaryExpression(trace, (KtBinaryExpression) callElement);
             }
             else if (isCallForImplicitInvoke) {
                 trace.report(UNSAFE_IMPLICIT_INVOKE_CALL.on(reference, type));
@@ -196,6 +186,30 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
         }
     }
 
+    private void reportUnsafeCallOnBinaryExpression(@NotNull BindingTrace trace, @NotNull KtBinaryExpression binaryExpression) {
+        KtSimpleNameExpression operationReference = binaryExpression.getOperationReference();
+        boolean isInfixCall = operationReference.getReferencedNameElementType() == KtTokens.IDENTIFIER;
+        Name operationString = isInfixCall ?
+                               Name.identifier(operationReference.getText()) :
+                               OperatorConventions.getNameForOperationSymbol((KtToken) operationReference.getReferencedNameElementType());
+
+        if (operationString == null) return;
+
+        KtExpression left = binaryExpression.getLeft();
+        KtExpression right = binaryExpression.getRight();
+        if (left == null || right == null) return;
+
+        if (isInfixCall) {
+            trace.report(UNSAFE_INFIX_CALL.on(reference, left, operationString.asString(), right));
+        }
+        else {
+            boolean inOperation = KtPsiUtil.isInOrNotInOperation(binaryExpression);
+            KtExpression receiver = inOperation ? right : left;
+            KtExpression argument = inOperation ? left : right;
+            trace.report(UNSAFE_OPERATOR_CALL.on(reference, receiver, operationString.asString(), argument));
+        }
+    }
+
     @Override
     public void invisibleMember(@NotNull BindingTrace trace, @NotNull DeclarationDescriptorWithVisibility descriptor) {
         trace.report(INVISIBLE_MEMBER.on(call.getCallElement(), descriptor, descriptor.getVisibility(), descriptor));
@@ -203,6 +217,19 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
 
     @Override
     public void typeInferenceFailed(@NotNull ResolutionContext<?> context, @NotNull InferenceErrorData data) {
+        Diagnostic diagnostic = typeInferenceFailedDiagnostic(context, data, reference, call);
+        if (diagnostic != null) {
+            context.trace.report(diagnostic);
+        }
+    }
+
+    @Nullable
+    public static Diagnostic typeInferenceFailedDiagnostic(
+            @NotNull ResolutionContext<?> context,
+            @NotNull InferenceErrorData data,
+            @NotNull KtExpression reference,
+            @NotNull Call call
+    ) {
         ConstraintSystem constraintSystem = data.constraintSystem;
         ConstraintSystemStatus status = constraintSystem.getStatus();
         assert !status.isSuccessful() : "Report error only for not successful constraint system";
@@ -210,12 +237,11 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
         if (status.hasErrorInConstrainingTypes()) {
             // Do not report type inference errors if there is one in the arguments
             // (it's useful, when the arguments, e.g. lambdas or calls are incomplete)
-            return;
+            return null;
         }
-        BindingTrace trace = context.trace;
         if (status.hasOnlyErrorsDerivedFrom(EXPECTED_TYPE_POSITION)) {
             KotlinType declaredReturnType = data.descriptor.getReturnType();
-            if (declaredReturnType == null) return;
+            if (declaredReturnType == null) return null;
 
             ConstraintSystem systemWithoutExpectedTypeConstraint = filterConstraintsOut(constraintSystem, EXPECTED_TYPE_POSITION);
             KotlinType substitutedReturnType = systemWithoutExpectedTypeConstraint.getResultingSubstitutor().substitute(
@@ -225,36 +251,33 @@ public abstract class AbstractTracingStrategy implements TracingStrategy {
             assert !noExpectedType(data.expectedType) : "Expected type doesn't exist, but there is an expected type mismatch error";
             if (!DiagnosticUtilsKt.reportTypeMismatchDueToTypeProjection(
                     context, call.getCallElement(), data.expectedType, substitutedReturnType)) {
-                trace.report(TYPE_INFERENCE_EXPECTED_TYPE_MISMATCH.on(call.getCallElement(), data.expectedType, substitutedReturnType));
+                return TYPE_INFERENCE_EXPECTED_TYPE_MISMATCH.on(call.getCallElement(), data.expectedType, substitutedReturnType);
             }
         }
         else if (status.hasCannotCaptureTypesError()) {
-            trace.report(TYPE_INFERENCE_CANNOT_CAPTURE_TYPES.on(reference, data));
+            return TYPE_INFERENCE_CANNOT_CAPTURE_TYPES.on(reference, data);
         }
         else if (status.hasViolatedUpperBound()) {
-            trace.report(TYPE_INFERENCE_UPPER_BOUND_VIOLATED.on(reference, data));
+            return TYPE_INFERENCE_UPPER_BOUND_VIOLATED.on(reference, data);
         }
         else if (status.hasParameterConstraintError()) {
-            trace.report(TYPE_INFERENCE_PARAMETER_CONSTRAINT_ERROR.on(reference, data));
+            return TYPE_INFERENCE_PARAMETER_CONSTRAINT_ERROR.on(reference, data);
         }
         else if (status.hasConflictingConstraints()) {
-            trace.report(TYPE_INFERENCE_CONFLICTING_SUBSTITUTIONS.on(reference, data));
+            return TYPE_INFERENCE_CONFLICTING_SUBSTITUTIONS.on(reference, data);
         }
         else if (status.hasTypeInferenceIncorporationError()) {
-            trace.report(TYPE_INFERENCE_INCORPORATION_ERROR.on(reference));
+            return TYPE_INFERENCE_INCORPORATION_ERROR.on(reference);
         }
         else if (status.hasTypeParameterWithUnsatisfiedOnlyInputTypesError()) {
             //todo
-            trace.report(TYPE_INFERENCE_ONLY_INPUT_TYPES.on(reference, data.descriptor.getTypeParameters().get(0)));
+            return TYPE_INFERENCE_ONLY_INPUT_TYPES.on(reference, data.descriptor.getTypeParameters().get(0));
         }
         else {
             assert status.hasUnknownParameters();
-            trace.report(TYPE_INFERENCE_NO_INFORMATION_FOR_PARAMETER.on(reference, data));
+            return TYPE_INFERENCE_NO_INFORMATION_FOR_PARAMETER.on(reference, data);
         }
-    }
 
-    @Override
-    public void nonExtensionFunctionCalledAsExtension(@NotNull BindingTrace trace) {
-        trace.report(INVOKE_EXTENSION_ON_NOT_EXTENSION_FUNCTION.on(reference, reference));
+        return null;
     }
 }

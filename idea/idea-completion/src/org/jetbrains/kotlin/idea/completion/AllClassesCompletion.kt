@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,15 +21,19 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.PrefixMatcher
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteral
-import org.jetbrains.kotlin.asJava.KtLightClass
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.ClassifierDescriptorWithTypeParameters
 import org.jetbrains.kotlin.idea.core.KotlinIndicesHelper
-import org.jetbrains.kotlin.idea.project.ProjectStructureUtil
+import org.jetbrains.kotlin.idea.core.isJavaClassNotToBeUsedInKotlin
+import org.jetbrains.kotlin.idea.project.TargetPlatformDetector
+import org.jetbrains.kotlin.idea.refactoring.fqName.getKotlinFqName
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.load.java.JvmAnnotationNames
 import org.jetbrains.kotlin.load.kotlin.header.KotlinClassHeader
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.resolve.scopes.getDescriptorsFiltered
@@ -38,25 +42,33 @@ class AllClassesCompletion(private val parameters: CompletionParameters,
                            private val kotlinIndicesHelper: KotlinIndicesHelper,
                            private val prefixMatcher: PrefixMatcher,
                            private val resolutionFacade: ResolutionFacade,
-                           private val kindFilter: (ClassKind) -> Boolean
+                           private val kindFilter: (ClassKind) -> Boolean,
+                           private val includeTypeAliases: Boolean,
+                           private val includeJavaClassesNotToBeUsed: Boolean
 ) {
-    fun collect(classDescriptorCollector: (ClassDescriptor) -> Unit, javaClassCollector: (PsiClass) -> Unit) {
+    fun collect(classifierDescriptorCollector: (ClassifierDescriptorWithTypeParameters) -> Unit, javaClassCollector: (PsiClass) -> Unit) {
 
         //TODO: this is a temporary solution until we have built-ins in indices
         // we need only nested classes because top-level built-ins are all added through default imports
-        for (builtinPackage in resolutionFacade.moduleDescriptor.builtIns.builtinsPackageFragments) {
+        for (builtinPackage in resolutionFacade.moduleDescriptor.builtIns.builtInsPackageFragmentsImportedByDefault) {
             collectClassesFromScope(builtinPackage.getMemberScope()) {
                 if (it.containingDeclaration is ClassDescriptor) {
-                    classDescriptorCollector(it)
+                    classifierDescriptorCollector(it)
                 }
             }
         }
 
         kotlinIndicesHelper
-                .getKotlinClasses({ prefixMatcher.prefixMatches(it) }, kindFilter)
-                .forEach { classDescriptorCollector(it) }
+                .getKotlinClasses({ prefixMatcher.prefixMatches(it) }, kindFilter = kindFilter)
+                .forEach { classifierDescriptorCollector(it) }
 
-        if (!ProjectStructureUtil.isJsKotlinModule(parameters.originalFile as KtFile)) {
+        if (includeTypeAliases) {
+            kotlinIndicesHelper
+                    .getTopLevelTypeAliases(prefixMatcher.asStringNameFilter())
+                    .forEach { classifierDescriptorCollector(it) }
+        }
+
+        if (TargetPlatformDetector.getPlatform(parameters.originalFile as KtFile) == JvmPlatform) {
             addAdaptedJavaCompletion(javaClassCollector)
         }
     }
@@ -84,7 +96,7 @@ class AllClassesCompletion(private val parameters: CompletionParameters,
                     psiClass.isEnum -> ClassKind.ENUM_CLASS
                     else -> ClassKind.CLASS
                 }
-                if (kindFilter(kind)) {
+                if (kindFilter(kind) && !isNotToBeUsed(psiClass)) {
                     collector(psiClass)
                 }
             }
@@ -96,5 +108,11 @@ class AllClassesCompletion(private val parameters: CompletionParameters,
         val metadata = modifierList?.findAnnotation(JvmAnnotationNames.METADATA_FQ_NAME.asString())
         return (metadata?.findAttributeValue(JvmAnnotationNames.KIND_FIELD_NAME) as? PsiLiteral)?.value ==
                 KotlinClassHeader.Kind.SYNTHETIC_CLASS.id
+    }
+
+    private fun isNotToBeUsed(javaClass: PsiClass): Boolean {
+        if (includeJavaClassesNotToBeUsed) return false
+        val fqName = javaClass.getKotlinFqName()
+        return fqName != null && isJavaClassNotToBeUsedInKotlin(fqName)
     }
 }

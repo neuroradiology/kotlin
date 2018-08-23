@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.idea.analysis.analyzeInContext
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
 import org.jetbrains.kotlin.idea.util.getResolutionScope
@@ -42,8 +43,8 @@ class ExtractableSubstringInfo(
 ) {
     private fun guessLiteralType(literal: String): KotlinType {
         val facade = template.getResolutionFacade()
-        val builtIns = facade.moduleDescriptor.builtIns
-        val stringType = builtIns.stringType
+        val module = facade.moduleDescriptor
+        val stringType = module.builtIns.stringType
 
         if (startEntry != endEntry || startEntry !is KtLiteralStringTemplateEntry) return stringType
 
@@ -54,10 +55,11 @@ class ExtractableSubstringInfo(
 
         val tempContext = expr.analyzeInContext(scope, template)
         val trace = DelegatingBindingTrace(tempContext, "Evaluate '$literal'")
-        val value = ConstantExpressionEvaluator(builtIns).evaluateExpression(expr, trace)
+        val languageVersionSettings = facade.getFrontendService(LanguageVersionSettings::class.java)
+        val value = ConstantExpressionEvaluator(module, languageVersionSettings, facade.project).evaluateExpression(expr, trace)
         if (value == null || value.isError) return stringType
 
-        return value.toConstantValue(TypeUtils.NO_EXPECTED_TYPE).type
+        return value.toConstantValue(TypeUtils.NO_EXPECTED_TYPE).getType(module)
     }
 
     val template: KtStringTemplateExpression = startEntry.parent as KtStringTemplateExpression

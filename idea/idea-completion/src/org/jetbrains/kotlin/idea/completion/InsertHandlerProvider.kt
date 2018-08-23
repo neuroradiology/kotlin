@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,27 +18,26 @@ package org.jetbrains.kotlin.idea.completion
 
 import com.intellij.codeInsight.completion.InsertHandler
 import com.intellij.codeInsight.lookup.LookupElement
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.getReturnTypeFromFunctionType
+import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.idea.completion.handlers.*
 import org.jetbrains.kotlin.idea.core.ExpectedInfo
 import org.jetbrains.kotlin.idea.core.fuzzyType
 import org.jetbrains.kotlin.idea.util.CallType
 import org.jetbrains.kotlin.idea.util.fuzzyReturnType
+import org.jetbrains.kotlin.resolve.calls.components.hasDefaultValue
+import org.jetbrains.kotlin.resolve.calls.util.getValueParametersCountFromFunctionType
 import org.jetbrains.kotlin.types.KotlinType
 import java.util.*
 
 class InsertHandlerProvider(
-        private val callType: CallType<*>?,
+        private val callType: CallType<*>,
         expectedInfosCalculator: () -> Collection<ExpectedInfo>
 ) {
     private val expectedInfos by lazy(LazyThreadSafetyMode.NONE) { expectedInfosCalculator() }
 
     fun insertHandler(descriptor: DeclarationDescriptor): InsertHandler<LookupElement> {
-        if (callType == null) {
-            error("Cannot create InsertHandler when no CallType known")
-        }
-
         return when (descriptor) {
             is FunctionDescriptor -> {
                 when (callType) {
@@ -46,35 +45,38 @@ class InsertHandlerProvider(
                         val needTypeArguments = needTypeArguments(descriptor)
                         val parameters = descriptor.valueParameters
                         when (parameters.size) {
-                            0 -> KotlinFunctionInsertHandler.Normal(needTypeArguments, inputValueArguments = false)
+                            0 -> KotlinFunctionInsertHandler.Normal(callType, needTypeArguments, inputValueArguments = false)
 
                             1 -> {
                                 if (callType != CallType.SUPER_MEMBERS) { // for super call we don't suggest to generate "super.foo { ... }" (seems to be non-typical use)
-                                    val parameterType = parameters.single().type
-                                    if (KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(parameterType)) {
-                                        val parameterCount = KotlinBuiltIns.getParameterTypeProjectionsFromFunctionType(parameterType).size
-                                        if (parameterCount <= 1) {
+                                    val parameter = parameters.single()
+                                    val parameterType = parameter.type
+                                    if (parameterType.isFunctionType) {
+                                        if (getValueParametersCountFromFunctionType(parameterType) <= 1 && !parameter.hasDefaultValue()) {
                                             // otherwise additional item with lambda template is to be added
-                                            return KotlinFunctionInsertHandler.Normal(needTypeArguments, inputValueArguments = false, lambdaInfo = GenerateLambdaInfo(parameterType, false))
+                                            return KotlinFunctionInsertHandler.Normal(
+                                                    callType, needTypeArguments, inputValueArguments = false,
+                                                    lambdaInfo = GenerateLambdaInfo(parameterType, false)
+                                            )
                                         }
                                     }
                                 }
 
-                                KotlinFunctionInsertHandler.Normal(needTypeArguments, inputValueArguments = true)
+                                KotlinFunctionInsertHandler.Normal(callType, needTypeArguments, inputValueArguments = true)
                             }
 
-                            else -> KotlinFunctionInsertHandler.Normal(needTypeArguments, inputValueArguments = true)
+                            else -> KotlinFunctionInsertHandler.Normal(callType, needTypeArguments, inputValueArguments = true)
                         }
                     }
 
                     CallType.INFIX -> KotlinFunctionInsertHandler.Infix
 
-                    else -> KotlinFunctionInsertHandler.OnlyName
+                    else -> KotlinFunctionInsertHandler.OnlyName(callType)
                 }
 
             }
 
-            is PropertyDescriptor -> KotlinPropertyInsertHandler
+            is PropertyDescriptor -> KotlinPropertyInsertHandler(callType)
 
             is ClassifierDescriptor -> KotlinClassifierInsertHandler
 
@@ -92,13 +94,16 @@ class InsertHandlerProvider(
 
         fun addPotentiallyInferred(type: KotlinType) {
             val descriptor = type.constructor.declarationDescriptor as? TypeParameterDescriptor
-            if (descriptor != null && descriptor in typeParameters) {
+            if (descriptor != null && descriptor in typeParameters && descriptor !in potentiallyInferred) {
                 potentiallyInferred.add(descriptor)
+                // Add possible inferred by type-arguments of upper-bound of parameter
+                // e.g. <T, C: Iterable<T>>, so T inferred from C
+                descriptor.upperBounds.filter { it.arguments.isNotEmpty() }.forEach(::addPotentiallyInferred)
             }
 
-            if (KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(type) && KotlinBuiltIns.getParameterTypeProjectionsFromFunctionType(type).size <= 1) {
+            if (type.isFunctionType && getValueParametersCountFromFunctionType(type) <= 1) {
                 // do not rely on inference from input of function type with one or no arguments - use only return type of functional type
-                addPotentiallyInferred(KotlinBuiltIns.getReturnTypeFromFunctionType(type))
+                addPotentiallyInferred(type.getReturnTypeFromFunctionType())
                 return
             }
 
@@ -109,7 +114,7 @@ class InsertHandlerProvider(
             }
         }
 
-        originalFunction.extensionReceiverParameter?.type?.let { addPotentiallyInferred(it) }
+        originalFunction.extensionReceiverParameter?.type?.let(::addPotentiallyInferred)
         originalFunction.valueParameters.forEach { addPotentiallyInferred(it.type) }
 
         fun allTypeParametersPotentiallyInferred() = originalFunction.typeParameters.all { it in potentiallyInferred }

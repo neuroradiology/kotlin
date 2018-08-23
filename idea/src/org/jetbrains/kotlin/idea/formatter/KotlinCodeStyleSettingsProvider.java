@@ -58,7 +58,9 @@ public class KotlinCodeStyleSettingsProvider extends CodeStyleSettingsProvider {
                         addIndentOptionsTab(settings);
                         addSpacesTab(settings);
                         addWrappingAndBracesTab(settings);
+                        addBlankLinesTab(settings);
                         addTab(new ImportSettingsPanelWrapper(settings));
+                        addTab(new KotlinSaveStylePanel(settings));
                     }
                 };
             }

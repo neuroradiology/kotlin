@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,11 @@
 
 package org.jetbrains.kotlin.resolve.jvm.platform
 
-import org.jetbrains.kotlin.descriptors.ReceiverParameterDescriptor
-import org.jetbrains.kotlin.load.java.lazy.types.RawTypeTag
+import org.jetbrains.kotlin.load.java.lazy.types.RawTypeImpl
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.resolve.calls.checkers.AdditionalTypeChecker
-import org.jetbrains.kotlin.resolve.calls.context.CallResolutionContext
 import org.jetbrains.kotlin.resolve.calls.context.ResolutionContext
 import org.jetbrains.kotlin.resolve.jvm.diagnostics.ErrorsJvm
-import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
 import org.jetbrains.kotlin.types.checker.TypeCheckingProcedure
@@ -49,13 +46,13 @@ object JavaGenericVarianceViolationTypeChecker : AdditionalTypeChecker {
         // optimization: if no arguments or flexibility, everything is OK
         if (expectedType.arguments.isEmpty() || !expectedType.isFlexible()) return
 
-        val lowerBound = expectedType.flexibility().lowerBound
-        val upperBound = expectedType.flexibility().upperBound
+        val lowerBound = expectedType.asFlexibleType().lowerBound
+        val upperBound = expectedType.asFlexibleType().upperBound
 
         // Use site variance projection is always the same for flexible types
         if (lowerBound.constructor == upperBound.constructor) return
         // Anything is acceptable for raw types
-        if (expectedType.getCapability<RawTypeTag>() != null) return
+        if (expectedType.unwrap() is RawTypeImpl) return
 
         val correspondingSubType = TypeCheckingProcedure.findCorrespondingSupertype(expressionTypeWithSmartCast, lowerBound) ?: return
 
@@ -89,8 +86,4 @@ object JavaGenericVarianceViolationTypeChecker : AdditionalTypeChecker {
         }
     }
 
-    override fun checkReceiver(
-            receiverParameter: ReceiverParameterDescriptor,
-            receiverArgument: ReceiverValue,
-            safeAccess: Boolean, c: CallResolutionContext<*>) { }
 }

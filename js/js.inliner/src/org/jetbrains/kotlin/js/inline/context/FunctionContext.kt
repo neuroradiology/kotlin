@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,65 +16,27 @@
 
 package org.jetbrains.kotlin.js.inline.context
 
-import com.google.dart.compiler.backend.js.ast.*
-import com.google.dart.compiler.backend.js.ast.metadata.staticRef
-
-import org.jetbrains.kotlin.js.inline.util.aliasArgumentsIfNeeded
-import org.jetbrains.kotlin.js.inline.util.getInnerFunction
-import org.jetbrains.kotlin.js.inline.util.getSimpleName
-import org.jetbrains.kotlin.js.inline.util.isCallInvocation
-import org.jetbrains.kotlin.js.inline.util.isFunctionCreator
-
-import com.intellij.util.containers.ContainerUtil
-import java.util.IdentityHashMap
+import org.jetbrains.kotlin.descriptors.CallableDescriptor
+import org.jetbrains.kotlin.js.backend.ast.*
+import org.jetbrains.kotlin.js.backend.ast.metadata.isCallableReference
+import org.jetbrains.kotlin.js.backend.ast.metadata.descriptor
+import org.jetbrains.kotlin.js.config.JsConfig
 import org.jetbrains.kotlin.js.inline.FunctionReader
-import com.google.dart.compiler.backend.js.ast.metadata.descriptor
+import org.jetbrains.kotlin.js.inline.util.*
+import org.jetbrains.kotlin.js.translate.context.Namer
+import org.jetbrains.kotlin.js.translate.utils.JsDescriptorUtils.getModuleName
 
-abstract class FunctionContext(
-        private val function: JsFunction,
-        private val inliningContext: InliningContext,
-        private val functionReader: FunctionReader
-) {
-    /**
-     * Caches function with captured arguments applied.
-     *
-     * @see getFunctionWithClosure
-     */
-    private val functionsWithClosure = IdentityHashMap<JsInvocation, JsFunction?>()
+abstract class FunctionContext(private val functionReader: FunctionReader, private val config: JsConfig) {
+    protected abstract fun lookUpStaticFunction(functionName: JsName?): FunctionWithWrapper?
 
-    protected abstract fun lookUpStaticFunction(functionName: JsName?): JsFunction?
+    protected abstract fun lookUpStaticFunctionByTag(functionTag: String): FunctionWithWrapper?
 
-    fun getFunctionDefinition(call: JsInvocation): JsFunction {
+    fun getFunctionDefinition(call: JsInvocation): FunctionWithWrapper {
         return getFunctionDefinitionImpl(call)!!
     }
 
     fun hasFunctionDefinition(call: JsInvocation): Boolean {
         return getFunctionDefinitionImpl(call) != null
-    }
-
-    fun getScope(): JsScope {
-        return function.scope
-    }
-
-    fun declareFunctionConstructorCalls(arguments: List<JsExpression>) {
-        val calls = ContainerUtil.findAll<JsExpression, JsInvocation>(arguments, JsInvocation::class.java)
-
-        for (call in calls) {
-            val callName = getSimpleName(call)
-            if (callName == null) continue
-
-            val staticRef = callName.staticRef
-            if (staticRef !is JsFunction) continue
-
-            val functionCalled = staticRef
-            if (isFunctionCreator(functionCalled)) {
-                declareFunctionConstructorCall(call)
-            }
-        }
-    }
-
-    fun declareFunctionConstructorCall(call: JsInvocation) {
-        functionsWithClosure.put(call, null)
     }
 
     /**
@@ -107,85 +69,49 @@ abstract class FunctionContext(
      * 5. Qualifier can be JsNameRef with ref to case [3]
      *    in case of local function with closure.
      */
-    private fun getFunctionDefinitionImpl(call: JsInvocation): JsFunction? {
+    private fun getFunctionDefinitionImpl(call: JsInvocation): FunctionWithWrapper? {
+
         val descriptor = call.descriptor
-        if (descriptor != null && descriptor in functionReader) return functionReader[descriptor]
-
-        /** remove ending `()` */
-        var callQualifier: JsNode = call.qualifier
-
-        /** remove ending `.call()` */
-        if (isCallInvocation(call)) {
-            callQualifier = (callQualifier as JsNameRef).qualifier!!
+        if (descriptor != null) {
+            return lookUpFunctionDirect(descriptor) ?: lookUpFunctionIndirect(call) ?: lookUpFunctionExternal(descriptor)
         }
 
-        /** in case 4, 5 get ref (reduce 4, 5 to 2, 3 accordingly) */
-        @Suppress("USELESS_CAST") // NB do not remove 'as JsNode' below until KT-10752 is fixed
-        if (callQualifier is JsNameRef) {
-            val staticRef = callQualifier.name?.staticRef
+        return lookUpFunctionIndirect(call)
+    }
 
-            callQualifier = when (staticRef) {
-                is JsNameRef -> staticRef as JsNode
-                is JsInvocation -> staticRef as JsNode
-                is JsFunction, null -> callQualifier
-                else -> throw AssertionError("Unexpected static reference type ${staticRef.javaClass}")
-            }
+    private fun lookUpFunctionIndirect(call: JsInvocation): FunctionWithWrapper? {
+        /** remove ending `()` */
+        val callQualifier: JsExpression = if (isCallInvocation(call)) {
+            (call.qualifier as JsNameRef).qualifier!!
+        }
+        else {
+            call.qualifier
         }
 
         /** process cases 2, 3 */
-        val qualifier = callQualifier
+        val qualifier = callQualifier.transitiveStaticRef
         return when (qualifier) {
-            is JsInvocation -> getFunctionWithClosure(qualifier)
+            is JsInvocation -> {
+                tryExtractCallableReference(qualifier) ?: getSimpleName(qualifier)?.let { simpleName ->
+                    lookUpStaticFunction(simpleName)?.let { if (isFunctionCreator(it.function)) it else null }
+                }
+            }
             is JsNameRef -> lookUpStaticFunction(qualifier.name)
+            is JsFunction -> FunctionWithWrapper(qualifier, null)
             else -> null
         }
     }
 
-    /**
-     * Gets function body with captured args applied,
-     * and stores in cache.
-     *
-     * Function literals and local functions with closure
-     * are translated as function, that returns function.
-     *
-     * For example,
-     *      val a = 1
-     *      val f = { a * 2 }
-     * `f` becomes
-     *      f: function (a) {
-     *          return function () { return a * 2 }
-     *      }
-     *
-     * @returns inner function with captured parameters,
-     *          replaced by outer arguments
-     *
-     *          For invocation `f(10)()` returns
-     *          `function () { return 10 * 2 }`
-     */
-    private fun getFunctionWithClosure(call: JsInvocation): JsFunction {
-        val constructed = functionsWithClosure.get(call)
+    private fun lookUpFunctionDirect(descriptor: CallableDescriptor): FunctionWithWrapper? =
+        lookUpStaticFunctionByTag(Namer.getFunctionTag(descriptor, config))
 
-        if (constructed is JsFunction) return constructed
+    private fun lookUpFunctionExternal(descriptor: CallableDescriptor): FunctionWithWrapper? = functionReader[descriptor]
 
-        val name = getSimpleName(call)!!
-        val closureCreator = lookUpStaticFunction(name)!!
-        val innerFunction = closureCreator.getInnerFunction()!!
-
-        val withCapturedArgs = applyCapturedArgs(call, innerFunction, closureCreator)
-        functionsWithClosure.put(call, withCapturedArgs)
-
-        return withCapturedArgs
-    }
-
-    private fun applyCapturedArgs(call: JsInvocation, inner: JsFunction, outer: JsFunction): JsFunction {
-        val innerClone = inner.deepCopy()
-
-        val namingContext = inliningContext.newNamingContext()
-        val arguments = call.arguments
-        val parameters = outer.parameters
-        aliasArgumentsIfNeeded(namingContext, arguments, parameters)
-        namingContext.applyRenameTo(innerClone)
-
-        return innerClone
+    private fun tryExtractCallableReference(invocation: JsInvocation): FunctionWithWrapper? {
+        if (invocation.isCallableReference) {
+            val arg = invocation.arguments[1]
+            if (arg is JsFunction) return FunctionWithWrapper(arg, null)
+        }
+        return null
     }
 }

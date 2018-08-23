@@ -28,19 +28,20 @@ class RemoveValVarFromParameterFix(element: KtValVarKeywordOwner) : KotlinQuickF
 
     init {
         val valOrVarNode = element.valOrVarKeyword
-        assert(valOrVarNode != null) { "Val or var node not found for " + element.getElementTextWithContext() }
-        varOrVal = valOrVarNode!!.text
+                           ?: throw AssertionError("Val or var node not found for " + element.getElementTextWithContext())
+        varOrVal = valOrVarNode.text
     }
 
     override fun getFamilyName() = "Remove 'val/var' from parameter"
 
     override fun getText(): String {
+        val element = element ?: return ""
         val varOrVal = element.valOrVarKeyword?.text ?: return familyName
         return "Remove '$varOrVal' from parameter"
     }
 
     override fun invoke(project: Project, editor: Editor?, file: KtFile) {
-        element.valOrVarKeyword?.delete()
+        element?.valOrVarKeyword?.delete()
     }
 
     companion object : KotlinSingleIntentionActionFactory() {

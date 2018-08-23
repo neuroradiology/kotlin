@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,22 @@ package org.jetbrains.kotlin.idea.stubindex.resolve
 
 import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
-import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.resolve.lazy.declarations.PackageMemberDeclarationProvider
+import com.intellij.psi.stubs.StringStubIndexExtension
+import com.intellij.util.indexing.FileBasedIndex
+import org.jetbrains.kotlin.idea.stubindex.*
+import org.jetbrains.kotlin.idea.util.application.runReadAction
+import org.jetbrains.kotlin.idea.vfilefinder.KotlinPackageSourcesMemberNamesIndex
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.resolve.lazy.data.KtClassLikeInfo
-import org.jetbrains.kotlin.resolve.lazy.data.KtClassInfoUtil
+import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.psi.psiUtil.safeNameForLazyResolve
 import org.jetbrains.kotlin.resolve.lazy.ResolveSessionUtils
-import java.util.ArrayList
-import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
-import com.intellij.psi.stubs.StringStubIndexExtension
-import org.jetbrains.kotlin.idea.stubindex.*
+import org.jetbrains.kotlin.resolve.lazy.data.KtClassInfoUtil
+import org.jetbrains.kotlin.resolve.lazy.data.KtClassLikeInfo
 import org.jetbrains.kotlin.resolve.lazy.data.KtScriptInfo
+import org.jetbrains.kotlin.resolve.lazy.declarations.PackageMemberDeclarationProvider
+import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
+import java.util.*
 
 class StubBasedPackageMemberDeclarationProvider(
         private val fqName: FqName,
@@ -46,6 +50,7 @@ class StubBasedPackageMemberDeclarationProvider(
 
         if (kindFilter.acceptsKinds(DescriptorKindFilter.CLASSIFIERS_MASK)) {
             addFromIndex(KotlinTopLevelClassByPackageIndex.getInstance())
+            addFromIndex(KotlinTopLevelTypeAliasByPackageIndex.getInstance())
         }
 
         if (kindFilter.acceptsKinds(DescriptorKindFilter.FUNCTIONS_MASK)) {
@@ -59,22 +64,42 @@ class StubBasedPackageMemberDeclarationProvider(
         return result
     }
 
+    private val declarationNames_: Set<Name> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        FileBasedIndex.getInstance()
+                .getValues(KotlinPackageSourcesMemberNamesIndex.KEY, fqName.asString(), searchScope)
+                .flatMapTo(hashSetOf()) {
+                    it.map { stringName -> Name.identifier(stringName).safeNameForLazyResolve() }
+                }
+    }
+
+    override fun getDeclarationNames() = declarationNames_
+
     override fun getClassOrObjectDeclarations(name: Name): Collection<KtClassLikeInfo> {
         val result = ArrayList<KtClassLikeInfo>()
-        KotlinFullClassNameIndex.getInstance().get(childName(name), project, searchScope)
-                .mapTo(result) { KtClassInfoUtil.createClassLikeInfo(it) }
+        runReadAction {
+            KotlinFullClassNameIndex.getInstance().get(childName(name), project, searchScope)
+                    .mapTo(result) { KtClassInfoUtil.createClassLikeInfo(it) }
 
-        KotlinScriptFqnIndex.instance.get(childName(name), project, searchScope)
-                .mapTo(result) { KtScriptInfo(it) }
+            KotlinScriptFqnIndex.instance.get(childName(name), project, searchScope)
+                    .mapTo(result, ::KtScriptInfo)
+        }
         return result
     }
 
     override fun getFunctionDeclarations(name: Name): Collection<KtNamedFunction> {
-        return KotlinTopLevelFunctionFqnNameIndex.getInstance().get(childName(name), project, searchScope)
+        return runReadAction {
+            KotlinTopLevelFunctionFqnNameIndex.getInstance().get(childName(name), project, searchScope)
+        }
     }
 
     override fun getPropertyDeclarations(name: Name): Collection<KtProperty> {
-        return KotlinTopLevelPropertyFqnNameIndex.getInstance().get(childName(name), project, searchScope)
+        return runReadAction {
+            KotlinTopLevelPropertyFqnNameIndex.getInstance().get(childName(name), project, searchScope)
+        }
+    }
+
+    override fun getDestructuringDeclarationsEntries(name: Name): Collection<KtDestructuringDeclarationEntry> {
+        return emptyList()
     }
 
     override fun getAllDeclaredSubPackages(nameFilter: (Name) -> Boolean): Collection<FqName> {
@@ -82,10 +107,18 @@ class StubBasedPackageMemberDeclarationProvider(
     }
 
     override fun getPackageFiles(): Collection<KtFile> {
-       return PackageIndexUtil.findFilesWithExactPackage(fqName, searchScope, project)
+        return PackageIndexUtil.findFilesWithExactPackage(fqName, searchScope, project)
+    }
+
+    override fun containsFile(file: KtFile): Boolean {
+        return searchScope.contains(file.virtualFile ?: return false)
+    }
+
+    override fun getTypeAliasDeclarations(name: Name): Collection<KtTypeAlias> {
+        return KotlinTopLevelTypeAliasFqNameIndex.getInstance().get(childName(name), project, searchScope)
     }
 
     private fun childName(name: Name): String {
-        return fqName.child(ResolveSessionUtils.safeNameForLazyResolve(name)).asString()
+        return fqName.child(name.safeNameForLazyResolve()).asString()
     }
 }

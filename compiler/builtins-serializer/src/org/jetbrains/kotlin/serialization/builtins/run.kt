@@ -28,18 +28,17 @@ fun main(args: Array<String>) {
 Usage: ... <destination dir> (<source dir>)+
 
 Analyzes Kotlin sources found in the given source directories and serializes
-found top-level declarations to <destination dir> (files such as *.kotlin_builtins,
-as well as old files *.kotlin_string_table, *.kotlin_package, *.kotlin_class)"""
+found top-level declarations to <destination dir> (*.kotlin_builtins files)"""
         )
         return
     }
 
     val destDir = File(args[0])
 
-    val srcDirs = args.drop(1).map { File(it) }
+    val srcDirs = args.drop(1).map(::File)
     assert(srcDirs.isNotEmpty()) { "At least one source directory should be specified" }
 
-    val missing = srcDirs.filterNot { it.exists() }
+    val missing = srcDirs.filterNot(File::exists)
     assert(missing.isEmpty()) { "These source directories are missing: $missing" }
 
     BuiltInsSerializer(dependOnOldBuiltIns = false).serialize(destDir, srcDirs, listOf()) { totalSize, totalFiles ->

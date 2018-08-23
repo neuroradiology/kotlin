@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,14 +20,12 @@ import com.intellij.psi.PsiClass;
 import com.intellij.testFramework.LightProjectDescriptor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.asJava.KtLightClass;
-import org.jetbrains.kotlin.asJava.KtLightClassForExplicitDeclaration;
-import org.jetbrains.kotlin.idea.caches.resolve.KtLightClassForDecompiledDeclaration;
+import org.jetbrains.kotlin.asJava.classes.KtLightClass;
+import org.jetbrains.kotlin.asJava.classes.KtLightClassForSourceDeclaration;
+import org.jetbrains.kotlin.idea.caches.lightClasses.KtLightClassForDecompiledDeclaration;
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase;
 import org.jetbrains.kotlin.idea.test.KotlinWithJdkAndRuntimeLightProjectDescriptor;
 import org.jetbrains.kotlin.psi.KtClassOrObject;
-
-import static org.jetbrains.kotlin.asJava.LightClassUtilsKt.toLightClass;
 
 public class LightClassEqualsTest extends KotlinLightCodeInsightFixtureTestCase {
     @NotNull
@@ -41,9 +39,9 @@ public class LightClassEqualsTest extends KotlinLightCodeInsightFixtureTestCase 
 
         PsiClass theClass = myFixture.getJavaFacade().findClass("A");
         assertNotNull(theClass);
-        assertInstanceOf(theClass, KtLightClassForExplicitDeclaration.class);
+        assertInstanceOf(theClass, KtLightClassForSourceDeclaration.class);
 
-        doTestEquals(((KtLightClass) theClass).getOrigin());
+        doTestEquals(((KtLightClass) theClass).getKotlinOrigin());
     }
 
     public void testEqualsForDecompiledClass() throws Exception {
@@ -53,14 +51,14 @@ public class LightClassEqualsTest extends KotlinLightCodeInsightFixtureTestCase 
         assertNotNull(theClass);
         assertInstanceOf(theClass, KtLightClassForDecompiledDeclaration.class);
 
-        doTestEquals(((KtLightClass) theClass).getOrigin());
+        doTestEquals(((KtLightClass) theClass).getKotlinOrigin());
     }
 
     private static void doTestEquals(@Nullable KtClassOrObject origin) {
         assertNotNull(origin);
 
-        PsiClass lightClass1 = toLightClass(origin);
-        PsiClass lightClass2 = toLightClass(origin);
+        PsiClass lightClass1 = KtLightClassForSourceDeclaration.Companion.createNoCache(origin);
+        PsiClass lightClass2 = KtLightClassForSourceDeclaration.Companion.createNoCache(origin);
         assertNotNull(lightClass1);
         assertNotNull(lightClass2);
 

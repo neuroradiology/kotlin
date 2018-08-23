@@ -20,14 +20,15 @@ import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.resolve.DescriptorUtils
-import org.jetbrains.kotlin.resolve.OverrideResolver
+import org.jetbrains.kotlin.resolve.OverridingUtil
 import org.jetbrains.kotlin.resolve.calls.callResolverUtil.isOrOverridesSynthesized
 
 fun <Signature> generateBridgesForFunctionDescriptor(
-        descriptor: FunctionDescriptor,
-        signature: (FunctionDescriptor) -> Signature
+    descriptor: FunctionDescriptor,
+    signature: (FunctionDescriptor) -> Signature,
+    areDeclarationAndDefinitionSame: (CallableMemberDescriptor) -> Boolean
 ): Set<Bridge<Signature>> {
-    return generateBridges(DescriptorBasedFunctionHandle(descriptor), { signature(it.descriptor) })
+    return generateBridges(DescriptorBasedFunctionHandle(descriptor, areDeclarationAndDefinitionSame), { signature(it.descriptor) })
 }
 
 /**
@@ -47,18 +48,46 @@ fun <Signature> generateBridgesForFunctionDescriptor(
  * can generate a bridge near an implementation (of course, in case it has a super-declaration with a different signature). Ultimately this
  * eases the process of determining what bridges are already generated in our supertypes and need to be inherited, not regenerated.
  */
-data class DescriptorBasedFunctionHandle(val descriptor: FunctionDescriptor) : FunctionHandle {
-    private val overridden = descriptor.overriddenDescriptors.map { DescriptorBasedFunctionHandle(it.original) }
+class DescriptorBasedFunctionHandle(
+    val descriptor: FunctionDescriptor,
+    /*
+    To generate proper bridges for non-abstract function
+    we should know if the function declaration and its definition in the target platform are the same or not.
+    For JS and @JvmDefault JVM members they are placed in interface classes and
+    we need generate bridge for such function ('isAbstract' will return false).
+    For non-@JvmDefault function, its body is generated in a separate place (DefaultImpls) and
+    the method in the interface is abstract so we must not generate bridges for such cases.
+    */
+    areDeclarationAndDefinitionSame: (CallableMemberDescriptor) -> Boolean
+) : FunctionHandle {
+    private val overridden = descriptor.overriddenDescriptors.map {
+        DescriptorBasedFunctionHandle(
+            it.original,
+            areDeclarationAndDefinitionSame
+        )
+    }
 
-    override val isDeclaration: Boolean =
-            descriptor.kind.isReal ||
-            findTraitImplementation(descriptor) != null
+    override val isDeclaration: Boolean = descriptor.kind.isReal || findInterfaceImplementation(descriptor) != null
 
     override val isAbstract: Boolean =
-            descriptor.modality == Modality.ABSTRACT ||
-            DescriptorUtils.isInterface(descriptor.containingDeclaration)
+        descriptor.modality == Modality.ABSTRACT || !areDeclarationAndDefinitionSame(descriptor)
+
+    override val isInterfaceDeclaration: Boolean
+        get() = DescriptorUtils.isInterface(descriptor.containingDeclaration)
 
     override fun getOverridden() = overridden
+
+    override fun hashCode(): Int {
+        return descriptor.hashCode()
+    }
+
+    override fun equals(other: Any?): Boolean {
+        return other is DescriptorBasedFunctionHandle && descriptor == other.descriptor
+    }
+
+    override fun toString(): String {
+        return descriptor.toString()
+    }
 }
 
 
@@ -67,7 +96,7 @@ data class DescriptorBasedFunctionHandle(val descriptor: FunctionDescriptor) : F
  * trait implementation should be generated into the class containing the fake override; or null if the given function is not a fake
  * override of any trait implementation or such method was already generated into the superclass or is a method from Any.
  */
-fun findTraitImplementation(descriptor: CallableMemberDescriptor): CallableMemberDescriptor? {
+fun findInterfaceImplementation(descriptor: CallableMemberDescriptor): CallableMemberDescriptor? {
     if (descriptor.kind.isReal) return null
     if (isOrOverridesSynthesized(descriptor)) return null
 
@@ -87,8 +116,8 @@ fun findTraitImplementation(descriptor: CallableMemberDescriptor): CallableMembe
  * that should be called when the given fake override is called.
  */
 fun findImplementationFromInterface(descriptor: CallableMemberDescriptor): CallableMemberDescriptor? {
-    val overridden = OverrideResolver.getOverriddenDeclarations(descriptor)
-    val filtered = OverrideResolver.filterOutOverridden(overridden)
+    val overridden = OverridingUtil.getOverriddenDeclarations(descriptor)
+    val filtered = OverridingUtil.filterOutOverridden(overridden)
 
     val result = filtered.firstOrNull { it.modality != Modality.ABSTRACT } ?: return null
 
@@ -108,6 +137,6 @@ fun firstSuperMethodFromKotlin(
 ): CallableMemberDescriptor? {
     return descriptor.overriddenDescriptors.firstOrNull { overridden ->
         overridden.modality != Modality.ABSTRACT &&
-        (overridden == implementation || OverrideResolver.overrides(overridden, implementation))
+        (overridden == implementation || OverridingUtil.overrides(overridden, implementation))
     }
 }

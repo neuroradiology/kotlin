@@ -16,33 +16,48 @@
 
 package org.jetbrains.kotlin.idea.actions
 
+import com.intellij.codeInsight.navigation.NavigationUtil
+import com.intellij.ide.highlighter.JavaFileType
+import com.intellij.ide.scratch.ScratchFileService
+import com.intellij.ide.scratch.ScratchRootType
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.CommandProcessor
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.ex.MessagesEx
-import com.intellij.openapi.vfs.CharsetToolkit
+import com.intellij.openapi.util.Key
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileVisitor
+import com.intellij.openapi.wm.WindowManager
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.PsiErrorElement
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiManager
-import org.jetbrains.kotlin.idea.refactoring.toPsiFile
+import com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.kotlin.idea.KotlinFileType
 import org.jetbrains.kotlin.idea.j2k.IdeaJavaToKotlinServices
 import org.jetbrains.kotlin.idea.j2k.J2kPostProcessor
+import org.jetbrains.kotlin.idea.refactoring.toPsiFile
 import org.jetbrains.kotlin.idea.util.application.executeWriteCommand
+import org.jetbrains.kotlin.idea.util.application.progressIndicatorNullable
 import org.jetbrains.kotlin.idea.util.application.runReadAction
 import org.jetbrains.kotlin.j2k.ConverterSettings
 import org.jetbrains.kotlin.j2k.JavaToKotlinConverter
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.UserDataProperty
 import java.io.File
 import java.io.IOException
-import java.util.ArrayList
+import java.util.*
+
+var VirtualFile.pathBeforeJ2K: String? by UserDataProperty(Key.create<String>("PATH_BEFORE_J2K_CONVERSION"))
 
 class JavaToKotlinAction : AnAction() {
     companion object {
@@ -57,37 +72,55 @@ class JavaToKotlinAction : AnAction() {
             }
         }
 
+        val title = "Convert Java to Kotlin"
+
         private fun saveResults(javaFiles: List<PsiJavaFile>, convertedTexts: List<String>): List<VirtualFile> {
             val result = ArrayList<VirtualFile>()
             for ((psiFile, text) in javaFiles.zip(convertedTexts)) {
-                val virtualFile = psiFile.virtualFile
-                val fileName = uniqueKotlinFileName(virtualFile)
                 try {
-                    virtualFile.rename(this, fileName)
-                    virtualFile.setBinaryContent(CharsetToolkit.getUtf8Bytes(text))
-                    result.add(virtualFile)
+                    val document = PsiDocumentManager.getInstance(psiFile.project).getDocument(psiFile)
+                    if (document == null) {
+                        MessagesEx.error(psiFile.project, "Failed to save conversion result: couldn't find document for " + psiFile.name).showLater()
+                        continue
+                    }
+                    document.replaceString(0, document.textLength, text)
+                    FileDocumentManager.getInstance().saveDocument(document)
+
+                    val virtualFile = psiFile.virtualFile
+                    if (ScratchRootType.getInstance().containsFile(virtualFile)) {
+                        val mapping = ScratchFileService.getInstance().scratchesMapping
+                        mapping.setMapping(virtualFile, KotlinFileType.INSTANCE.language)
+                    }
+                    else {
+                        val fileName = uniqueKotlinFileName(virtualFile)
+                        virtualFile.pathBeforeJ2K = virtualFile.path
+                        virtualFile.rename(this, fileName)
+                    }
                 }
                 catch (e: IOException) {
-                    MessagesEx.error(psiFile.project, e.message).showLater()
+                    MessagesEx.error(psiFile.project, e.message ?: "").showLater()
                 }
             }
             return result
         }
 
-        fun convertFiles(javaFiles: List<PsiJavaFile>, project: Project, enableExternalCodeProcessing: Boolean = true): List<KtFile> {
-            ApplicationManager.getApplication().saveAll()
-
+        fun convertFiles(
+            javaFiles: List<PsiJavaFile>, project: Project,
+            enableExternalCodeProcessing: Boolean = true,
+            askExternalCodeProcessing: Boolean = true
+        ): List<KtFile> {
             var converterResult: JavaToKotlinConverter.FilesResult? = null
             fun convert() {
                 val converter = JavaToKotlinConverter(project, ConverterSettings.defaultSettings, IdeaJavaToKotlinServices)
-                converterResult = converter.filesToKotlin(javaFiles, J2kPostProcessor(formatCode = true), ProgressManager.getInstance().progressIndicator)
+                converterResult = converter.filesToKotlin(
+                    javaFiles, J2kPostProcessor(formatCode = true),
+                    ProgressManager.getInstance().progressIndicatorNullable!!
+                )
             }
 
-            val title = "Convert Java to Kotlin"
+
             if (!ProgressManager.getInstance().runProcessWithProgressSynchronously(
-                    {
-                        runReadAction(::convert)
-                    },
+                    ::convert,
                     title,
                     true,
                     project)) return emptyList()
@@ -97,11 +130,13 @@ class JavaToKotlinAction : AnAction() {
 
             if (enableExternalCodeProcessing && converterResult!!.externalCodeProcessing != null) {
                 val question = "Some code in the rest of your project may require corrections after performing this conversion. Do you want to find such code and correct it too?"
-                if (Messages.showOkCancelDialog(project, question, title, Messages.getQuestionIcon()) == Messages.OK) {
+                if (!askExternalCodeProcessing || (Messages.showOkCancelDialog(project, question, title, Messages.getQuestionIcon()) == Messages.OK)) {
                     ProgressManager.getInstance().runProcessWithProgressSynchronously(
                             {
                                 runReadAction {
-                                    externalCodeUpdate = converterResult!!.externalCodeProcessing!!.prepareWriteOperation(ProgressManager.getInstance().progressIndicator)
+                                    externalCodeUpdate = converterResult!!.externalCodeProcessing!!.prepareWriteOperation(
+                                        ProgressManager.getInstance().progressIndicatorNullable!!
+                                    )
                                 }
                             },
                             title,
@@ -117,6 +152,8 @@ class JavaToKotlinAction : AnAction() {
 
                 externalCodeUpdate?.invoke()
 
+                PsiDocumentManager.getInstance(project).commitAllDocuments()
+
                 newFiles.singleOrNull()?.let {
                     FileEditorManager.getInstance(project).openFile(it, true)
                 }
@@ -127,14 +164,54 @@ class JavaToKotlinAction : AnAction() {
     }
 
     override fun actionPerformed(e: AnActionEvent) {
-        val javaFiles = selectedJavaFiles(e).toList()
+        val javaFiles = selectedJavaFiles(e).filter { it.isWritable }.toList()
         val project = CommonDataKeys.PROJECT.getData(e.dataContext)!!
+
+        if (javaFiles.isEmpty()) {
+            val statusBar = WindowManager.getInstance().getStatusBar(project)
+            JBPopupFactory.getInstance()
+                .createHtmlTextBalloonBuilder("Nothing to convert:<br>No writable Java files found", MessageType.ERROR, null)
+                .createBalloon()
+                .showInCenterOf(statusBar.component)
+        }
+
+        val firstSyntaxError = javaFiles.asSequence().map { PsiTreeUtil.findChildOfType(it, PsiErrorElement::class.java) }.firstOrNull()
+
+        if (firstSyntaxError != null) {
+            val count = javaFiles.filter { PsiTreeUtil.hasErrorElements(it) }.count()
+            val question = firstSyntaxError.containingFile.name +
+                           (if (count > 1) " and ${count - 1} more Java files" else " file") +
+                           " contain syntax errors, the conversion result may be incorrect"
+
+            val okText = "Investigate Errors"
+            val cancelText = "Proceed with Conversion"
+            if (Messages.showOkCancelDialog(
+                    project,
+                    question,
+                    title,
+                    okText,
+                    cancelText,
+                    Messages.getWarningIcon()
+            ) == Messages.OK) {
+                NavigationUtil.activateFileWithPsiElement(firstSyntaxError.navigationElement)
+                return
+            }
+        }
+
         convertFiles(javaFiles, project)
     }
 
     override fun update(e: AnActionEvent) {
-        val enabled = selectedJavaFiles(e).any()
-        e.presentation.isEnabled = enabled
+        val virtualFiles = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY) ?: return
+        val project = e.project ?: return
+
+        e.presentation.isEnabled = isAnyJavaFileSelected(project, virtualFiles)
+    }
+
+    private fun isAnyJavaFileSelected(project: Project, files: Array<VirtualFile>): Boolean {
+        if (files.any { it.isDirectory }) return true // Giving up on directories
+        val manager = PsiManager.getInstance(project)
+        return files.any { it.extension == JavaFileType.DEFAULT_EXTENSION && manager.findFile(it) is PsiJavaFile && it.isWritable }
     }
 
     private fun selectedJavaFiles(e: AnActionEvent): Sequence<PsiJavaFile> {

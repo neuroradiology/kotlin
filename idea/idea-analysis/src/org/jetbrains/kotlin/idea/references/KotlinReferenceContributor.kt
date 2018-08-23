@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,26 @@
 
 package org.jetbrains.kotlin.idea.references
 
-import com.intellij.patterns.PlatformPatterns
-import com.intellij.psi.*
-import com.intellij.util.ProcessingContext
+import com.intellij.psi.PsiReference
+import com.intellij.psi.PsiReferenceRegistrar
 import org.jetbrains.kotlin.idea.kdoc.KDocReference
-import org.jetbrains.kotlin.kdoc.psi.impl.KDocName
 import org.jetbrains.kotlin.lexer.KtTokens
-import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.psi.KtImportDirective
+import org.jetbrains.kotlin.psi.KtNameReferenceExpression
+import org.jetbrains.kotlin.psi.KtPackageDirective
+import org.jetbrains.kotlin.psi.KtUserType
+import org.jetbrains.kotlin.psi.psiUtil.parents
 
-class KotlinReferenceContributor() : PsiReferenceContributor() {
+class KotlinReferenceContributor() : AbstractKotlinReferenceContributor() {
     override fun registerReferenceProviders(registrar: PsiReferenceRegistrar) {
         with(registrar) {
-            registerProvider(KtSimpleNameExpression::class.java) {
-                KtSimpleNameReference(it)
-            }
+            registerProvider(factory = ::KtSimpleNameReference)
 
-            registerMultiProvider(KtNameReferenceExpression::class.java) {
+            registerMultiProvider<KtNameReferenceExpression> {
                 if (it.getReferencedNameElementType() != KtTokens.IDENTIFIER) return@registerMultiProvider emptyArray()
+                if (it.parents.any { it is KtImportDirective || it is KtPackageDirective || it is KtUserType }) {
+                    return@registerMultiProvider emptyArray()
+                }
 
                 when (it.readWriteAccess(useResolveForReadWrite = false)) {
                     ReferenceAccess.READ ->
@@ -44,46 +47,21 @@ class KotlinReferenceContributor() : PsiReferenceContributor() {
                 }
             }
 
-            registerProvider(KtConstructorDelegationReferenceExpression::class.java) {
-                KtConstructorDelegationReference(it)
-            }
+            registerProvider(factory = ::KtConstructorDelegationReference)
 
-            registerProvider(KtCallExpression::class.java) {
-                KtInvokeFunctionReference(it)
-            }
+            registerProvider(factory = ::KtInvokeFunctionReference)
 
-            registerProvider(KtArrayAccessExpression::class.java) {
-                KtArrayAccessReference(it)
-            }
+            registerProvider(factory = ::KtArrayAccessReference)
 
-            registerProvider(KtForExpression::class.java) {
-                KtForLoopInReference(it)
-            }
+            registerProvider(factory = ::KtCollectionLiteralReference)
 
-            registerProvider(KtPropertyDelegate::class.java) {
-                KtPropertyDelegationMethodsReference(it)
-            }
+            registerProvider(factory = ::KtForLoopInReference)
 
-            registerProvider(KtDestructuringDeclaration::class.java) {
-                KtDestructuringDeclarationReference(it)
-            }
+            registerProvider(factory = ::KtPropertyDelegationMethodsReference)
 
-            registerProvider(KDocName::class.java) {
-                KDocReference(it)
-            }
+            registerProvider(factory = ::KtDestructuringDeclarationReference)
+
+            registerProvider(factory = ::KDocReference)
         }
-    }
-
-    private fun <E : KtElement> PsiReferenceRegistrar.registerProvider(elementClass: Class<E>, factory: (E) -> KtReference) {
-        registerMultiProvider(elementClass, { arrayOf(factory(it)) })
-    }
-
-    private fun <E : KtElement> PsiReferenceRegistrar.registerMultiProvider(elementClass: Class<E>, factory: (E) -> Array<PsiReference>) {
-        registerReferenceProvider(PlatformPatterns.psiElement(elementClass), object: PsiReferenceProvider() {
-            override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
-                @Suppress("UNCHECKED_CAST")
-                return factory(element as E)
-            }
-        })
     }
 }

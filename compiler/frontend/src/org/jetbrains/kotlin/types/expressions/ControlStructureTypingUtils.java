@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package org.jetbrains.kotlin.types.expressions;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import com.intellij.lang.ASTNode;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.Ref;
@@ -26,6 +25,8 @@ import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
+import org.jetbrains.kotlin.config.LanguageFeature;
+import org.jetbrains.kotlin.config.LanguageVersionSettings;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.descriptors.annotations.Annotations;
 import org.jetbrains.kotlin.descriptors.impl.SimpleFunctionDescriptorImpl;
@@ -69,13 +70,25 @@ public class ControlStructureTypingUtils {
         IF("if"), ELVIS("elvis"), EXCL_EXCL("ExclExcl"), WHEN("when");
 
         private final String name;
+        private final Name specialFunctionName;
+        private final Name specialTypeParameterName;
 
         ResolveConstruct(String name) {
             this.name = name;
+            this.specialFunctionName = Name.identifier("<SPECIAL-FUNCTION-FOR-" + name.toUpperCase() + "-RESOLVE>");
+            this.specialTypeParameterName = Name.identifier("<TYPE-PARAMETER-FOR-" + name.toUpperCase() + "-RESOLVE>");
         }
 
         public String getName() {
             return name;
+        }
+
+        public Name getSpecialFunctionName() {
+            return specialFunctionName;
+        }
+
+        public Name getSpecialTypeParameterName() {
+            return specialTypeParameterName;
         }
     }
 
@@ -104,9 +117,9 @@ public class ControlStructureTypingUtils {
         SimpleFunctionDescriptorImpl function = createFunctionDescriptorForSpecialConstruction(
                 construct, argumentNames, isArgumentNullable);
         TracingStrategy tracing = createTracingForSpecialConstruction(call, construct.getName(), context);
-        TypeSubstitutor knownTypeParameterSubstitutor = createKnownTypeParameterSubstitutorForSpecialCall(construct, function, context.expectedType);
-        ResolutionCandidate<CallableDescriptor> resolutionCandidate =
-                ResolutionCandidate.<CallableDescriptor>create(call, function, knownTypeParameterSubstitutor);
+        TypeSubstitutor knownTypeParameterSubstitutor = createKnownTypeParameterSubstitutorForSpecialCall(construct, function, context.expectedType, context.languageVersionSettings);
+        ResolutionCandidate<FunctionDescriptor> resolutionCandidate =
+                ResolutionCandidate.create(call, function, knownTypeParameterSubstitutor);
         OverloadResolutionResults<FunctionDescriptor> results = callResolver.resolveCallWithKnownCandidate(
                 call, tracing, context, resolutionCandidate, dataFlowInfoForArguments);
         assert results.isSingleResult() : "Not single result after resolving one known candidate";
@@ -116,9 +129,11 @@ public class ControlStructureTypingUtils {
     private static @Nullable TypeSubstitutor createKnownTypeParameterSubstitutorForSpecialCall(
             @NotNull ResolveConstruct construct,
             @NotNull SimpleFunctionDescriptorImpl function,
-            @NotNull KotlinType expectedType
+            @NotNull KotlinType expectedType,
+            @NotNull LanguageVersionSettings languageVersionSettings
     ) {
-        if (construct == ResolveConstruct.ELVIS
+        if (languageVersionSettings.supportsFeature(LanguageFeature.NewInference)
+            || construct == ResolveConstruct.ELVIS
             || TypeUtils.noExpectedType(expectedType)
             || TypeUtils.isDontCarePlaceholder(expectedType)
             || KotlinBuiltIns.isUnitOrNullableUnit(expectedType)
@@ -139,21 +154,19 @@ public class ControlStructureTypingUtils {
     ) {
         assert argumentNames.size() == isArgumentNullable.size();
 
-        String constructionName = construct.getName().toUpperCase();
-        Name specialFunctionName = Name.identifier("<SPECIAL-FUNCTION-FOR-" + constructionName + "-RESOLVE>");
-
         SimpleFunctionDescriptorImpl function = SimpleFunctionDescriptorImpl.create(
-                moduleDescriptor, Annotations.Companion.getEMPTY(), specialFunctionName, CallableMemberDescriptor.Kind.DECLARATION, SourceElement.NO_SOURCE
+                moduleDescriptor, Annotations.Companion.getEMPTY(), construct.getSpecialFunctionName(),
+                CallableMemberDescriptor.Kind.DECLARATION, SourceElement.NO_SOURCE
         );
 
         TypeParameterDescriptor typeParameter = TypeParameterDescriptorImpl.createWithDefaultBound(
                 function, Annotations.Companion.getEMPTY(), false, Variance.INVARIANT,
-                Name.identifier("<TYPE-PARAMETER-FOR-" + constructionName + "-RESOLVE>"), 0);
+                construct.getSpecialTypeParameterName(), 0);
 
         KotlinType type = typeParameter.getDefaultType();
         KotlinType nullableType = TypeUtils.makeNullable(type);
 
-        List<ValueParameterDescriptor> valueParameters = new ArrayList<ValueParameterDescriptor>(argumentNames.size());
+        List<ValueParameterDescriptor> valueParameters = new ArrayList<>(argumentNames.size());
         for (int i = 0; i < argumentNames.size(); i++) {
             KotlinType argumentType = isArgumentNullable.get(i) ? nullableType : type;
             ValueParameterDescriptorImpl valueParameter = new ValueParameterDescriptorImpl(
@@ -179,23 +192,38 @@ public class ControlStructureTypingUtils {
         return function;
     }
 
-    /*package*/ static MutableDataFlowInfoForArguments createIndependentDataFlowInfoForArgumentsForCall(
+    public static class ControlStructureDataFlowInfo extends MutableDataFlowInfoForArguments {
+        public final Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap;
+
+        ControlStructureDataFlowInfo(
+                @NotNull DataFlowInfo initialDataFlowInfo,
+                @NotNull Map<ValueArgument, DataFlowInfo> map
+        ) {
+            super(initialDataFlowInfo);
+            dataFlowInfoForArgumentsMap = map;
+        }
+
+
+        @Override
+        public void updateInfo(@NotNull ValueArgument valueArgument, @NotNull DataFlowInfo dataFlowInfo) {
+            dataFlowInfoForArgumentsMap.put(valueArgument, dataFlowInfo);
+        }
+
+        @Override
+        public void updateResultInfo(@NotNull DataFlowInfo dataFlowInfo) { }
+
+        @NotNull
+        @Override
+        public DataFlowInfo getInfo(@NotNull ValueArgument valueArgument) {
+            return dataFlowInfoForArgumentsMap.get(valueArgument);
+        }
+    }
+
+    private static MutableDataFlowInfoForArguments createIndependentDataFlowInfoForArgumentsForCall(
             @NotNull DataFlowInfo initialDataFlowInfo,
-            final Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap
+            @NotNull Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap
     ) {
-        return new MutableDataFlowInfoForArguments(initialDataFlowInfo) {
-
-            @Override
-            public void updateInfo(@NotNull ValueArgument valueArgument, @NotNull DataFlowInfo dataFlowInfo) {
-                dataFlowInfoForArgumentsMap.put(valueArgument, dataFlowInfo);
-            }
-
-            @NotNull
-            @Override
-            public DataFlowInfo getInfo(@NotNull ValueArgument valueArgument) {
-                return dataFlowInfoForArgumentsMap.get(valueArgument);
-            }
-        };
+        return new ControlStructureDataFlowInfo(initialDataFlowInfo, dataFlowInfoForArgumentsMap);
     }
 
     public static MutableDataFlowInfoForArguments createDataFlowInfoForArgumentsForIfCall(
@@ -204,7 +232,7 @@ public class ControlStructureTypingUtils {
             @NotNull DataFlowInfo thenInfo,
             @NotNull DataFlowInfo elseInfo
     ) {
-        Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap = Maps.newHashMap();
+        Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap = new HashMap<>();
         dataFlowInfoForArgumentsMap.put(callForIf.getValueArguments().get(0), thenInfo);
         dataFlowInfoForArgumentsMap.put(callForIf.getValueArguments().get(1), elseInfo);
         return createIndependentDataFlowInfoForArgumentsForCall(conditionInfo, dataFlowInfoForArgumentsMap);
@@ -215,7 +243,7 @@ public class ControlStructureTypingUtils {
             @NotNull DataFlowInfo subjectDataFlowInfo,
             @NotNull List<DataFlowInfo> entryDataFlowInfos
     ) {
-        Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap = Maps.newHashMap();
+        Map<ValueArgument, DataFlowInfo> dataFlowInfoForArgumentsMap = new HashMap<>();
         int i = 0;
         for (ValueArgument argument : callForWhen.getValueArguments()) {
             DataFlowInfo entryDataFlowInfo = entryDataFlowInfos.get(i++);
@@ -225,11 +253,11 @@ public class ControlStructureTypingUtils {
     }
 
     /*package*/ static Call createCallForSpecialConstruction(
-            @NotNull final KtExpression expression,
-            @NotNull final KtExpression calleeExpression,
+            @NotNull KtExpression expression,
+            @NotNull KtExpression calleeExpression,
             @NotNull List<? extends KtExpression> arguments
     ) {
-        final List<ValueArgument> valueArguments = Lists.newArrayList();
+        List<ValueArgument> valueArguments = Lists.newArrayList();
         for (KtExpression argument : arguments) {
             valueArguments.add(CallMaker.makeValueArgument(argument));
         }
@@ -303,10 +331,10 @@ public class ControlStructureTypingUtils {
     }
 
     @NotNull
-    /*package*/ TracingStrategy createTracingForSpecialConstruction(
-            final @NotNull Call call,
+    private TracingStrategy createTracingForSpecialConstruction(
+            @NotNull Call call,
             @NotNull String constructionName,
-            final @NotNull ExpressionTypingContext context
+            @NotNull ExpressionTypingContext context
     ) {
         class CheckTypeContext {
             public BindingTrace trace;
@@ -323,8 +351,7 @@ public class ControlStructureTypingUtils {
             }
         }
 
-        final KtVisitor<Boolean, CheckTypeContext> checkTypeVisitor = new KtVisitor<Boolean, CheckTypeContext>() {
-
+        KtVisitor<Boolean, CheckTypeContext> checkTypeVisitor = new KtVisitor<Boolean, CheckTypeContext>() {
             private boolean checkExpressionType(@NotNull KtExpression expression, CheckTypeContext c) {
                 KotlinTypeInfo typeInfo = BindingContextUtils.getRecordedTypeInfo(expression, c.trace.getBindingContext());
                 if (typeInfo == null) return false;
@@ -337,7 +364,8 @@ public class ControlStructureTypingUtils {
                                 .replaceExpectedType(c.expectedType)
                                 .replaceDataFlowInfo(typeInfo.getDataFlowInfo())
                                 .replaceBindingTrace(c.trace),
-                        hasError
+                        hasError,
+                        true
                 );
                 return hasError.get();
             }
@@ -473,7 +501,7 @@ public class ControlStructureTypingUtils {
             }
         };
     }
-    
+
     private abstract static class ThrowingOnErrorTracingStrategy implements TracingStrategy {
         private final String debugName;
 
@@ -542,7 +570,7 @@ public class ControlStructureTypingUtils {
         }
 
         @Override
-        public void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount) {
+        public void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount, @NotNull CallableDescriptor descriptor) {
             logError();
         }
 
@@ -603,11 +631,6 @@ public class ControlStructureTypingUtils {
         public void typeInferenceFailed(
                 @NotNull ResolutionContext<?> context, @NotNull InferenceErrorData inferenceErrorData
         ) {
-            logError();
-        }
-
-        @Override
-        public void nonExtensionFunctionCalledAsExtension(@NotNull BindingTrace trace) {
             logError();
         }
     }

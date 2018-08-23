@@ -36,25 +36,14 @@ public final class JvmSerializationBindings {
     public static final SerializationMappingSlice<PropertyDescriptor, Method> SYNTHETIC_METHOD_FOR_PROPERTY =
             SerializationMappingSlice.create();
 
-    private static final class SerializationMappingSlice<K, V> extends BasicWritableSlice<K, V> {
+    static final class SerializationMappingSlice<K, V> extends BasicWritableSlice<K, V> {
         public SerializationMappingSlice() {
             super(Slices.ONLY_REWRITE_TO_EQUAL, false);
         }
 
         @NotNull
         public static <K, V> SerializationMappingSlice<K, V> create() {
-            return new SerializationMappingSlice<K, V>();
-        }
-    }
-
-    private static final class SerializationMappingSetSlice<K> extends Slices.SetSlice<K> {
-        public SerializationMappingSetSlice() {
-            super(Slices.ONLY_REWRITE_TO_EQUAL, false);
-        }
-
-        @NotNull
-        public static <K> SerializationMappingSetSlice<K> create() {
-            return new SerializationMappingSetSlice<K>();
+            return new SerializationMappingSlice<>();
         }
     }
 
@@ -62,22 +51,14 @@ public final class JvmSerializationBindings {
         BasicWritableSlice.initSliceDebugNames(JvmSerializationBindings.class);
     }
 
-    private final MutableSlicedMap map = SlicedMapImpl.create();
+    private final MutableSlicedMap map = new SlicedMapImpl(false);
 
     public <K, V> void put(@NotNull SerializationMappingSlice<K, V> slice, @NotNull K key, @NotNull V value) {
         map.put(slice, key, value);
     }
 
-    public <K> void put(@NotNull SerializationMappingSetSlice<K> slice, @NotNull K key) {
-        map.put(slice, key, true);
-    }
-
     @Nullable
     public <K, V> V get(@NotNull SerializationMappingSlice<K, V> slice, @NotNull K key) {
         return map.get(slice, key);
-    }
-
-    public <K> boolean get(@NotNull SerializationMappingSetSlice<K> slice, @NotNull K key) {
-        return Boolean.TRUE.equals(map.get(slice, key));
     }
 }

@@ -1,3 +1,5 @@
+// LANGUAGE_VERSION: 1.0
+
 const val y = "cde"
 
 fun foo(x : String) : String {
@@ -9,4 +11,4 @@ fun foo(x : String) : String {
     return "other"
 }
 
-// 1 LOOKUPSWITCH
+// 0 LOOKUPSWITCH

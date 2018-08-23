@@ -24,12 +24,13 @@ import com.intellij.refactoring.RefactoringBundle
 import com.intellij.refactoring.util.RadioUpDownListener
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
+import org.jetbrains.kotlin.psi.KtEnumEntry
 import org.jetbrains.kotlin.psi.psiUtil.containingClassOrObject
 import java.awt.BorderLayout
 import javax.swing.*
 
 internal class KotlinSelectNestedClassRefactoringDialog private constructor (
-        private val project: Project,
+        project: Project,
         private val nestedClass: KtClassOrObject,
         private val targetContainer: PsiElement?
 ) : DialogWrapper(project, true) {
@@ -110,6 +111,7 @@ internal class KotlinSelectNestedClassRefactoringDialog private constructor (
                 nestedClass is KtClass && nestedClass.isInner() -> {
                     MoveKotlinNestedClassesToUpperLevelDialog(nestedClass, targetContainer)
                 }
+                nestedClass is KtEnumEntry -> return
                 else -> {
                     val selectionDialog = KotlinSelectNestedClassRefactoringDialog(project, nestedClass, targetContainer)
                     selectionDialog.show()

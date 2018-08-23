@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,53 +16,53 @@
 
 package org.jetbrains.kotlin.asJava
 
-import com.intellij.openapi.progress.ProcessCanceledException
-import com.intellij.openapi.util.Comparing
 import com.intellij.psi.*
 import com.intellij.psi.impl.java.stubs.PsiClassStub
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.stubs.PsiFileStub
 import com.intellij.psi.stubs.StubElement
 import com.intellij.psi.util.PsiTreeUtil
-import com.intellij.util.SmartList
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
+import org.jetbrains.kotlin.asJava.elements.*
+import org.jetbrains.kotlin.asJava.finder.JavaElementFinder
 import org.jetbrains.kotlin.fileClasses.javaFileFacadeFqName
 import org.jetbrains.kotlin.load.java.JvmAbi
-import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
 
 object LightClassUtil {
 
-    fun findClass(fqn: FqName, stub: StubElement<*>): PsiClass? {
-        if (stub is PsiClassStub<*> && Comparing.equal(fqn.asString(), stub.qualifiedName)) {
-            return stub.getPsi()
+    fun findClass(stub: StubElement<*>, predicate: (PsiClassStub<*>) -> Boolean): PsiClass? {
+        if (stub is PsiClassStub<*> && predicate(stub)) {
+            return stub.psi
         }
 
         if (stub is PsiClassStub<*> || stub is PsiFileStub<*>) {
             for (child in stub.childrenStubs) {
-                val answer = findClass(fqn, child)
+                val answer = findClass(child, predicate)
                 if (answer != null) return answer
             }
         }
-
         return null
-    }/*package*/
+    }
 
     fun getLightClassAccessorMethod(accessor: KtPropertyAccessor): PsiMethod? =
             getLightClassAccessorMethods(accessor).firstOrNull()
 
     fun getLightClassAccessorMethods(accessor: KtPropertyAccessor): List<PsiMethod> {
         val property = accessor.getNonStrictParentOfType<KtProperty>() ?: return emptyList()
-        val wrappers = getPsiMethodWrappers(property, true)
-        return wrappers.filter { wrapper -> (accessor.isGetter && !JvmAbi.isSetterName(wrapper.name)) ||
-                                            (accessor.isSetter && JvmAbi.isSetterName(wrapper.name)) }
+        val wrappers = getPsiMethodWrappers(property)
+        return wrappers.filter { wrapper ->
+            (accessor.isGetter && !JvmAbi.isSetterName(wrapper.name)) ||
+            (accessor.isSetter && JvmAbi.isSetterName(wrapper.name))
+        }.toList()
     }
 
     fun getLightFieldForCompanionObject(companionObject: KtClassOrObject): PsiField? {
         val outerPsiClass = getWrappingClass(companionObject)
         if (outerPsiClass != null) {
             for (fieldOfParent in outerPsiClass.fields) {
-                if ((fieldOfParent is KtLightElement<*, *>) && fieldOfParent.getOrigin() === companionObject) {
+                if ((fieldOfParent is KtLightElement<*, *>) && fieldOfParent.kotlinOrigin === companionObject.originalElement) {
                     return fieldOfParent
                 }
             }
@@ -80,11 +80,11 @@ object LightClassUtil {
         return extractPropertyAccessors(property, getterWrapper, setterWrapper)
     }
 
-    private fun getLightClassBackingField(declaration: KtDeclaration): PsiField? {
+    fun getLightClassBackingField(declaration: KtDeclaration): PsiField? {
         var psiClass: PsiClass = getWrappingClass(declaration) ?: return null
 
         if (psiClass is KtLightClass) {
-            val origin = psiClass.getOrigin()
+            val origin = psiClass.kotlinOrigin
             if (origin is KtObjectDeclaration && origin.isCompanion()) {
                 val containingClass = PsiTreeUtil.getParentOfType(origin, KtClass::class.java)
                 if (containingClass != null) {
@@ -97,7 +97,7 @@ object LightClassUtil {
         }
 
         for (field in psiClass.fields) {
-            if (field is KtLightField && field.getOrigin() === declaration) {
+            if (field is KtLightField && field.kotlinOrigin === declaration) {
                 return field
             }
         }
@@ -112,38 +112,25 @@ object LightClassUtil {
         return getPsiMethodWrapper(function)
     }
 
+    /**
+     * Returns the light method generated from the parameter of an annotation class.
+     */
+    fun getLightClassMethod(parameter: KtParameter): PsiMethod? {
+        return getPsiMethodWrapper(parameter)
+    }
+
     fun getLightClassMethods(function: KtFunction): List<PsiMethod> {
-        return getPsiMethodWrappers(function, true)
+        return getPsiMethodWrappers(function).toList()
     }
 
     private fun getPsiMethodWrapper(declaration: KtDeclaration): PsiMethod? {
-        return getPsiMethodWrappers(declaration, false).firstOrNull()
+        return getPsiMethodWrappers(declaration).firstOrNull()
     }
 
-    private fun getPsiMethodWrappers(declaration: KtDeclaration, collectAll: Boolean): List<PsiMethod> {
-        val psiClass = getWrappingClass(declaration) ?: return emptyList()
-
-        val methods = SmartList<PsiMethod>()
-        for (method in psiClass.methods.asList()) {
-            try {
-                if (method is KtLightMethod && method.getOrigin() === declaration) {
-                    methods.add(method)
-                    if (!collectAll) {
-                        return methods
-                    }
-                }
-            }
-            catch (e: ProcessCanceledException) {
-                throw e
-            }
-            catch (e: Throwable) {
-                throw IllegalStateException(
-                        "Error while wrapping declaration " + declaration.name + "Context\n:" + method, e)
-            }
-        }
-
-        return methods
-    }
+    private fun getPsiMethodWrappers(declaration: KtDeclaration): Sequence<KtLightMethod> =
+            getWrappingClasses(declaration).flatMap { it.methods.asSequence() }
+                    .filterIsInstance<KtLightMethod>()
+                    .filter { it.kotlinOrigin === declaration }
 
     private fun getWrappingClass(declaration: KtDeclaration): PsiClass? {
         var declaration = declaration
@@ -162,19 +149,11 @@ object LightClassUtil {
             return declaration.getContainingClassOrObject().toLightClass()
         }
 
-        if (!canGenerateLightClass(declaration)) {
-            // Can't get wrappers for internal declarations. Their classes are not generated during calcStub
-            // with ClassBuilderMode.LIGHT_CLASSES mode, and this produces "Class not found exception" in getDelegate()
-            return null
-        }
-
         val parent = declaration.parent
 
         if (parent is KtFile) {
             // top-level declaration
-            val fqName = parent.javaFileFacadeFqName
-            val project = declaration.project
-            return JavaElementFinder.getInstance(project).findClass(fqName.asString(), GlobalSearchScope.allScope(project))
+            return findFileFacade(parent)
         }
         else if (parent is KtClassBody) {
             assert(parent.parent is KtClassOrObject)
@@ -182,6 +161,26 @@ object LightClassUtil {
         }
 
         return null
+    }
+
+    private fun findFileFacade(ktFile: KtFile): PsiClass? {
+        val fqName = ktFile.javaFileFacadeFqName
+        val project = ktFile.project
+        val classesWithMatchingFqName = JavaElementFinder.getInstance(project).findClasses(fqName.asString(), GlobalSearchScope.allScope(project))
+        return classesWithMatchingFqName.singleOrNull() ?:
+               classesWithMatchingFqName.find {
+                   // NOTE: for multipart facades this works via FakeLightClassForFileOfPackage
+                   it.containingFile?.virtualFile == ktFile.virtualFile
+               }
+    }
+
+    private fun getWrappingClasses(declaration: KtDeclaration): Sequence<PsiClass> {
+        val wrapperClass = getWrappingClass(declaration) ?: return emptySequence()
+        val wrapperClassOrigin = (wrapperClass as KtLightClass).kotlinOrigin
+        if (wrapperClassOrigin is KtObjectDeclaration && wrapperClassOrigin.isCompanion() && wrapperClass.parent is PsiClass) {
+            return sequenceOf(wrapperClass, wrapperClass.parent as PsiClass)
+        }
+        return sequenceOf(wrapperClass)
     }
 
     fun canGenerateLightClass(declaration: KtDeclaration): Boolean {
@@ -192,35 +191,19 @@ object LightClassUtil {
     private fun extractPropertyAccessors(
             ktDeclaration: KtDeclaration,
             specialGetter: PsiMethod?, specialSetter: PsiMethod?): PropertyAccessorsPsiMethods {
-        var getterWrapper = specialGetter
-        var setterWrapper = specialSetter
-        val additionalAccessors = arrayListOf<PsiMethod>()
 
-        val wrappers = getPsiMethodWrappers(ktDeclaration, true).filter {
-            JvmAbi.isGetterName(it.name) || JvmAbi.isSetterName(it.name)
-        }
+        val (setters, getters) = getPsiMethodWrappers(ktDeclaration).partition { it.isSetter }
 
-        for (wrapper in wrappers) {
-            if (JvmAbi.isSetterName(wrapper.name)) {
-                if (setterWrapper == null || setterWrapper === specialSetter) {
-                    setterWrapper = wrapper
-                }
-                else {
-                    additionalAccessors.add(wrapper)
-                }
-            }
-            else {
-                if (getterWrapper == null || getterWrapper == specialGetter) {
-                    getterWrapper = wrapper
-                }
-                else {
-                    additionalAccessors.add(wrapper)
-                }
-            }
-        }
-
+        val allGetters = listOfNotNull(specialGetter) + getters.filterNot { it == specialGetter }
+        val allSetters = listOfNotNull(specialSetter) + setters.filterNot { it == specialSetter }
         val backingField = getLightClassBackingField(ktDeclaration)
-        return PropertyAccessorsPsiMethods(getterWrapper, setterWrapper, backingField, additionalAccessors)
+        val additionalAccessors = allGetters.drop(1) + allSetters.drop(1)
+        return PropertyAccessorsPsiMethods(
+                allGetters.firstOrNull(),
+                allSetters.firstOrNull(),
+                backingField,
+                additionalAccessors
+        )
     }
 
     fun buildLightTypeParameterList(
@@ -257,5 +240,13 @@ object LightClassUtil {
         }
 
         override fun iterator(): Iterator<PsiMethod> = allMethods.iterator()
+    }
+}
+
+fun KtNamedDeclaration.getAccessorLightMethods(): LightClassUtil.PropertyAccessorsPsiMethods {
+    return when (this) {
+        is KtProperty -> LightClassUtil.getLightClassPropertyMethods(this)
+        is KtParameter -> LightClassUtil.getLightClassPropertyMethods(this)
+        else -> throw IllegalStateException("Unexpected property type: ${this}")
     }
 }

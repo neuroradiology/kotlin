@@ -25,7 +25,7 @@ import org.jetbrains.kotlin.idea.quickfix.AnnotationHostKind
 import org.jetbrains.kotlin.idea.quickfix.KotlinSuppressIntentionAction
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
-import java.util.Collections
+import java.util.*
 
 class KotlinSuppressableWarningProblemGroup(
         private val diagnosticFactory: DiagnosticFactory<*>
@@ -102,13 +102,15 @@ private object DeclarationKindDetector : KtVisitor<AnnotationHostKind?, Unit?>()
     override fun visitProperty(d: KtProperty, data: Unit?) = detect(d, d.valOrVarKeyword.text!!)
 
     override fun visitDestructuringDeclaration(d: KtDestructuringDeclaration, data: Unit?) = detect(d, d.valOrVarKeyword?.text ?: "val",
-                                                                                                    name = d.entries.map { it.name!! }.joinToString(", ", "(", ")"))
+                                                                                                    name = d.entries.joinToString(", ", "(", ")") { it.name!! })
 
     override fun visitTypeParameter(d: KtTypeParameter, data: Unit?) = detect(d, "type parameter", newLineNeeded = false)
 
     override fun visitEnumEntry(d: KtEnumEntry, data: Unit?) = detect(d, "enum entry")
 
     override fun visitParameter(d: KtParameter, data: Unit?) = detect(d, "parameter", newLineNeeded = false)
+
+    override fun visitSecondaryConstructor(constructor: KtSecondaryConstructor, data: Unit?) = detect(constructor, "secondary constructor of")
 
     override fun visitObjectDeclaration(d: KtObjectDeclaration, data: Unit?): AnnotationHostKind? {
         if (d.isCompanion()) return detect(d, "companion object", name = "${d.name} of ${d.getStrictParentOfType<KtClass>()?.name}")

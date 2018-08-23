@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,17 @@ package org.jetbrains.kotlin.jvm.compiler
 
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
-import org.jetbrains.kotlin.asJava.KtLightClass
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.load.java.structure.impl.JavaClassImpl
-import org.jetbrains.kotlin.load.kotlin.JvmVirtualFileFinder
-import org.jetbrains.kotlin.resolve.lazy.LazyResolveTestUtil
+import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
+import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil
 import org.jetbrains.kotlin.test.ConfigurationKind
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.jetbrains.kotlin.test.KotlinTestWithEnvironmentManagement
 import org.jetbrains.kotlin.test.TestJdkKind
 import java.io.File
-import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -49,7 +48,7 @@ class KotlinClassFinderTest : KotlinTestWithEnvironmentManagement() {
     fun testNestedClass() {
         val tmpdir = KotlinTestUtils.tmpDirForTest(this)
         KotlinTestUtils.compileKotlinWithJava(
-                listOf(), listOf(File("compiler/testData/kotlinClassFinder/nestedClass.kt")), tmpdir, testRootDisposable!!, null
+                listOf(), listOf(File("compiler/testData/kotlinClassFinder/nestedClass.kt")), tmpdir, testRootDisposable, null
         )
 
         val environment = createEnvironment(tmpdir)
@@ -58,23 +57,22 @@ class KotlinClassFinderTest : KotlinTestWithEnvironmentManagement() {
         val className = "test.A.B.C"
         val psiClass = JavaPsiFacade.getInstance(project).findClass(className, GlobalSearchScope.allScope(project))
         assertNotNull(psiClass, "Psi class not found for $className")
-        assertTrue(psiClass !is KtLightClass, "Kotlin light classes are not not expected");
+        assertTrue(psiClass !is KtLightClass, "Kotlin light classes are not not expected")
 
-        val binaryClass = JvmVirtualFileFinder.SERVICE.getInstance(project).findKotlinClass(JavaClassImpl(psiClass!!))
+        val binaryClass = VirtualFileFinder.SERVICE.getInstance(project).findKotlinClass(JavaClassImpl(psiClass!!))
         assertNotNull(binaryClass, "No binary class for $className")
 
         assertEquals("test/A.B.C", binaryClass?.classId?.toString())
     }
 
     private fun createEnvironment(tmpdir: File?): KotlinCoreEnvironment {
-        val environment = KotlinCoreEnvironment.createForTests(testRootDisposable!!,
-                                                               KotlinTestUtils.compilerConfigurationForTests(
-                                                                       ConfigurationKind.ALL, TestJdkKind.MOCK_JDK, tmpdir),
-                                                               EnvironmentConfigFiles.JVM_CONFIG_FILES)
-
-        // Activate Kotlin light class finder
-        LazyResolveTestUtil.resolveProject(environment.project, environment)
-
-        return environment
+        return KotlinCoreEnvironment.createForTests(
+                testRootDisposable,
+                KotlinTestUtils.newConfiguration(ConfigurationKind.ALL, TestJdkKind.MOCK_JDK, tmpdir),
+                EnvironmentConfigFiles.JVM_CONFIG_FILES
+        ).apply {
+            // Activate Kotlin light class finder
+            JvmResolveUtil.analyze(this)
+        }
     }
 }

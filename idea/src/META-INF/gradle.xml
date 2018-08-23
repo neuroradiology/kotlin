@@ -1,9 +1,13 @@
 <idea-plugin>
-  <extensions defaultExtensionNs="org.jetbrains.kotlin">
-    <projectConfigurator implementation="org.jetbrains.kotlin.idea.configuration.KotlinAndroidGradleModuleConfigurator"/>
-    <projectConfigurator implementation="org.jetbrains.kotlin.idea.configuration.KotlinGradleModuleConfigurator"/>
-  </extensions>
-  <extensions defaultExtensionNs="org.jetbrains.plugins.gradle">
-      <frameworkSupport implementation="org.jetbrains.kotlin.idea.configuration.GradleKotlinJavaFrameworkSupportProvider"/>
-  </extensions>
+    <extensionPoints>
+        <extensionPoint qualifiedName="org.jetbrains.kotlin.gradleProjectImportHandler" area="IDEA_PROJECT"
+                        interface="org.jetbrains.kotlin.idea.configuration.GradleProjectImportHandler"/>
+
+        <extensionPoint qualifiedName="org.jetbrains.kotlin.gradleModelFacade"
+                        interface="org.jetbrains.kotlin.idea.inspections.gradle.KotlinGradleModelFacade"/>
+    </extensionPoints>
+
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <buildSystemTypeDetector implementation="org.jetbrains.kotlin.idea.configuration.GradleDetector"/>
+    </extensions>
 </idea-plugin>

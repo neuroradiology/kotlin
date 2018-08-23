@@ -20,15 +20,16 @@ import com.intellij.codeInsight.intention.LowPriorityAction
 import com.intellij.openapi.editor.Editor
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
 import org.jetbrains.kotlin.idea.core.replaced
-import org.jetbrains.kotlin.idea.util.ShortenReferences
+import org.jetbrains.kotlin.idea.core.ShortenReferences
+import org.jetbrains.kotlin.idea.inspections.SimplifyNegatedBinaryExpressionInspection
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.bindingContextUtil.isUsedAsExpression
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
-import org.jetbrains.kotlin.utils.addToStdlib.check
 
 class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpression>(KtCallExpression::class.java, "Replace 'assert' with 'if' statement"), LowPriorityAction {
     override fun isApplicableTo(element: KtCallExpression, caretOffset: Int): Boolean {
@@ -41,7 +42,7 @@ class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpress
         if (functionLiterals.size > 1) return false
         if (functionLiterals.size == 1 && argumentSize == 1) return false // "assert {...}" is incorrect
 
-        val resolvedCall = element.getResolvedCall(element.analyze()) ?: return false
+        val resolvedCall = element.resolveToCall() ?: return false
         return DescriptorUtils.getFqName(resolvedCall.resultingDescriptor).asString() == "kotlin.assert"
     }
 
@@ -49,7 +50,7 @@ class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpress
         val args = element.valueArguments
         val conditionText = args[0]?.getArgumentExpression()?.text ?: return
         val functionLiteralArgument = element.lambdaArguments.singleOrNull()
-        val bindingContext = element.analyze(BodyResolveMode.PARTIAL)
+        val bindingContext = element.analyze(BodyResolveMode.PARTIAL_WITH_CFA)
         val psiFactory = KtPsiFactory(element)
 
         val messageFunctionExpr = when {
@@ -72,10 +73,8 @@ class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpress
         ifCondition.baseExpression!!.replace(psiFactory.createExpression(conditionText))
 
         val thrownExpression = ((ifExpression.then as KtBlockExpression).statements.single() as KtThrowExpression).thrownExpression
-        val assertionErrorCall = if (thrownExpression is KtCallExpression)
-            thrownExpression
-        else
-            (thrownExpression as KtDotQualifiedExpression).selectorExpression as KtCallExpression
+        val assertionErrorCall = thrownExpression as? KtCallExpression
+                                 ?: (thrownExpression as KtDotQualifiedExpression).selectorExpression as KtCallExpression
 
         val message = psiFactory.createExpression(
                 if (messageIsFunction && messageExpr is KtCallableReferenceExpression) {
@@ -95,7 +94,7 @@ class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpress
 
     private fun extractMessageSingleExpression(functionLiteral: KtLambdaExpression, bindingContext: BindingContext): KtExpression? {
         return functionLiteral.bodyExpression?.statements?.singleOrNull()?.let { singleStatement ->
-            singleStatement.check { it.isUsedAsExpression(bindingContext) }
+            singleStatement.takeIf { it.isUsedAsExpression(bindingContext) }
         }
     }
 
@@ -107,18 +106,15 @@ class ConvertAssertToIfWithThrowIntention : SelfTargetingIntention<KtCallExpress
 
     private fun simplifyConditionIfPossible(ifExpression: KtIfExpression, editor: Editor?) {
         val condition = ifExpression.condition as KtPrefixExpression
-        val simplifier = SimplifyNegatedBinaryExpressionIntention()
-        if (simplifier.isApplicableTo(condition)) {
-            simplifier.applyTo(condition, editor)
+        val simplifier = SimplifyNegatedBinaryExpressionInspection()
+        if (simplifier.isApplicable(condition)) {
+            simplifier.applyTo(condition.operationReference, editor = editor)
         }
     }
 
     private fun replaceWithIfThenThrowExpression(original: KtCallExpression): KtIfExpression {
-        val replacement = KtPsiFactory(original).createExpression("if (!true) { throw java.lang.AssertionError(\"\") }") as KtIfExpression
+        val replacement = KtPsiFactory(original).createExpression("if (!true) { throw kotlin.AssertionError(\"\") }") as KtIfExpression
         val parent = original.parent
-        return if (parent is KtDotQualifiedExpression)
-            parent.replaced(replacement)
-        else
-            original.replaced(replacement)
+        return (parent as? KtDotQualifiedExpression)?.replaced(replacement) ?: original.replaced(replacement)
     }
 }

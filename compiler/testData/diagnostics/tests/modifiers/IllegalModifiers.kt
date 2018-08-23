@@ -1,4 +1,5 @@
-<!UNRESOLVED_REFERENCE!>@<!SYNTAX!><!>myAnnotation<!> <!WRONG_MODIFIER_TARGET!>public<!> package illegal_modifiers
+@<!UNRESOLVED_REFERENCE!><!SYNTAX!><!>myAnnotation<!> <!WRONG_MODIFIER_TARGET!>public<!>
+package illegal_modifiers
 
 abstract class A() {
     <!INCOMPATIBLE_MODIFIERS!>abstract<!> <!INCOMPATIBLE_MODIFIERS!>final<!> fun f()
@@ -15,12 +16,9 @@ abstract class A() {
 class FinalClass() {
     <!NON_FINAL_MEMBER_IN_FINAL_CLASS!>open<!> fun foo() {}
     val i: Int = 1
-        <!WRONG_MODIFIER_TARGET!>open<!> <!WRONG_MODIFIER_TARGET!>inline<!> get(): Int = field
+        <!WRONG_MODIFIER_TARGET!>open<!> get(): Int = field
     var j: Int = 1
-        <!WRONG_MODIFIER_TARGET!>open<!> <!WRONG_MODIFIER_TARGET!>inline<!> set(v: Int) {}
-
-    <!WRONG_MODIFIER_TARGET!>inline<!> val f: ()->Unit
-        get() = {}
+        <!WRONG_MODIFIER_TARGET!>open<!> set(<!UNUSED_PARAMETER!>v<!>: Int) {}
 }
 
 <!INCOMPATIBLE_MODIFIERS!>private<!> <!INCOMPATIBLE_MODIFIERS!>public<!> class C
@@ -122,7 +120,7 @@ class IllegalModifiers7() {
 class IllegalModifiers8 {
     <!WRONG_MODIFIER_TARGET!>abstract<!>
     <!WRONG_MODIFIER_TARGET!>enum<!>
-    <!REDUNDANT_MODIFIER, WRONG_MODIFIER_TARGET, REDUNDANT_MODIFIER!>open<!>
+    <!REDUNDANT_MODIFIER, WRONG_MODIFIER_TARGET!>open<!>
     <!WRONG_MODIFIER_TARGET!>inner<!>
     <!WRONG_MODIFIER_TARGET!>annotation<!>
     <!WRONG_MODIFIER_TARGET!>override<!>
@@ -147,7 +145,7 @@ class IllegalModifiers9 {
 class IllegalModifiers10
 <!WRONG_MODIFIER_TARGET!>abstract<!>
 <!WRONG_MODIFIER_TARGET!>enum<!>
-<!REDUNDANT_MODIFIER, WRONG_MODIFIER_TARGET, REDUNDANT_MODIFIER!>open<!>
+<!REDUNDANT_MODIFIER, WRONG_MODIFIER_TARGET!>open<!>
 <!WRONG_MODIFIER_TARGET!>inner<!>
 <!WRONG_MODIFIER_TARGET!>annotation<!>
 <!WRONG_MODIFIER_TARGET!>override<!>
@@ -159,3 +157,7 @@ class IllegalModifiers10
 <!INCOMPATIBLE_MODIFIERS!>const<!> constructor()
 
 class IllegalModifiers11 <!INCOMPATIBLE_MODIFIERS!>private<!> <!INCOMPATIBLE_MODIFIERS!>protected<!> constructor()
+
+class Outer {
+    <!INCOMPATIBLE_MODIFIERS!>inner<!> <!INCOMPATIBLE_MODIFIERS!>sealed<!> class Inner
+}

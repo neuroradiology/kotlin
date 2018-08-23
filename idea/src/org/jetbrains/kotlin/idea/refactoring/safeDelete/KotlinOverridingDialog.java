@@ -37,7 +37,7 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptor;
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.idea.KotlinBundle;
 import org.jetbrains.kotlin.idea.caches.resolve.ResolutionUtils;
-import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringUtil;
+import org.jetbrains.kotlin.idea.refactoring.RenderingUtilsKt;
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers;
 import org.jetbrains.kotlin.psi.KtElement;
 import org.jetbrains.kotlin.psi.KtNamedFunction;
@@ -102,7 +102,7 @@ class KotlinOverridingDialog extends DialogWrapper {
                     return KotlinBundle.message(
                             "x.in.y",
                             DescriptorRenderer.COMPACT.render(declarationDescriptor),
-                            IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_IN_TYPES.render(containingDescriptor)
+                            IdeDescriptorRenderers.SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS.render(containingDescriptor)
                     );
                 }
             }
@@ -110,7 +110,7 @@ class KotlinOverridingDialog extends DialogWrapper {
 
         assert element instanceof PsiMethod
                 : "Method accepts only kotlin functions/properties and java methods, but '" + element.getText() + "' was found";
-        return KotlinRefactoringUtil.formatPsiMethod((PsiMethod) element, true, false);
+        return RenderingUtilsKt.formatPsiMethod((PsiMethod) element, true, false);
     }
 
     @Override

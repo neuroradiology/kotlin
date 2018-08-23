@@ -27,9 +27,13 @@ interface Module {
 
     fun getSourceFiles(): List<String>
 
+    fun getCommonSourceFiles(): List<String>
+
     fun getClasspathRoots(): List<String>
 
     fun getJavaSourceRoots(): List<JavaRootPath>
+
+    val modularJdkRoot: String?
 }
 
 data class JavaRootPath(val path: String, val packagePrefix: String? = null)

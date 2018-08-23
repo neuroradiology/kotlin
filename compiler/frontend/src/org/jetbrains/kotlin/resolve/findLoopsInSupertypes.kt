@@ -15,37 +15,47 @@
  */
 
 @file:JvmName("FindLoopsInSupertypes")
+
 package org.jetbrains.kotlin.resolve
 
 import org.jetbrains.kotlin.descriptors.SupertypeLoopChecker
+import org.jetbrains.kotlin.resolve.descriptorUtil.isCompanionObject
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.TypeConstructor
 import org.jetbrains.kotlin.utils.DFS
+import org.jetbrains.kotlin.utils.SmartList
 
 class SupertypeLoopCheckerImpl : SupertypeLoopChecker {
     override fun findLoopsInSupertypesAndDisconnect(
-            currentTypeConstructor: TypeConstructor,
-            superTypes: MutableCollection<KotlinType>,
-            neighbors: (TypeConstructor) -> Iterable<KotlinType>,
-            reportLoop: (KotlinType) -> Unit
-    ) {
-
+        currentTypeConstructor: TypeConstructor,
+        superTypes: Collection<KotlinType>,
+        neighbors: (TypeConstructor) -> Iterable<KotlinType>,
+        reportLoop: (KotlinType) -> Unit
+    ): Collection<KotlinType> {
         val graph = DFS.Neighbors<TypeConstructor> { node -> neighbors(node).map { it.constructor } }
 
-        val iterator = superTypes.iterator()
-        while (iterator.hasNext()) {
-            val item = iterator.next()
-            if (isReachable(item.constructor, currentTypeConstructor, graph)) {
-                iterator.remove()
-                reportLoop(item)
+        val superTypesToRemove = SmartList<KotlinType>()
+
+        for (superType in superTypes) {
+            if (isReachable(superType.constructor, currentTypeConstructor, graph)) {
+                superTypesToRemove.add(superType)
+                reportLoop(superType)
+
+                currentTypeConstructor.declarationDescriptor?.let {
+                    if (it.isCompanionObject()) {
+                        reportLoop(it.defaultType)
+                    }
+                }
             }
         }
+
+        return if (superTypesToRemove.isEmpty()) superTypes else superTypes - superTypesToRemove
     }
 }
 
 private fun isReachable(
-        from: TypeConstructor, to: TypeConstructor,
-        neighbors: DFS.Neighbors<TypeConstructor>
+    from: TypeConstructor, to: TypeConstructor,
+    neighbors: DFS.Neighbors<TypeConstructor>
 ): Boolean {
     var result = false
     DFS.dfs(listOf(from), neighbors, DFS.VisitedWithSet(), object : DFS.AbstractNodeHandler<TypeConstructor, Unit>() {

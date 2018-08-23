@@ -1,5 +1,5 @@
-// "Create member function 'foo'" "true"
-// ERROR: Type mismatch: inferred type is A<kotlin.Int> but kotlin.Int was expected
+// "Create member function 'A.foo'" "true"
+// ERROR: Type mismatch: inferred type is A<Int> but Int was expected
 
 class A<T>(val n: T)
 

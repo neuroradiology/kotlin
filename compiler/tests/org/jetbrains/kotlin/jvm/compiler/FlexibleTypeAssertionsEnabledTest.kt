@@ -16,18 +16,17 @@
 
 package org.jetbrains.kotlin.jvm.compiler
 
-import org.jetbrains.kotlin.load.java.lazy.types.LazyJavaTypeResolver
-import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
+import org.jetbrains.kotlin.builtins.DefaultBuiltIns
 import org.jetbrains.kotlin.test.KotlinTestWithEnvironmentManagement
+import org.jetbrains.kotlin.types.KotlinTypeFactory
 
 class FlexibleTypeAssertionsEnabledTest : KotlinTestWithEnvironmentManagement() {
 
     fun testAssertionsAreOn() {
-        val builtIns = JvmPlatform.builtIns
+        val builtIns = DefaultBuiltIns.Instance
 
         try {
-            LazyJavaTypeResolver.FlexibleJavaClassifierTypeCapabilities.create(
-                    builtIns.intType, builtIns.stringType).arguments
+            KotlinTypeFactory.flexibleType(builtIns.intType, builtIns.stringType).arguments
         } catch (e: AssertionError) {
             assertEquals("Lower bound Int of a flexible type must be a subtype of the upper bound String", e.message)
             return

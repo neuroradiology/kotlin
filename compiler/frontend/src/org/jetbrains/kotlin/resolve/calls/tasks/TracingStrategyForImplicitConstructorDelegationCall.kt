@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ import org.jetbrains.kotlin.types.KotlinType
 
 
 class TracingStrategyForImplicitConstructorDelegationCall(
-        val delegationCall: KtConstructorDelegationCall, call: Call
+    val delegationCall: KtConstructorDelegationCall, call: Call
 ) : AbstractTracingStrategy(delegationCall.calleeExpression!!, call) {
 
     val calleeExpression = delegationCall.calleeExpression
@@ -83,9 +83,7 @@ class TracingStrategyForImplicitConstructorDelegationCall(
     }
 
     private fun reportError(trace: BindingTrace) {
-        if (!trace.bindingContext.diagnostics.forElement(delegationCall).
-            any { it.factory == Errors.EXPLICIT_DELEGATION_CALL_REQUIRED }
-        ) {
+        if (!trace.bindingContext.diagnostics.forElement(delegationCall).any { it.factory == Errors.EXPLICIT_DELEGATION_CALL_REQUIRED }) {
             trace.report(Errors.EXPLICIT_DELEGATION_CALL_REQUIRED.on(delegationCall))
         }
     }
@@ -105,7 +103,7 @@ class TracingStrategyForImplicitConstructorDelegationCall(
     }
 
     override fun nestedClassAccessViaInstanceReference(
-            trace: BindingTrace, classDescriptor: ClassDescriptor, explicitReceiverKind: ExplicitReceiverKind
+        trace: BindingTrace, classDescriptor: ClassDescriptor, explicitReceiverKind: ExplicitReceiverKind
     ) {
         unexpectedError("nestedClassAccessViaInstanceReference")
     }
@@ -118,7 +116,12 @@ class TracingStrategyForImplicitConstructorDelegationCall(
         unexpectedError("missingReceiver")
     }
 
-    override fun wrongReceiverType(trace: BindingTrace, receiverParameter: ReceiverParameterDescriptor, receiverArgument: ReceiverValue, c: ResolutionContext<*>) {
+    override fun wrongReceiverType(
+        trace: BindingTrace,
+        receiverParameter: ReceiverParameterDescriptor,
+        receiverArgument: ReceiverValue,
+        c: ResolutionContext<*>
+    ) {
         unexpectedError("wrongReceiverType")
     }
 
@@ -126,7 +129,7 @@ class TracingStrategyForImplicitConstructorDelegationCall(
         unexpectedError("noReceiverAllowed")
     }
 
-    override fun wrongNumberOfTypeArguments(trace: BindingTrace, expectedTypeArgumentCount: Int) {
+    override fun wrongNumberOfTypeArguments(trace: BindingTrace, expectedTypeArgumentCount: Int, descriptor: CallableDescriptor) {
         unexpectedError("wrongNumberOfTypeArguments")
     }
 

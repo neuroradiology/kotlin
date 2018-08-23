@@ -50,22 +50,3 @@ public final class Foo : p.A<kotlin.String>, p.B {
     public open override /*2*/ /*fake_override*/ fun hashCode(): kotlin.Int
     public open override /*2*/ /*fake_override*/ fun toString(): kotlin.String
 }
-
-package p {
-
-    public interface A</*0*/ T> : p.Base<T> {
-        // -- Module: <m1> --
-    }
-
-    public interface B : p.Base<kotlin.String> {
-        // -- Module: <m2> --
-    }
-
-    public interface Base</*0*/ T> {
-        // -- Module: <m1> --
-    }
-
-    public interface Base</*0*/ T> {
-        // -- Module: <m2> --
-    }
-}

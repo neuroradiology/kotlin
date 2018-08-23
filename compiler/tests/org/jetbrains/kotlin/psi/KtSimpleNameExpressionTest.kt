@@ -18,12 +18,12 @@ package org.jetbrains.kotlin.psi
 
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.psi.psiUtil.getReceiverExpression
-import org.jetbrains.kotlin.test.KotlinLiteFixture
+import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
 import org.junit.Assert
 
-class KtSimpleNameExpressionTest : KotlinLiteFixture() {
+class KtSimpleNameExpressionTest : KotlinTestWithEnvironment() {
     fun testGetReceiverExpressionIdentifier() {
         // Binary Expressions
         assertReceiver("1 + 2", "1")
@@ -31,11 +31,15 @@ class KtSimpleNameExpressionTest : KotlinLiteFixture() {
         assertReceiver("1 !in array(1)", "array(1)")
         assertReceiver("1 to 2", "1")
     }
+
     private fun assertReceiver(exprString: String, expected: String) {
         val expression = KtPsiFactory(project).createExpression(exprString) as KtBinaryExpression
         Assert.assertEquals(expected, expression.operationReference.getReceiverExpression()!!.text)
     }
+
     override fun createEnvironment(): KotlinCoreEnvironment {
-        return KotlinCoreEnvironment.createForTests(testRootDisposable!!, CompilerConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES)
+        return KotlinCoreEnvironment.createForTests(
+                testRootDisposable, KotlinTestUtils.newConfiguration(), EnvironmentConfigFiles.JVM_CONFIG_FILES
+        )
     }
 }

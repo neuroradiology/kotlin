@@ -16,10 +16,14 @@
 
 package org.jetbrains.kotlin.types.expressions
 
+import gnu.trove.THashSet
+import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor
 import org.jetbrains.kotlin.psi.KtLoopExpression
+import org.jetbrains.kotlin.psi.KtTryExpression
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfo
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValue
+import org.jetbrains.kotlin.resolve.calls.smartcasts.IdentifierInfo
 import java.util.*
 
 /**
@@ -28,21 +32,28 @@ import java.util.*
  */
 class PreliminaryLoopVisitor private constructor() : AssignedVariablesSearcher() {
 
-    fun clearDataFlowInfoForAssignedLocalVariables(dataFlowInfo: DataFlowInfo): DataFlowInfo {
+    fun clearDataFlowInfoForAssignedLocalVariables(
+        dataFlowInfo: DataFlowInfo,
+        languageVersionSettings: LanguageVersionSettings
+    ): DataFlowInfo {
         var resultFlowInfo = dataFlowInfo
-        val nullabilityMap = resultFlowInfo.completeNullabilityInfo
+        val nonTrivialValues = THashSet<DataFlowValue>().apply {
+            addAll(dataFlowInfo.completeNullabilityInfo.iterator().map { it._1 })
+            addAll(dataFlowInfo.completeTypeInfo.iterator().map { it._1 })
+        }
         val valueSetToClear = LinkedHashSet<DataFlowValue>()
-        for (value in nullabilityMap.keys) {
-            // Only predictable variables are under interest here
-            val id = value.id
-            if (value.kind == DataFlowValue.Kind.PREDICTABLE_VARIABLE && id is LocalVariableDescriptor) {
-                if (hasWriters(id)) {
+        for (value in nonTrivialValues) {
+            // Only stable variables are under interest here
+            val identifierInfo = value.identifierInfo
+            if (value.kind == DataFlowValue.Kind.STABLE_VARIABLE && identifierInfo is IdentifierInfo.Variable) {
+                val variableDescriptor = identifierInfo.variable
+                if (variableDescriptor is LocalVariableDescriptor && hasWriters(variableDescriptor)) {
                     valueSetToClear.add(value)
                 }
             }
         }
         for (valueToClear in valueSetToClear) {
-            resultFlowInfo = resultFlowInfo.clearValueInfo(valueToClear)
+            resultFlowInfo = resultFlowInfo.clearValueInfo(valueToClear, languageVersionSettings)
         }
         return resultFlowInfo
     }
@@ -53,6 +64,13 @@ class PreliminaryLoopVisitor private constructor() : AssignedVariablesSearcher()
         fun visitLoop(loopExpression: KtLoopExpression): PreliminaryLoopVisitor {
             val visitor = PreliminaryLoopVisitor()
             loopExpression.accept(visitor, null)
+            return visitor
+        }
+
+        @JvmStatic
+        fun visitTryBlock(tryExpression: KtTryExpression): PreliminaryLoopVisitor {
+            val visitor = PreliminaryLoopVisitor()
+            tryExpression.tryBlock.accept(visitor, null)
             return visitor
         }
     }

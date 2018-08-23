@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2013 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,33 +16,29 @@
 
 package org.jetbrains.kotlin.maven;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.model.PluginExecution;
+import com.intellij.openapi.util.text.StringUtil;
+import org.apache.maven.artifact.DependencyResolutionRequiredException;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.project.MavenProject;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.cli.common.arguments.K2JSCompilerArguments;
-import org.jetbrains.kotlin.cli.common.arguments.K2JVMCompilerArguments;
-import org.jetbrains.kotlin.cli.js.K2JSCompiler;
-import org.jetbrains.kotlin.utils.LibraryUtils;
 
 import java.io.File;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
  * Converts Kotlin to JavaScript code
- *
- * @noinspection UnusedDeclaration
  */
 @Mojo(name = "test-js",
         defaultPhase = LifecyclePhase.TEST_COMPILE,
-        requiresDependencyResolution = ResolutionScope.TEST
+        requiresDependencyResolution = ResolutionScope.TEST,
+        threadSafe = true
 )
 public class KotlinTestJSCompilerMojo extends K2JSCompilerMojo {
 
@@ -65,7 +61,7 @@ public class KotlinTestJSCompilerMojo extends K2JSCompilerMojo {
     private List<String> sourceDirs;
 
     @Override
-    public List<String> getSources() {
+    public List<String> getSourceFilePaths() {
         if (sourceDirs != null && !sourceDirs.isEmpty()) return sourceDirs;
         return defaultSourceDirs;
     }
@@ -77,20 +73,31 @@ public class KotlinTestJSCompilerMojo extends K2JSCompilerMojo {
     private String outputFile;
 
     /**
-     * Flag enables or disables metafile generation
+     * Flag enables or disables .meta.js file generation
      */
     @Parameter(defaultValue = "true")
     private boolean metaInfo;
 
     @Override
-    protected void configureSpecificCompilerArguments(@NotNull K2JSCompilerArguments arguments) throws MojoExecutionException {
-        module = testModule;
+    protected void configureSpecificCompilerArguments(@NotNull K2JSCompilerArguments arguments, @NotNull List<File> sourceRoots) throws MojoExecutionException {
+        List<String> friends = getOutputDirectoriesCollector().getOrDefault(project.getArtifactId(), Collections.emptyList());
+        arguments.setFriendModules(StringUtil.join(friends, File.pathSeparator));
         output = testOutput;
 
-        super.configureSpecificCompilerArguments(arguments);
+        super.configureSpecificCompilerArguments(arguments, sourceRoots);
 
-        arguments.outputFile = outputFile;
-        arguments.metaInfo = metaInfo;
+        arguments.setOutputFile(outputFile);
+        arguments.setMetaInfo(metaInfo);
+    }
+
+    @Override
+    protected List<String> getClassPathElements() throws DependencyResolutionRequiredException {
+        return project.getTestClasspathElements();
+    }
+
+    @Override
+    protected List<String> getRelatedSourceRoots(MavenProject project) {
+        return project.getTestCompileSourceRoots();
     }
 
     @Override

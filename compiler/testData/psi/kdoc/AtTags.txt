@@ -1,4 +1,4 @@
-JetFile: AtTags.kt
+KtFile: AtTags.kt
   PACKAGE_DIRECTIVE
     <empty list>
   IMPORT_LIST
@@ -14,6 +14,16 @@ JetFile: AtTags.kt
         PsiWhiteSpace('\n ')
         PsiElement(KDOC_LEADING_ASTERISK)('*')
         PsiElement(KDOC_TEXT)(' text @notATag')
+        PsiWhiteSpace('\n ')
+        PsiElement(KDOC_LEADING_ASTERISK)('*')
+        PsiElement(KDOC_TEXT)(' ```')
+        PsiWhiteSpace('\n ')
+        PsiElement(KDOC_LEADING_ASTERISK)('*')
+        PsiElement(KDOC_CODE_BLOCK_TEXT)(' @notATag and some description')
+        PsiWhiteSpace('\n ')
+        PsiElement(KDOC_LEADING_ASTERISK)('*')
+        PsiElement(KDOC_CODE_BLOCK_TEXT)(' ')
+        PsiElement(KDOC_TEXT)('```')
         PsiWhiteSpace('\n ')
         PsiElement(KDOC_LEADING_ASTERISK)('*')
         PsiElement(KDOC_TEXT)(' @')

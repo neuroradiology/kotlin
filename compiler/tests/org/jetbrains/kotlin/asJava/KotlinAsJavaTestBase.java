@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,15 @@
 package org.jetbrains.kotlin.asJava;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.kotlin.asJava.finder.JavaElementFinder;
+import org.jetbrains.kotlin.cli.common.config.ContentRootsKt;
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
 import org.jetbrains.kotlin.config.CompilerConfiguration;
-import org.jetbrains.kotlin.config.ContentRootsKt;
-import org.jetbrains.kotlin.resolve.lazy.KotlinTestWithEnvironment;
+import org.jetbrains.kotlin.test.ConfigurationKind;
+import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
+import org.jetbrains.kotlin.test.TestJdkKind;
 
 import java.io.File;
 import java.util.List;
@@ -31,7 +35,7 @@ public abstract class KotlinAsJavaTestBase extends KotlinTestWithEnvironment {
 
     @Override
     protected KotlinCoreEnvironment createEnvironment() {
-        CompilerConfiguration configuration = new CompilerConfiguration();
+        CompilerConfiguration configuration = KotlinTestUtils.newConfiguration(ConfigurationKind.JDK_ONLY, TestJdkKind.MOCK_JDK);
 
         for (File root : getKotlinSourceRoots()) {
             ContentRootsKt.addKotlinSourceRoot(configuration, root.getPath());
@@ -50,8 +54,9 @@ public abstract class KotlinAsJavaTestBase extends KotlinTestWithEnvironment {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-
-        finder = AbstractCompilerLightClassTest.createFinder(getEnvironment());
+        KotlinCoreEnvironment environment = getEnvironment();
+        KotlinTestUtils.resolveAllKotlinFiles(environment);
+        finder = JavaElementFinder.Companion.getInstance(environment.getProject());
     }
 
     @Override

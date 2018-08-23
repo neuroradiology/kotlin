@@ -17,41 +17,55 @@
 package org.jetbrains.kotlin.j2k.usageProcessing
 
 import com.intellij.psi.*
+import com.intellij.psi.util.PsiUtil
 import com.intellij.util.IncorrectOperationException
 import org.jetbrains.kotlin.j2k.AccessorKind
 import org.jetbrains.kotlin.j2k.CodeConverter
 import org.jetbrains.kotlin.j2k.ast.*
+import org.jetbrains.kotlin.j2k.dot
 
-class FieldToPropertyProcessing(val field: PsiField, val propertyName: String, val isNullable: Boolean) : UsageProcessing {
+class FieldToPropertyProcessing(
+        private val field: PsiField,
+        private val propertyName: String,
+        private val isNullable: Boolean,
+        private val replaceReadWithFieldReference: Boolean,
+        private val replaceWriteWithFieldReference: Boolean
+) : UsageProcessing {
     override val targetElement: PsiElement get() = this.field
 
     override val convertedCodeProcessor: ConvertedCodeProcessor? =
-            if (field.name != propertyName) MyConvertedCodeProcessor() else null
+            if (field.name != propertyName || replaceReadWithFieldReference || replaceWriteWithFieldReference) MyConvertedCodeProcessor() else null
 
-    override var javaCodeProcessor = if (field.hasModifierProperty(PsiModifier.PRIVATE))
-        null
-     else if (!field.hasModifierProperty(PsiModifier.STATIC))
-        UseAccessorsJavaCodeProcessor()
-    else if (field.name != propertyName)
-        ElementRenamedCodeProcessor(propertyName)
-    else
-        null
+    override var javaCodeProcessors =
+            when {
+                field.hasModifierProperty(PsiModifier.PRIVATE) -> emptyList()
+                field.name != propertyName -> listOf(ElementRenamedCodeProcessor(propertyName), UseAccessorsJavaCodeProcessor())
+                else -> listOf(UseAccessorsJavaCodeProcessor())
+            }
 
-    override val kotlinCodeProcessor = if (field.name != propertyName) ElementRenamedCodeProcessor(propertyName) else null
+    override val kotlinCodeProcessors =
+            if (field.name != propertyName)
+                listOf(ElementRenamedCodeProcessor(propertyName))
+            else
+                emptyList()
 
     private inner class MyConvertedCodeProcessor : ConvertedCodeProcessor {
         override fun convertVariableUsage(expression: PsiReferenceExpression, codeConverter: CodeConverter): Expression? {
-            val identifier = Identifier(propertyName, isNullable).assignNoPrototype()
+            val useFieldReference = replaceReadWithFieldReference && PsiUtil.isAccessedForReading(expression)
+                                    || replaceWriteWithFieldReference && PsiUtil.isAccessedForWriting(expression)
+
+            //TODO: what if local "field" is declared? Should be rare case though
+            val identifier = Identifier.withNoPrototype(if (useFieldReference) "field" else propertyName, isNullable)
 
             val qualifier = expression.qualifierExpression
-            if (qualifier != null) {
-                return QualifiedExpression(codeConverter.convertExpression(qualifier), identifier)
+            if (qualifier != null && !useFieldReference) {
+                return QualifiedExpression(codeConverter.convertExpression(qualifier), identifier, expression.dot())
             }
             else {
                 // check if field name is shadowed
                 val elementFactory = PsiElementFactory.SERVICE.getInstance(expression.project)
                 val refExpr = try {
-                    elementFactory.createExpressionFromText(propertyName, expression) as? PsiReferenceExpression ?: return identifier
+                    elementFactory.createExpressionFromText(identifier.name, expression) as? PsiReferenceExpression ?: return identifier
                 }
                 catch(e: IncorrectOperationException) {
                     return identifier
@@ -59,7 +73,7 @@ class FieldToPropertyProcessing(val field: PsiField, val propertyName: String, v
                 return if (refExpr.resolve() == null)
                     identifier
                 else
-                    QualifiedExpression(ThisExpression(Identifier.Empty).assignNoPrototype(), identifier) //TODO: this is not correct in case of nested/anonymous classes
+                    QualifiedExpression(ThisExpression(Identifier.Empty).assignNoPrototype(), identifier, null) //TODO: this is not correct in case of nested/anonymous classes
             }
         }
     }
@@ -90,10 +104,8 @@ class FieldToPropertyProcessing(val field: PsiField, val propertyName: String, v
 
                 is PsiPrefixExpression, is PsiPostfixExpression -> {
                     //TODO: what if it's used as value?
-                    val operationType = if (parent is PsiPrefixExpression)
-                        parent.operationTokenType
-                    else
-                        (parent as PsiPostfixExpression).operationTokenType
+                    val operationType = (parent as? PsiPrefixExpression)?.operationTokenType
+                                        ?: (parent as PsiPostfixExpression).operationTokenType
                     val opText = when (operationType) {
                         JavaTokenType.PLUSPLUS -> "+"
                         JavaTokenType.MINUSMINUS -> "-"

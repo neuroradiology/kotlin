@@ -27,7 +27,6 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
 import org.jetbrains.kotlin.resolve.jvm.AsmTypes
 import org.jetbrains.kotlin.resolve.jvm.AsmTypes.JAVA_STRING_TYPE
-import org.jetbrains.org.objectweb.asm.Opcodes
 import org.jetbrains.org.objectweb.asm.Type
 import org.jetbrains.org.objectweb.asm.commons.InstructionAdapter
 
@@ -43,16 +42,16 @@ class Concat : IntrinsicMethod() {
         if (element is KtBinaryExpression && element.operationReference.getReferencedNameElementType() == KtTokens.PLUS) {
             // LHS + RHS
             genStringBuilderConstructor(v)
-            codegen.invokeAppend(element.left)
-            codegen.invokeAppend(element.right)
+            codegen.invokeAppend(v, element.left)
+            codegen.invokeAppend(v, element.right)
         }
         else {
-            // LHS?.plus(RHS)
-            receiver.put(AsmTypes.OBJECT_TYPE, v)
+            // Explicit plus call LHS?.plus(RHS) or LHS.plus(RHS)
+            receiver.put(AsmTypes.JAVA_STRING_TYPE, v)
             genStringBuilderConstructor(v)
             v.swap()
-            genInvokeAppendMethod(v, returnType)
-            codegen.invokeAppend(arguments.get(0))
+            genInvokeAppendMethod(v, returnType, null)
+            codegen.invokeAppend(v, arguments[0])
         }
 
         v.invokevirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;", false)
@@ -83,10 +82,8 @@ class Concat : IntrinsicMethod() {
                     }
                 }
 
-                override fun afterReceiverGeneration(v: InstructionAdapter) {
-                    v.visitTypeInsn(Opcodes.NEW, "java/lang/StringBuilder")
-                    v.dupX1()
-                    v.swap()
+                override fun afterReceiverGeneration(v: InstructionAdapter, frameMap: FrameMap) {
+                    v.generateNewInstanceDupAndPlaceBeforeStackTop(frameMap, AsmTypes.JAVA_STRING_TYPE, "java/lang/StringBuilder")
                     v.invokespecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V", false)
                 }
 
@@ -95,7 +92,7 @@ class Concat : IntrinsicMethod() {
                     // in case of callable reference passed to a generic function, e.g.:
                     //      charArrayOf('O', 'K').fold("", String::plus)
                     // TODO Make String::plus generic, and invoke proper StringBuilder#append.
-                    AsmUtil.genInvokeAppendMethod(v, AsmTypes.OBJECT_TYPE)
+                    AsmUtil.genInvokeAppendMethod(v, AsmTypes.OBJECT_TYPE, null)
                     v.invokevirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;", false)
                 }
             }

@@ -1,10 +1,11 @@
+// IGNORE_BACKEND: JS_IR
 var x = 0
 fun inc(): Int {
     x++
     return 0
 }
 fun box(): String {
-  val al = java.util.ArrayList<Int>()
+  val al = ArrayList<Int>()
   when (inc()) {
       in al -> return "fail 1"
       else -> {}

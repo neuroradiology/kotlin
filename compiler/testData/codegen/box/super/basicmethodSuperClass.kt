@@ -1,4 +1,5 @@
-import java.util.ArrayList
+// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: NATIVE
 
 class N() : ArrayList<Any>() {
     override fun add(el: Any)  : Boolean {

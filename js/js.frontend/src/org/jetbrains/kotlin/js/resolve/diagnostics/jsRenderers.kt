@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,24 +18,24 @@ package org.jetbrains.kotlin.js.resolve.diagnostics
 
 import com.google.gwt.dev.js.rhino.Utils.isEndOfLine
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.renderer.Renderer
+import org.jetbrains.kotlin.diagnostics.rendering.DiagnosticParameterRenderer
+import org.jetbrains.kotlin.diagnostics.rendering.RenderingContext
 
-object RenderFirstLineOfElementText : Renderer<PsiElement> {
-    override fun render(element: PsiElement): String {
+object RenderFirstLineOfElementText : DiagnosticParameterRenderer<PsiElement> {
+    override fun render(element: PsiElement, context: RenderingContext): String {
         val text = element.text
         val index = text.indexOf('\n')
         return if (index == -1) text else text.substring(0, index) + "..."
     }
 }
 
-abstract class JsCallDataRenderer : Renderer<JsCallData> {
+abstract class JsCallDataRenderer : DiagnosticParameterRenderer<JsCallData> {
     protected abstract fun format(data: JsCallDataWithCode): String
 
-    override fun render(data: JsCallData): String =
+    override fun render(data: JsCallData, context: RenderingContext): String =
             when (data) {
                 is JsCallDataWithCode -> format(data)
-                is JsCallData -> data.message
-                else -> throw AssertionError("Cannot render null data")
+                else -> data.message
             }
 }
 
@@ -43,7 +43,7 @@ object JsCallDataTextRenderer : JsCallDataRenderer() {
     override fun format(data: JsCallDataWithCode): String {
         val codeRange = data.codeRange
         val code = data.code.underlineAsText(codeRange.startOffset, codeRange.endOffset)
-        return "${data.message} in code:\n${code}"
+        return "${data.message} in code:\n$code"
     }
 }
 
@@ -51,7 +51,7 @@ object JsCallDataHtmlRenderer : JsCallDataRenderer() {
     override fun format(data: JsCallDataWithCode): String {
         val codeRange = data.codeRange
         val code = data.code.underlineAsHtml(codeRange.startOffset, codeRange.endOffset)
-        return "${data.message} in code:<br><pre>${code}</pre>"
+        return "${data.message} in code:<br><pre>$code</pre>"
     }
 }
 

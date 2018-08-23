@@ -18,48 +18,71 @@ package org.jetbrains.kotlin.cli.common.messages;
 
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
+import kotlin.collections.CollectionsKt;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.*;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 public class GroupingMessageCollector implements MessageCollector {
-
     private final MessageCollector delegate;
+    private final boolean treatWarningsAsErrors;
 
-    // File path (nullable) -> message
-    private final Multimap<String, Message> groupedMessages = LinkedHashMultimap.create();
+    // Note that the key in this map can be null
+    private final Multimap<CompilerMessageLocation, Message> groupedMessages = LinkedHashMultimap.create();
 
-    public GroupingMessageCollector(@NotNull MessageCollector delegate) {
+    public GroupingMessageCollector(@NotNull MessageCollector delegate, boolean treatWarningsAsErrors) {
         this.delegate = delegate;
+        this.treatWarningsAsErrors = treatWarningsAsErrors;
+    }
+
+    @Override
+    public void clear() {
+        groupedMessages.clear();
     }
 
     @Override
     public void report(
             @NotNull CompilerMessageSeverity severity,
             @NotNull String message,
-            @NotNull CompilerMessageLocation location
+            @Nullable CompilerMessageLocation location
     ) {
         if (CompilerMessageSeverity.VERBOSE.contains(severity)) {
             delegate.report(severity, message, location);
         }
         else {
-            groupedMessages.put(location.getPath(), new Message(severity, message, location));
+            groupedMessages.put(location, new Message(severity, message, location));
         }
     }
 
-    public void flush() {
-        boolean hasError = false;
+    @Override
+    public boolean hasErrors() {
+        return hasExplicitErrors() || (treatWarningsAsErrors && hasWarnings());
+    }
 
-        Collection<String> keys = sortedKeys();
-        for (String path : keys) {
-            for (Message message : groupedMessages.get(path)) {
-                hasError |= CompilerMessageSeverity.ERRORS.contains(message.severity);
-            }
+    private boolean hasExplicitErrors() {
+        return groupedMessages.entries().stream().anyMatch(entry -> entry.getValue().severity.isError());
+    }
+
+    private boolean hasWarnings() {
+        return groupedMessages.entries().stream().anyMatch(entry -> entry.getValue().severity.isWarning());
+    }
+
+    public void flush() {
+        boolean hasExplicitErrors = hasExplicitErrors();
+
+        if (treatWarningsAsErrors && !hasExplicitErrors && hasWarnings()) {
+            report(CompilerMessageSeverity.ERROR, "warnings found and -Werror specified", null);
         }
 
-        for (String path : keys) {
-            for (Message message : groupedMessages.get(path)) {
-                if (!hasError || CompilerMessageSeverity.ERRORS.contains(message.severity)) {
+        List<CompilerMessageLocation> sortedKeys =
+                CollectionsKt.sortedWith(groupedMessages.keySet(), Comparator.nullsFirst(CompilerMessageLocationComparator.INSTANCE));
+        for (CompilerMessageLocation location : sortedKeys) {
+            for (Message message : groupedMessages.get(location)) {
+                if (!hasExplicitErrors || message.severity.isError() || message.severity == CompilerMessageSeverity.STRONG_WARNING) {
                     delegate.report(message.severity, message.message, message.location);
                 }
             }
@@ -68,20 +91,28 @@ public class GroupingMessageCollector implements MessageCollector {
         groupedMessages.clear();
     }
 
-    @NotNull
-    private Collection<String> sortedKeys() {
-        List<String> sortedKeys = new ArrayList<String>(groupedMessages.keySet());
-        // ensure that messages with no location i.e. perf, incomplete hierarchy are always reported first
-        Collections.sort(sortedKeys, new Comparator<String>() {
-            @Override
-            public int compare(String o1, String o2) {
-                if (o1 == o2) return 0;
-                if (o1 == null) return -1;
-                if (o2 == null) return 1;
-                return o1.compareTo(o2);
-            }
-        });
-        return sortedKeys;
+    private static class CompilerMessageLocationComparator implements Comparator<CompilerMessageLocation> {
+        public static final CompilerMessageLocationComparator INSTANCE = new CompilerMessageLocationComparator();
+
+        // First, output all messages without any location information. Then, only those with the file path.
+        // Next, all messages with the file path and the line number. Next, all messages with file path, line number and column number.
+        //
+        // Example of the order of compiler messages:
+        //
+        // error: bad classpath
+        // foo.kt: error: bad file
+        // foo.kt:42: error: bad line
+        // foo.kt:42:43: error: bad character
+        @Override
+        public int compare(CompilerMessageLocation o1, CompilerMessageLocation o2) {
+            if (o1.getColumn() == -1 && o2.getColumn() != -1) return -1;
+            if (o1.getColumn() != -1 && o2.getColumn() == -1) return 1;
+
+            if (o1.getLine() == -1 && o2.getLine() != -1) return -1;
+            if (o1.getLine() != -1 && o2.getLine() == -1) return 1;
+
+            return o1.getPath().compareTo(o2.getPath());
+        }
     }
 
     private static class Message {
@@ -89,7 +120,7 @@ public class GroupingMessageCollector implements MessageCollector {
         private final String message;
         private final CompilerMessageLocation location;
 
-        private Message(@NotNull CompilerMessageSeverity severity, @NotNull String message, @NotNull CompilerMessageLocation location) {
+        private Message(@NotNull CompilerMessageSeverity severity, @NotNull String message, @Nullable CompilerMessageLocation location) {
             this.severity = severity;
             this.message = message;
             this.location = location;
@@ -100,11 +131,11 @@ public class GroupingMessageCollector implements MessageCollector {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
 
-            Message message1 = (Message) o;
+            Message other = (Message) o;
 
-            if (!location.equals(message1.location)) return false;
-            if (!message.equals(message1.message)) return false;
-            if (severity != message1.severity) return false;
+            if (!Objects.equals(location, other.location)) return false;
+            if (!message.equals(other.message)) return false;
+            if (severity != other.severity) return false;
 
             return true;
         }
@@ -113,8 +144,13 @@ public class GroupingMessageCollector implements MessageCollector {
         public int hashCode() {
             int result = severity.hashCode();
             result = 31 * result + message.hashCode();
-            result = 31 * result + location.hashCode();
+            result = 31 * result + (location != null ? location.hashCode() : 0);
             return result;
+        }
+
+        @Override
+        public String toString() {
+            return "[" + severity + "] " + message + (location != null ? " (at " + location + ")" : " (no location)");
         }
     }
 }

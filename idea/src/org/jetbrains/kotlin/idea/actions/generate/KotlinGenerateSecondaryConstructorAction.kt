@@ -27,14 +27,14 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.diagnostics.Errors
-import org.jetbrains.kotlin.idea.caches.resolve.analyzeFully
+import org.jetbrains.kotlin.idea.caches.resolve.analyzeWithContent
 import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
 import org.jetbrains.kotlin.idea.core.CollectingNameValidator
 import org.jetbrains.kotlin.idea.core.KotlinNameSuggester
 import org.jetbrains.kotlin.idea.core.appendElement
 import org.jetbrains.kotlin.idea.core.isVisible
 import org.jetbrains.kotlin.idea.core.util.DescriptorMemberChooserObject
-import org.jetbrains.kotlin.idea.quickfix.insertMembersAfter
+import org.jetbrains.kotlin.idea.core.insertMembersAfter
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.siblings
@@ -49,7 +49,6 @@ import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
 import org.jetbrains.kotlin.types.substitutions.getTypeSubstitutor
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 import org.jetbrains.kotlin.utils.addToStdlib.lastIsInstanceOrNull
-import org.jetbrains.kotlin.utils.addToStdlib.singletonOrEmptyList
 import java.util.*
 
 class KotlinGenerateSecondaryConstructorAction : KotlinGenerateMemberActionBase<KotlinGenerateSecondaryConstructorAction.Info>() {
@@ -88,10 +87,12 @@ class KotlinGenerateSecondaryConstructorAction : KotlinGenerateMemberActionBase<
 
     private fun choosePropertiesToInitialize(klass: KtClassOrObject, context: BindingContext): List<DescriptorMemberChooserObject> {
         val candidates = klass.declarations
-                .filterIsInstance<KtProperty>()
-                .filter { it.isVar || context.diagnostics.forElement(it).any { it.factory in Errors.MUST_BE_INITIALIZED_DIAGNOSTICS } }
-                .map { context.get(BindingContext.VARIABLE, it) as PropertyDescriptor }
-                .map { DescriptorMemberChooserObject(it.source.getPsi()!!, it) }
+            .asSequence()
+            .filterIsInstance<KtProperty>()
+            .filter { it.isVar || context.diagnostics.forElement(it).any { it.factory in Errors.MUST_BE_INITIALIZED_DIAGNOSTICS } }
+            .map { context.get(BindingContext.VARIABLE, it) as PropertyDescriptor }
+            .map { DescriptorMemberChooserObject(it.source.getPsi()!!, it) }
+            .toList()
         if (ApplicationManager.getApplication().isUnitTestMode || candidates.isEmpty()) return candidates
 
         return with(MemberChooser(candidates.toTypedArray(), true, true, klass.project, false, null)) {
@@ -105,7 +106,7 @@ class KotlinGenerateSecondaryConstructorAction : KotlinGenerateMemberActionBase<
     }
 
     override fun prepareMembersInfo(klass: KtClassOrObject, project: Project, editor: Editor?): Info? {
-        val context = klass.analyzeFully()
+        val context = klass.analyzeWithContent()
         val classDescriptor = context.get(BindingContext.CLASS, klass) ?: return null
         val superConstructors = chooseSuperConstructors(klass, classDescriptor).map { it.descriptor as ConstructorDescriptor }
         val propertiesToInitialize = choosePropertiesToInitialize(klass, context).map { it.descriptor as PropertyDescriptor }
@@ -127,7 +128,7 @@ class KotlinGenerateSecondaryConstructorAction : KotlinGenerateMemberActionBase<
             val prototypes = if (superConstructors.isNotEmpty()) {
                 superConstructors.mapNotNull { generateConstructor(classDescriptor, propertiesToInitialize, it) }
             } else {
-                generateConstructor(classDescriptor, propertiesToInitialize, null).singletonOrEmptyList()
+                listOfNotNull(generateConstructor(classDescriptor, propertiesToInitialize, null))
             }
 
             if (prototypes.isEmpty()) {

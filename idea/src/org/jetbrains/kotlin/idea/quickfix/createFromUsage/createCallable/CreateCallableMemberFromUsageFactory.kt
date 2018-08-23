@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.idea.quickfix.createFromUsage.createCallable
 
+import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.psi.SmartPsiElementPointer
 import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.idea.quickfix.IntentionActionPriority
@@ -26,17 +27,16 @@ import org.jetbrains.kotlin.idea.quickfix.createFromUsage.callableBuilder.Callab
 import org.jetbrains.kotlin.idea.quickfix.createFromUsage.callableBuilder.PropertyInfo
 import org.jetbrains.kotlin.idea.quickfix.createFromUsage.createVariable.CreateParameterFromUsageFix
 import org.jetbrains.kotlin.psi.KtElement
-import org.jetbrains.kotlin.utils.addToStdlib.singletonOrEmptyList
 import java.util.*
 
 abstract class CreateCallableMemberFromUsageFactory<E : KtElement>(
-        val extensionsSupported: Boolean = true
+        private val extensionsSupported: Boolean = true
 ) : KotlinIntentionActionFactoryWithDelegate<E, List<CallableInfo>>() {
     private fun newCallableQuickFix(
             originalElementPointer: SmartPsiElementPointer<E>,
             priority: IntentionActionPriority,
             quickFixDataFactory: () -> List<CallableInfo>?,
-            quickFixFactory: (E, List<CallableInfo>) -> CreateFromUsageFixBase<E>?
+            quickFixFactory: (E, List<CallableInfo>) -> IntentionAction?
     ): QuickFixWithDelegateFactory {
         return QuickFixWithDelegateFactory(priority) {
             val data = quickFixDataFactory().orEmpty()
@@ -48,7 +48,7 @@ abstract class CreateCallableMemberFromUsageFactory<E : KtElement>(
     protected open fun createCallableInfo(element: E, diagnostic: Diagnostic): CallableInfo? = null
 
     override fun extractFixData(element: E, diagnostic: Diagnostic): List<CallableInfo>
-            = createCallableInfo(element, diagnostic).singletonOrEmptyList()
+            = listOfNotNull(createCallableInfo(element, diagnostic))
 
     override fun createFixes(
             originalElementPointer: SmartPsiElementPointer<E>,
@@ -69,6 +69,7 @@ abstract class CreateCallableMemberFromUsageFactory<E : KtElement>(
 
         if (extensionsSupported) {
             newCallableQuickFix(originalElementPointer, IntentionActionPriority.LOW, quickFixDataFactory) { element, data ->
+                if (data.any { it.isAbstract }) return@newCallableQuickFix null
                 CreateExtensionCallableFromUsageFix(element, data)
             }.let { fixes.add(it) }
         }

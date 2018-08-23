@@ -1,4 +1,4 @@
-// ERROR: Cannot access 'p': it is 'invisible_fake' in 'A'
+// ERROR: Cannot access 'p': it is invisible (private in a supertype) in 'A'
 enum class E private constructor(private val p: Int) {
     A(1) {
         override fun bar() {
@@ -7,12 +7,10 @@ enum class E private constructor(private val p: Int) {
     },
 
     B(2) {
-        override fun bar() {
-        }
+        override fun bar() {}
     };
 
-    internal fun foo(p: Int) {
-    }
+    internal fun foo(p: Int) {}
 
     internal abstract fun bar()
 }

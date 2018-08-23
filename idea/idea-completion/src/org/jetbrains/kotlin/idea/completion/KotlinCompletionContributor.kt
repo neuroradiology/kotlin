@@ -20,7 +20,7 @@ import com.intellij.codeInsight.completion.*
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementDecorator
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.extensions.ExtensionPointName
 import com.intellij.openapi.util.Key
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.patterns.PsiJavaPatterns.elementType
@@ -34,7 +34,6 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
-import org.jetbrains.kotlin.idea.caches.resolve.performCompletionWithOutOfBlockTracking
 import org.jetbrains.kotlin.idea.completion.smart.SmartCompletion
 import org.jetbrains.kotlin.idea.completion.smart.SmartCompletionSession
 import org.jetbrains.kotlin.lexer.KtTokens
@@ -52,8 +51,6 @@ class KotlinCompletionContributor : CompletionContributor() {
 
     companion object {
         val DEFAULT_DUMMY_IDENTIFIER: String = CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED + "$" // add '$' to ignore context after the caret
-
-        private val STRING_TEMPLATE_AFTER_DOT_REAL_START_OFFSET = OffsetKey.create("STRING_TEMPLATE_AFTER_DOT_REAL_START_OFFSET")
     }
 
     init {
@@ -84,7 +81,6 @@ class KotlinCompletionContributor : CompletionContributor() {
                     val prefix = tokenBefore.text.substring(0, offset - tokenBefore.startOffset)
                     context.dummyIdentifier = "{" + expression.text + prefix + CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED + "}"
                     context.offsetMap.addOffset(CompletionInitializationContext.START_OFFSET, expression.startOffset)
-                    context.offsetMap.addOffset(STRING_TEMPLATE_AFTER_DOT_REAL_START_OFFSET, offset + 1)
                     return
                 }
             }
@@ -136,10 +132,12 @@ class KotlinCompletionContributor : CompletionContributor() {
                 }
             }
 
-            if (tokenAt.node.elementType == KtTokens.IDENTIFIER) {
+            // IDENTIFIER when 'f<caret>oo: Foo'
+            // COLON when 'foo<caret>: Foo'
+            if (tokenAt.node.elementType == KtTokens.IDENTIFIER || tokenAt.node.elementType == KtTokens.COLON) {
                 val parameter = tokenAt.parent as? KtParameter
                 if (parameter != null) {
-                    context.offsetMap.addOffset(ParameterNameAndTypeCompletion.REPLACEMENT_OFFSET, parameter.endOffset)
+                    context.offsetMap.addOffset(VariableOrParameterNameWithTypeCompletion.REPLACEMENT_OFFSET, parameter.endOffset)
                 }
             }
         }
@@ -169,7 +167,7 @@ class KotlinCompletionContributor : CompletionContributor() {
         val classOrObject = tokenBefore?.parents?.firstIsInstanceOrNull<KtClassOrObject>() ?: return false
         val name = classOrObject.nameIdentifier ?: return false
         val body = classOrObject.getBody() ?: return false
-        val offset = tokenBefore!!.startOffset
+        val offset = tokenBefore.startOffset
         return name.endOffset <= offset && offset <= body.startOffset
     }
 
@@ -181,19 +179,12 @@ class KotlinCompletionContributor : CompletionContributor() {
 
         val lambda = leaf?.parents?.firstOrNull { it is KtFunctionLiteral } ?: return null
 
-        val lambdaChild = leaf!!.parents.takeWhile { it != lambda }.lastOrNull() ?: return null
-        if (lambdaChild is KtParameterList) return CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED
+        val lambdaChild = leaf.parents.takeWhile { it != lambda }.lastOrNull()
 
-        if (lambdaChild !is KtBlockExpression) return null
-        val blockChild = leaf.parents.takeWhile { it != lambdaChild }.lastOrNull()
-        if (blockChild !is PsiErrorElement) return null
-        val inIncompleteSignature = blockChild.siblings(forward = false, withItself = false).all {
-            when (it) {
-                is PsiWhiteSpace, is PsiComment -> true
-                else -> false
-            }
-        }
-        return if (inIncompleteSignature) CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED + "->" else null
+        return if (lambdaChild is KtParameterList)
+            CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED
+        else
+            null
 
     }
 
@@ -241,30 +232,31 @@ class KotlinCompletionContributor : CompletionContributor() {
 
     private fun performCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
         val position = parameters.position
-        val positionFile = position.containingFile as? KtFile ?: return
-        val originalFile = parameters.originalFile as KtFile
-        if (originalFile.doNotComplete ?: false) return
+        val parametersOriginFile = parameters.originalFile
+        if (position.containingFile !is KtFile || parametersOriginFile !is KtFile) return
+        if (parametersOriginFile.doNotComplete == true) return
 
-        val toFromOriginalFileMapper = ToFromOriginalFileMapper(originalFile, positionFile, parameters.offset)
+        val toFromOriginalFileMapper = ToFromOriginalFileMapper.create(parameters)
 
         if (position.node.elementType == KtTokens.LONG_TEMPLATE_ENTRY_START) {
             val expression = (position.parent as KtBlockStringTemplateEntry).expression
             if (expression is KtDotQualifiedExpression) {
                 val correctedPosition = (expression.selectorExpression as KtNameReferenceExpression).firstChild
-                val context = position.getUserData(CompletionContext.COMPLETION_CONTEXT_KEY)!!
-                val correctedOffset = context.offsetMap.getOffset(STRING_TEMPLATE_AFTER_DOT_REAL_START_OFFSET)
+                // Workaround for KT-16848
+                // ex:
+                // expression: some.IntellijIdeaRulezzz
+                // correctedOffset: ^
+                // expression: some.funcIntellijIdeaRulezzz
+                // correctedOffset      ^
+                val correctedOffset = correctedPosition.endOffset - CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED.length
                 val correctedParameters = parameters.withPosition(correctedPosition, correctedOffset)
-                performCompletionWithOutOfBlockTracking(position) {
-                    doComplete(correctedParameters, toFromOriginalFileMapper, result,
-                               lookupElementPostProcessor = { wrapLookupElementForStringTemplateAfterDotCompletion(it) })
-                }
+                doComplete(correctedParameters, toFromOriginalFileMapper, result,
+                           lookupElementPostProcessor = { wrapLookupElementForStringTemplateAfterDotCompletion(it) })
                 return
             }
         }
 
-        performCompletionWithOutOfBlockTracking(position) {
-            doComplete(parameters, toFromOriginalFileMapper, result)
-        }
+        doComplete(parameters, toFromOriginalFileMapper, result)
     }
 
     private fun doComplete(
@@ -289,7 +281,9 @@ class KotlinCompletionContributor : CompletionContributor() {
             return
         }
 
-        if (PropertyKeyCompletion.perform(parameters, result)) return
+        for (extension in KotlinCompletionExtension.EP_NAME.getExtensions()) {
+            if (extension.perform(parameters, result)) return
+        }
 
         fun addPostProcessor(session: CompletionSession) {
             if (lookupElementPostProcessor != null) {
@@ -297,44 +291,40 @@ class KotlinCompletionContributor : CompletionContributor() {
             }
         }
 
-        try {
-            result.restartCompletionWhenNothingMatches()
+        result.restartCompletionWhenNothingMatches()
 
-            val configuration = CompletionSessionConfiguration(parameters)
-            if (parameters.completionType == CompletionType.BASIC) {
-                val session = BasicCompletionSession(configuration, parameters, toFromOriginalFileMapper, result)
+        val configuration = CompletionSessionConfiguration(parameters)
+        if (parameters.completionType == CompletionType.BASIC) {
+            val session = BasicCompletionSession(configuration, parameters, toFromOriginalFileMapper, result)
 
-                addPostProcessor(session)
+            addPostProcessor(session)
 
-                if (parameters.isAutoPopup && session.shouldDisableAutoPopup()) {
-                    result.stopHere()
-                    return
-                }
-
-                val somethingAdded = session.complete()
-                if (!somethingAdded && parameters.invocationCount < 2) {
-                    // Rerun completion if nothing was found
-                    val newConfiguration = CompletionSessionConfiguration(
-                            completeNonImportedClasses = true,
-                            completeNonAccessibleDeclarations = false,
-                            filterOutJavaGettersAndSetters = false,
-                            completeJavaClassesNotToBeUsed = false,
-                            completeStaticMembers = parameters.invocationCount > 0
-                    )
-
-                    val newSession = BasicCompletionSession(newConfiguration, parameters, toFromOriginalFileMapper, result)
-                    addPostProcessor(newSession)
-                    newSession.complete()
-                }
+            if (parameters.isAutoPopup && session.shouldDisableAutoPopup()) {
+                result.stopHere()
+                return
             }
-            else {
-                val session = SmartCompletionSession(configuration, parameters, toFromOriginalFileMapper, result)
-                addPostProcessor(session)
-                session.complete()
+
+            val somethingAdded = session.complete()
+            if (!somethingAdded && parameters.invocationCount < 2) {
+                // Rerun completion if nothing was found
+                val newConfiguration = CompletionSessionConfiguration(
+                        useBetterPrefixMatcherForNonImportedClasses = false,
+                        nonAccessibleDeclarations = false,
+                        javaGettersAndSetters = true,
+                        javaClassesNotToBeUsed = false,
+                        staticMembers = parameters.invocationCount > 0,
+                        dataClassComponentFunctions = true
+                )
+
+                val newSession = BasicCompletionSession(newConfiguration, parameters, toFromOriginalFileMapper, result)
+                addPostProcessor(newSession)
+                newSession.complete()
             }
         }
-        catch (e: ProcessCanceledException) {
-            throw rethrowWithCancelIndicator(e)
+        else {
+            val session = SmartCompletionSession(configuration, parameters, toFromOriginalFileMapper, result)
+            addPostProcessor(session)
+            session.complete()
         }
     }
 
@@ -347,11 +337,8 @@ class KotlinCompletionContributor : CompletionContributor() {
                 val psiDocumentManager = PsiDocumentManager.getInstance(context.project)
                 psiDocumentManager.commitAllDocuments()
 
-                assert(startOffset > 1 && document.charsSequence[startOffset - 1] == '.')
-                val token = context.file.findElementAt(startOffset - 2)!!
-                assert(token.node.elementType == KtTokens.IDENTIFIER)
+                val token = getToken(context.file, document.charsSequence, startOffset)
                 val nameRef = token.parent as KtNameReferenceExpression
-                assert(nameRef.parent is KtSimpleNameStringTemplateEntry)
 
                 document.insertString(nameRef.startOffset, "{")
 
@@ -360,6 +347,15 @@ class KotlinCompletionContributor : CompletionContributor() {
                 context.tailOffset = tailOffset
 
                 super.handleInsert(context)
+            }
+
+            private fun getToken(file: PsiFile, charsSequence: CharSequence, startOffset: Int): PsiElement {
+                assert(startOffset > 1 && charsSequence[startOffset - 1] == '.')
+                val token = file.findElementAt(startOffset - 2)!!
+                return if (token.node.elementType == KtTokens.IDENTIFIER || token.node.elementType == KtTokens.THIS_KEYWORD)
+                    token
+                else
+                    getToken(file, charsSequence, token.startOffset + 1)
             }
         }
     }
@@ -403,22 +399,22 @@ class KotlinCompletionContributor : CompletionContributor() {
         val nameRef = nameToken.parent as? KtNameReferenceExpression ?: return null
         val bindingContext = nameRef.getResolutionFacade().analyze(nameRef, BodyResolveMode.PARTIAL)
         val targets = nameRef.getReferenceTargets(bindingContext)
-        if (targets.isNotEmpty() && targets.all { it is FunctionDescriptor || it is ClassDescriptor && it.kind == ClassKind.CLASS }) {
-            return CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED + ">".repeat(balance) + "$"
+        return if (targets.isNotEmpty() && targets.all { it is FunctionDescriptor || it is ClassDescriptor && it.kind == ClassKind.CLASS }) {
+            CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED + ">".repeat(balance) + "$"
         }
         else {
-            return null
+            null
         }
     }
 
     private fun unclosedTypeArgListNameAndBalance(tokenBefore: PsiElement): Pair<PsiElement, Int>? {
         val nameToken = findCallNameTokenIfInTypeArgs(tokenBefore) ?: return null
         val pair = unclosedTypeArgListNameAndBalance(nameToken)
-        if (pair == null) {
-            return Pair(nameToken, 1)
+        return if (pair == null) {
+            Pair(nameToken, 1)
         }
         else {
-            return Pair(pair.first, pair.second + 1)
+            Pair(pair.first, pair.second + 1)
         }
     }
 
@@ -473,5 +469,14 @@ class KotlinCompletionContributor : CompletionContributor() {
 
     private fun isInSimpleStringTemplate(tokenBefore: PsiElement?): Boolean {
         return tokenBefore?.parents?.firstIsInstanceOrNull<KtStringTemplateExpression>()?.isPlain() ?: false
+    }
+}
+
+abstract class KotlinCompletionExtension {
+    abstract fun perform(parameters: CompletionParameters, result: CompletionResultSet): Boolean
+
+    companion object {
+        val EP_NAME: ExtensionPointName<KotlinCompletionExtension> =
+                ExtensionPointName.create<KotlinCompletionExtension>("org.jetbrains.kotlin.completionExtension")
     }
 }

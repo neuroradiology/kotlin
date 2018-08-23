@@ -18,25 +18,28 @@ package org.jetbrains.kotlin.codegen.inline;
 
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.codegen.StackValue;
-import org.jetbrains.org.objectweb.asm.AnnotationVisitor;
 import org.jetbrains.org.objectweb.asm.Label;
 import org.jetbrains.org.objectweb.asm.MethodVisitor;
+import org.jetbrains.org.objectweb.asm.Opcodes;
 import org.jetbrains.org.objectweb.asm.commons.InstructionAdapter;
 import org.jetbrains.org.objectweb.asm.tree.FieldInsnNode;
 
-public class RemapVisitor extends InliningInstructionAdapter {
+import static org.jetbrains.kotlin.codegen.inline.InlineCodegenUtilsKt.CAPTURED_FIELD_FOLD_PREFIX;
+
+public class RemapVisitor extends MethodBodyVisitor {
     private final LocalVarRemapper remapper;
     private final FieldRemapper nodeRemapper;
     private final InstructionAdapter instructionAdapter;
 
-    protected RemapVisitor(
-            MethodVisitor mv,
-            LocalVarRemapper localVarRemapper,
-            FieldRemapper nodeRemapper
+    public RemapVisitor(
+            @NotNull MethodVisitor mv,
+            @NotNull LocalVarRemapper remapper,
+            @NotNull FieldRemapper nodeRemapper,
+            boolean copyAnnotationsAndAttributes
     ) {
-        super(mv);
+        super(mv, copyAnnotationsAndAttributes);
         this.instructionAdapter = new InstructionAdapter(mv);
-        this.remapper = localVarRemapper;
+        this.remapper = remapper;
         this.nodeRemapper = nodeRemapper;
     }
 
@@ -59,44 +62,19 @@ public class RemapVisitor extends InliningInstructionAdapter {
 
     @Override
     public void visitFieldInsn(int opcode, @NotNull String owner, @NotNull String name, @NotNull String desc) {
-        if (name.startsWith("$$$")) {
-            if (nodeRemapper instanceof RegeneratedLambdaFieldRemapper || nodeRemapper.isRoot()) {
-                FieldInsnNode fin = new FieldInsnNode(opcode, owner, name, desc);
-                StackValue inline = nodeRemapper.getFieldForInline(fin, null);
-                assert inline != null : "Captured field should have not null stackValue " + fin;
-                inline.put(inline.type, this);
+        if (name.startsWith(CAPTURED_FIELD_FOLD_PREFIX) &&
+            (nodeRemapper instanceof RegeneratedLambdaFieldRemapper || nodeRemapper.isRoot())) {
+            FieldInsnNode fin = new FieldInsnNode(opcode, owner, name, desc);
+            StackValue inline = nodeRemapper.getFieldForInline(fin, null);
+            assert inline != null : "Captured field should have not null stackValue " + fin;
+            if (Opcodes.PUTSTATIC == opcode) {
+                inline.store(StackValue.onStack(inline.type, inline.kotlinType), this);
             }
             else {
-                super.visitFieldInsn(opcode, owner, name, desc);
+                inline.put(inline.type, inline.kotlinType, this);
             }
+            return;
         }
-        else {
-            super.visitFieldInsn(opcode, owner, name, desc);
-        }
-    }
-
-    @Override
-    public AnnotationVisitor visitAnnotationDefault() {
-        return null;
-    }
-
-    @Override
-    public void visitMaxs(int maxStack, int maxLocals) {
-
-    }
-
-    @Override
-    public void visitEnd() {
-
-    }
-
-    @Override
-    public AnnotationVisitor visitAnnotation(@NotNull String desc, boolean visible) {
-        return null;
-    }
-
-    @Override
-    public AnnotationVisitor visitParameterAnnotation(int parameter, @NotNull String desc, boolean visible) {
-        return null;
+        super.visitFieldInsn(opcode, owner, name, desc);
     }
 }

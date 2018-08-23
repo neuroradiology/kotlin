@@ -37,11 +37,11 @@ class NavigateToStdlibSourceTest : KotlinCodeInsightTestCase() {
     }
 
     fun testRefToPrintlnWithJS() {
-        doTest("core.kt", ModuleKind.KOTLIN_JAVASCRIPT)
+        doTest("console.kt", ModuleKind.KOTLIN_JAVASCRIPT)
     }
 
     fun testRefToPrintlnWithJSAndJVM() {
-        doTest("core.kt", ModuleKind.KOTLIN_JAVASCRIPT, ModuleKind.KOTLIN_JVM_WITH_STDLIB_SOURCES)
+        doTest("console.kt", ModuleKind.KOTLIN_JAVASCRIPT, ModuleKind.KOTLIN_JVM_WITH_STDLIB_SOURCES)
     }
 
     private fun doTest(sourceFileName: String, mainModule: ModuleKind, additionalModule: ModuleKind? = null) {
@@ -62,15 +62,16 @@ class NavigateToStdlibSourceTest : KotlinCodeInsightTestCase() {
             mainModuleKind: ModuleKind,
             additionalModuleKind: ModuleKind? = null
     ): PsiElement {
-        configureByText(KotlinFileType.INSTANCE, text)
         module.configureAs(mainModuleKind)
-
         if (additionalModuleKind != null) {
             val additionalModule = this.createModule("additional-module")
             additionalModule.configureAs(additionalModuleKind)
         }
 
+        configureByText(KotlinFileType.INSTANCE, text)
+
         val ref = file.findReferenceAt(editor.caretModel.offset)
-        return ref!!.resolve()!!.navigationElement
+        val resolve = ref!!.resolve()
+        return resolve!!.navigationElement
     }
 }

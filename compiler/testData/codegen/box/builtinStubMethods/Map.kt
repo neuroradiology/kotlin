@@ -1,3 +1,8 @@
+// IGNORE_BACKEND: JVM_IR
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// IGNORE_BACKEND: JS, NATIVE
+
 class MyMap<K, V>: Map<K, V> {
     override val size: Int get() = 0
     override fun isEmpty(): Boolean = true

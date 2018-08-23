@@ -34,15 +34,14 @@ public class EnumSwitchCodegen extends SwitchCodegen {
             @NotNull ExpressionCodegen codegen,
             @NotNull WhenByEnumsMapping mapping
     ) {
-        super(expression, isStatement, isExhaustive, codegen);
+        super(expression, isStatement, isExhaustive, codegen, codegen.getState().getTypeMapper().mapType(mapping.getEnumClassDescriptor()));
         this.mapping = mapping;
     }
 
     @Override
-    protected void generateSubject() {
+    protected void generateSubjectValueToIndex() {
         codegen.getState().getMappingsClassesForWhenByEnum().generateMappingsClassForExpression(expression);
 
-        super.generateSubject();
         generateNullCheckIfNeeded();
 
         v.getstatic(

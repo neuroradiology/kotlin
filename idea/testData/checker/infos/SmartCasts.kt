@@ -15,7 +15,7 @@ fun f9(a : A?) {
   a<info>?.</info><error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
   if (a is B) {
     <info descr="Smart cast to B">a</info>.bar()
-    <info descr="Smart cast to A">a</info>.foo()
+    <info descr="Smart cast to B">a</info>.foo()
   }
   a<info>?.</info>foo()
   a<info>?.</info><error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
@@ -30,7 +30,7 @@ fun f9(a : A?) {
     return;
   }
   <info descr="Smart cast to B">a</info>.bar()
-  <info descr="Smart cast to A">a</info>.foo()
+  <info descr="Smart cast to B">a</info>.foo()
 }
 
 fun fAny(a : Any?) {
@@ -49,7 +49,7 @@ fun f10(a : A?) {
   if (!(a is B)) {
     return;
   }
-  if (!(a is B)) {
+  if (!(<warning>a is B</warning>)) {
     return;
   }
 }
@@ -71,7 +71,7 @@ fun f11(a : A?) {
     is B -> <info descr="Smart cast to B">a</info>.bar()
     is A -> <info descr="Smart cast to A">a</info>.foo()
     is Any -> <info descr="Smart cast to A">a</info>.foo()
-    is Any? -> a.<error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
+    <warning>is Any?</warning> -> a.<error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
     else -> a<info>?.</info>foo()
   }
 }
@@ -81,12 +81,12 @@ fun f12(a : A?) {
     is B -> <info descr="Smart cast to B">a</info>.bar()
     is A -> <info descr="Smart cast to A">a</info>.foo()
     is Any -> <info descr="Smart cast to A">a</info>.foo();
-    is Any? -> a.<error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
+    <warning>is Any?</warning> -> a.<error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
     is C -> <info descr="Smart cast to C">a</info>.bar()
     else -> a<info>?.</info>foo()
   }
 
-  if (a is Any?) {
+  if (<warning>a is Any?</warning>) {
     a<info>?.</info><error descr="[UNRESOLVED_REFERENCE] Unresolved reference: bar">bar</error>()
   }
   if (a is B) {
@@ -96,7 +96,7 @@ fun f12(a : A?) {
 
 fun f13(a : A?) {
   if (a is B) {
-    <info descr="Smart cast to A">a</info>.foo()
+    <info descr="Smart cast to B">a</info>.foo()
     <info descr="Smart cast to B">a</info>.bar()
   }
   else {
@@ -109,12 +109,12 @@ fun f13(a : A?) {
     a<info>?.</info>foo()
   }
   else {
-    <info descr="Smart cast to A">a</info>.foo()
+    <info descr="Smart cast to B">a</info>.foo()
   }
 
   a<info>?.</info>foo()
-  if (a is B && <info descr="Smart cast to A">a</info>.foo() == Unit) {
-    <info descr="Smart cast to A">a</info>.foo()
+  if (a is B && <info descr="Smart cast to B">a</info>.foo() == Unit) {
+    <info descr="Smart cast to B">a</info>.foo()
     <info descr="Smart cast to B">a</info>.bar()
   }
   else {
@@ -153,13 +153,13 @@ fun getStringLength(obj : Any) : Char? {
 fun toInt(i: Int?): Int = if (i != null) <info descr="Smart cast to kotlin.Int">i</info> else 0
 fun illegalWhenBody(a: Any): Int = when(a) {
     is Int -> <info descr="Smart cast to kotlin.Int">a</info>
-    is String -> <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is kotlin.Any but kotlin.Int was expected">a</error>
+    is String -> <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is Any but Int was expected">a</error>
     else -> 1
 }
 fun illegalWhenBlock(a: Any): Int {
     when(a) {
         is Int -> return <info descr="Smart cast to kotlin.Int">a</info>
-        is String -> return <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is kotlin.Any but kotlin.Int was expected">a</error>
+        is String -> return <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is Any but Int was expected">a</error>
         else -> return 1
     }
 }
@@ -184,11 +184,11 @@ fun vars(a: Any?) {
         <warning>b =</warning> <info descr="Smart cast to kotlin.Int">a</info>
     }
 }
-fun returnFunctionLiteralBlock(<info>a</info>: Any?): Function0<Int> {
+fun returnFunctionLiteralBlock(a: Any?): Function0<Int> {
     if (<info>a</info> is Int) return { <info descr="Smart cast to kotlin.Int"><info>a</info></info> }
     else return { 1 }
 }
-fun returnFunctionLiteral(<info>a</info>: Any?): Function0<Int> =
+fun returnFunctionLiteral(a: Any?): Function0<Int> =
     if (<info>a</info> is Int) (fun (): Int = <info descr="Smart cast to kotlin.Int"><info>a</info></info>)
     else { -> 1 }
 
@@ -203,7 +203,7 @@ fun mergeSmartCasts(a: Any?) {
   when (a) {
     is String, is Any -> a.<error descr="[UNRESOLVED_REFERENCE] Unresolved reference: compareTo">compareTo</error>("")
   }
-  if (a is String && a is Any) {
+  if (a is String && <warning>a is Any</warning>) {
     val <warning>i</warning>: Int = <info descr="Smart cast to kotlin.String">a</info>.compareTo("")
   }
   if (a is String && <info descr="Smart cast to kotlin.String">a</info>.compareTo("") == 0) {}
@@ -212,33 +212,33 @@ fun mergeSmartCasts(a: Any?) {
 
 //mutability
 fun f(): String {
-    var <info>a</info>: Any = 11
+    var a: Any = 11
     if (<info>a</info> is String) {
         val <warning>i</warning>: String = <info descr="Smart cast to kotlin.String"><info descr="Wrapped into a reference object to be modified when captured in a closure">a</info></info>
         <info descr="Smart cast to kotlin.String"><info descr="Wrapped into a reference object to be modified when captured in a closure">a</info></info>.compareTo("f")
         val <warning>f</warning>: Function0<String> = {
             <info>a</info> = 42
-            <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is kotlin.Any but kotlin.String was expected">a</error>
+            <error descr="[TYPE_MISMATCH] Type mismatch: inferred type is Any but String was expected">a</error>
         }
-        return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'kotlin.String' is impossible, because 'a' is a local variable that is captured by a changing closure">a</error>
+        return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'a' is a local variable that is captured by a changing closure">a</error>
     }
     return ""
 }
 
-class Mutable(var <info descr="This property has a backing field">x</info>: String?) {
+class Mutable(var x: String?) {
 
     val xx: String?
         <info descr="null">get</info>() = x
 
     fun foo(): String {
         if (x is String) {
-            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'kotlin.String' is impossible, because 'x' is a mutable property that could have been changed by this time">x</error>
+            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'x' is a mutable property that could have been changed by this time">x</error>
         }
         if (x != null) {
-            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'kotlin.String' is impossible, because 'x' is a mutable property that could have been changed by this time">x</error>
+            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'x' is a mutable property that could have been changed by this time">x</error>
         }
         if (xx is String) {
-            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'kotlin.String' is impossible, because 'xx' is a property that has open or custom getter">xx</error>
+            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'xx' is a property that has open or custom getter">xx</error>
         }
         return ""
     }
@@ -246,7 +246,7 @@ class Mutable(var <info descr="This property has a backing field">x</info>: Stri
     fun bar(other: Mutable): String {
         var y = other
         if (y.x is String) {
-            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'kotlin.String' is impossible, because 'y.x' is a complex expression">y.x</error>
+            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'y.x' is a complex expression">y.x</error>
         }
         return ""
     }
@@ -264,5 +264,17 @@ fun inForLoop(x: Any?) {
     if (x is Array<*>) {
         for (i in <info descr="Smart cast to kotlin.Array<*>">x</info>) {}
     }
-    for (i in <error descr="[ITERATOR_MISSING] For-loop range must have an iterator() method">x</error>) {}
+    for (i in <error descr="[ITERATOR_MISSING] For-loop range must have an 'iterator()' method">x</error>) {}
+}
+
+class ExplicitAccessorForAnnotation {
+    val tt: String? = "good"
+        <info descr="null">get</info>
+
+    fun foo(): String {
+        if (tt is String) {
+            return <error descr="[SMARTCAST_IMPOSSIBLE] Smart cast to 'String' is impossible, because 'tt' is a property that has open or custom getter">tt</error>
+        }
+        return ""
+    }
 }

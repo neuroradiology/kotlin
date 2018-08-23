@@ -16,10 +16,10 @@
 
 package org.jetbrains.kotlin.idea.core
 
+import org.jetbrains.kotlin.builtins.jvm.JavaToKotlinClassMap
 import org.jetbrains.kotlin.idea.util.ImportInsertHelper
 import org.jetbrains.kotlin.load.java.components.JavaAnnotationMapper
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.platform.JavaToKotlinClassMap
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.resolve.ImportPath
 import java.util.*
@@ -28,17 +28,20 @@ class ImportableFqNameClassifier(private val file: KtFile) {
     private val preciseImports = HashSet<FqName>()
     private val preciseImportPackages = HashSet<FqName>()
     private val allUnderImports = HashSet<FqName>()
+    private val excludedImports = HashSet<FqName>()
 
     init {
         for (import in file.importDirectives) {
             val importPath = import.importPath ?: continue
-            val fqName = importPath.fqnPart()
-            if (importPath.isAllUnder) {
-                allUnderImports.add(fqName)
-            }
-            else {
-                preciseImports.add(fqName)
-                preciseImportPackages.add(fqName.parent())
+            val fqName = importPath.fqName
+            when {
+                importPath.isAllUnder -> allUnderImports.add(fqName)
+                !importPath.hasAlias() -> {
+                    preciseImports.add(fqName)
+                    preciseImportPackages.add(fqName.parent())
+                }
+                else -> excludedImports.add(fqName)
+            // TODO: support aliased imports in completion
             }
         }
     }
@@ -46,8 +49,8 @@ class ImportableFqNameClassifier(private val file: KtFile) {
     enum class Classification {
         fromCurrentPackage,
         topLevelPackage,
-        defaultImport,
         preciseImport,
+        defaultImport,
         allUnderImport,
         siblingImported,
         notImported,
@@ -66,8 +69,7 @@ class ImportableFqNameClassifier(private val file: KtFile) {
         }
 
         return when {
-            JavaToKotlinClassMap.INSTANCE.mapPlatformClass(fqName).isNotEmpty()
-                    || JavaAnnotationMapper.javaToKotlinNameMap[fqName] != null -> Classification.notToBeUsedInKotlin
+            isJavaClassNotToBeUsedInKotlin(fqName) -> Classification.notToBeUsedInKotlin
 
             fqName.parent() == file.packageFqName -> Classification.fromCurrentPackage
 
@@ -84,6 +86,9 @@ class ImportableFqNameClassifier(private val file: KtFile) {
     }
 
     private fun isImportedWithPreciseImport(name: FqName) = name in preciseImports
-    private fun isImportedWithAllUnderImport(name: FqName) = name.parent() in allUnderImports
+    private fun isImportedWithAllUnderImport(name: FqName) = name.parent() in allUnderImports && name !in excludedImports
     private fun hasPreciseImportFromPackage(packageName: FqName) = packageName in preciseImportPackages
 }
+
+fun isJavaClassNotToBeUsedInKotlin(fqName: FqName): Boolean
+        = JavaToKotlinClassMap.isJavaPlatformClass(fqName) || JavaAnnotationMapper.javaToKotlinNameMap[fqName] != null

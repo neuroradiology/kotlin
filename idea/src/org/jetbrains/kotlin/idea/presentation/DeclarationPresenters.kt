@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2000-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
  */
 
 package org.jetbrains.kotlin.idea.presentation
@@ -23,7 +12,9 @@ import com.intellij.openapi.editor.colors.CodeInsightColors
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.util.Iconable
 import org.jetbrains.kotlin.idea.KotlinIconProvider
+import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 
 open class KotlinDefaultNamedDeclarationPresentation(private val declaration: KtNamedDeclaration) : ColoredItemPresentation {
 
@@ -37,21 +28,42 @@ open class KotlinDefaultNamedDeclarationPresentation(private val declaration: Kt
     override fun getPresentableText() = declaration.name
 
     override fun getLocationString(): String? {
-        val name = declaration.fqName ?: return null
+        if ((declaration is KtFunction && declaration.isLocal) || (declaration is KtClassOrObject && declaration.isLocal)) {
+            val containingDeclaration = declaration.getStrictParentOfType<KtNamedDeclaration>() ?: return null
+            val containerName = containingDeclaration.fqName ?: containingDeclaration.name
+            return "(in $containerName)"
+        }
+
+        val name = declaration.fqName
+        val parent = declaration.parent
+        val containerText = if (name != null) {
+            val qualifiedContainer = name.parent().toString()
+            if (parent is KtFile && declaration.hasModifier(KtTokens.PRIVATE_KEYWORD)) {
+                "${parent.name} in $qualifiedContainer"
+            } else {
+                qualifiedContainer
+            }
+        } else {
+            getNameForContainingObjectLiteral() ?: return null
+        }
+
         val receiverTypeRef = (declaration as? KtCallableDeclaration)?.receiverTypeReference
-        if (receiverTypeRef != null) {
-            return "(for " + receiverTypeRef.text + " in " + name.parent() + ")"
-        }
-        else if (declaration.parent is KtFile) {
-            return "(" + name.parent() + ")"
-        }
-        else {
-            return "(in " + name.parent() + ")"
+        return when {
+            receiverTypeRef != null -> "(for " + receiverTypeRef.text + " in " + containerText + ")"
+            parent is KtFile -> "($containerText)"
+            else -> "(in $containerText)"
         }
     }
 
-    override fun getIcon(unused: Boolean)
-            = KotlinIconProvider.INSTANCE.getIcon(declaration, Iconable.ICON_FLAG_VISIBILITY or Iconable.ICON_FLAG_READ_STATUS)
+    private fun getNameForContainingObjectLiteral(): String? {
+        val objectLiteral = declaration.getStrictParentOfType<KtObjectLiteralExpression>() ?: return null
+        val container = objectLiteral.getStrictParentOfType<KtNamedDeclaration>() ?: return null
+        val containerFqName = container.fqName?.asString() ?: return null
+        return "object in $containerFqName"
+    }
+
+    override fun getIcon(unused: Boolean) =
+        KotlinIconProvider.INSTANCE.getIcon(declaration, Iconable.ICON_FLAG_VISIBILITY or Iconable.ICON_FLAG_READ_STATUS)
 }
 
 class KtDefaultDeclarationPresenter : ItemPresentationProvider<KtNamedDeclaration> {
@@ -68,7 +80,9 @@ class KtFunctionPresenter : ItemPresentationProvider<KtFunction> {
                     function.name?.let { append(it) }
 
                     append("(")
-                    append(function.valueParameters.joinToString { it.typeReference?.text ?: "" })
+                    append(function.valueParameters.joinToString {
+                        (if (it.isVarArg) "vararg " else "") + (it.typeReference?.text ?: "")
+                    })
                     append(")")
                 }
             }

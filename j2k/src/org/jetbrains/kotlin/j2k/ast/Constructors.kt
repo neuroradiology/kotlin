@@ -39,10 +39,12 @@ class PrimaryConstructor(
 
     override fun generateCode(builder: CodeBuilder) { throw IncorrectOperationException() }
 
-    fun initializer(): Initializer
-            = Initializer(body!!, Modifiers.Empty).assignPrototypesFrom(this, CommentsAndSpacesInheritance(commentsBefore = false))
+    // Should be lazy, to defer `assignPrototypesFrom(this,...)` a bit,
+    // cause when `PrimaryConstructor` created prototypes not yet assigned
+    val initializer: Initializer by
+    lazy { Initializer(body, Modifiers.Empty).assignPrototypesFrom(this, CommentsAndSpacesInheritance(commentsBefore = false)) }
 
-    fun createSignature(converter: Converter): PrimaryConstructorSignature {
+    fun createSignature(converter: Converter): PrimaryConstructorSignature? {
         val signature = PrimaryConstructorSignature(annotations, modifiers, parameterList)
 
         // assign prototypes later because we don't know yet whether the body is empty or not
@@ -75,10 +77,10 @@ class PrimaryConstructorSignature(val annotations: Annotations, private val modi
         }
 
         if (needConstructorKeyword) {
-            builder append " constructor"
+            builder.append(" constructor")
         }
 
-        builder append "(" append parameterList append ")"
+        builder.append(parameterList)
     }
 }
 
@@ -93,9 +95,8 @@ class SecondaryConstructor(
     override fun generateCode(builder: CodeBuilder) {
         builder.append(annotations)
                 .appendWithSpaceAfter(modifiers)
-                .append("constructor(")
+                .append("constructor")
                 .append(parameterList)
-                .append(")")
 
         if (thisOrSuperCall != null) {
             builder append " : " append thisOrSuperCall

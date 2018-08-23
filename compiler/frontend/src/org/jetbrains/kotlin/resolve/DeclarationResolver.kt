@@ -18,13 +18,13 @@ package org.jetbrains.kotlin.resolve
 
 import com.google.common.collect.HashMultimap
 import com.google.common.collect.Multimap
-import com.google.common.collect.Sets
-import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassifierDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.MemberDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.diagnostics.Errors
 import org.jetbrains.kotlin.diagnostics.Errors.REDECLARATION
+import org.jetbrains.kotlin.diagnostics.reportOnDeclaration
 import org.jetbrains.kotlin.incremental.components.LookupLocation
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
@@ -38,8 +38,8 @@ import org.jetbrains.kotlin.utils.keysToMap
 import java.util.*
 
 class DeclarationResolver(
-        private val annotationResolver: AnnotationResolver,
-        private val trace: BindingTrace
+    private val annotationResolver: AnnotationResolver,
+    private val trace: BindingTrace
 ) {
 
     fun resolveAnnotationsOnFiles(c: TopDownAnalysisContext, scopeProvider: FileScopeProvider) {
@@ -54,65 +54,58 @@ class DeclarationResolver(
         for (classDescriptor in c.declaredClasses.values) {
             val descriptorMap = HashMultimap.create<Name, DeclarationDescriptor>()
             for (desc in classDescriptor.unsubstitutedMemberScope.getContributedDescriptors()) {
-                if (desc is ClassDescriptor || desc is PropertyDescriptor) {
+                if (desc is ClassifierDescriptor || desc is PropertyDescriptor) {
                     descriptorMap.put(desc.name, desc)
                 }
             }
 
-            reportRedeclarations(descriptorMap)
+            reportRedeclarationsWithClassifiers(descriptorMap)
         }
     }
 
-    private fun reportRedeclarations(descriptorMap: Multimap<Name, DeclarationDescriptor>) {
-        val redeclarations = Sets.newHashSet<Pair<PsiElement, Name>>()
+    private fun reportRedeclarationsWithClassifiers(descriptorMap: Multimap<Name, DeclarationDescriptor>) {
         for (name in descriptorMap.keySet()) {
             val descriptors = descriptorMap[name]
-            if (descriptors.size <= 1) {
-                continue
+            if (descriptors.size > 1 && descriptors.any { it is ClassifierDescriptor }) {
+                for (descriptor in descriptors) {
+                    reportOnDeclaration(trace, descriptor) { REDECLARATION.on(it, descriptors) }
+                }
             }
-            // We mustn't compare PropertyDescriptor with PropertyDescriptor because we do this at OverloadResolver
-            for (descriptor in descriptors) {
-                if (descriptor is ClassDescriptor) {
-                    for (descriptor2 in descriptors) {
-                        if (descriptor === descriptor2) {
-                            continue
-                        }
+        }
+    }
 
-                        redeclarations.add(Pair(DescriptorToSourceUtils.getSourceFromDescriptor(descriptor)!!, descriptor.getName()))
-                        if (descriptor2 is PropertyDescriptor) {
-                            redeclarations.add(Pair(DescriptorToSourceUtils.descriptorToDeclaration(descriptor2)!!, descriptor2.getName()))
-                        }
+    fun checkRedeclarationsInPackages(
+        topLevelDescriptorProvider: TopLevelDescriptorProvider,
+        topLevelFqNames: Multimap<FqName, KtElement>
+    ) {
+        for ((fqName, declarationsOrPackageDirectives) in topLevelFqNames.asMap()) {
+            if (fqName.isRoot) continue
+
+            // TODO: report error on expected class and actual val, or vice versa
+            val (expected, actual) =
+                    getTopLevelDescriptorsByFqName(topLevelDescriptorProvider, fqName, NoLookupLocation.WHEN_CHECK_DECLARATION_CONFLICTS)
+                        .partition { it is MemberDescriptor && it.isExpect }
+
+            for (descriptors in listOf(expected, actual)) {
+                if (descriptors.size > 1) {
+                    for (directive in declarationsOrPackageDirectives) {
+                        val reportAt = (directive as? KtPackageDirective)?.nameIdentifier ?: directive
+                        trace.report(Errors.PACKAGE_OR_CLASSIFIER_REDECLARATION.on(reportAt, fqName.shortName().asString()))
                     }
                 }
             }
         }
-        for ((first, second) in redeclarations) {
-            trace.report(REDECLARATION.on(first, second.asString()))
-        }
     }
 
-    fun checkRedeclarationsInPackages(topLevelDescriptorProvider: TopLevelDescriptorProvider, topLevelFqNames: Multimap<FqName, KtElement>) {
-        for ((fqName, declarationsOrPackageDirectives) in topLevelFqNames.asMap()) {
-            if (fqName.isRoot) continue
-
-            val descriptors = getTopLevelDescriptorsByFqName(topLevelDescriptorProvider, fqName, NoLookupLocation.WHEN_CHECK_REDECLARATIONS)
-
-            if (descriptors.size > 1) {
-                for (declarationOrPackageDirective in declarationsOrPackageDirectives) {
-                    val reportAt =
-                            if (declarationOrPackageDirective is KtPackageDirective) declarationOrPackageDirective.getNameIdentifier()
-                            else declarationOrPackageDirective
-                    trace.report(Errors.REDECLARATION.on(reportAt!!, fqName.shortName().asString()))
-                }
-            }
-        }
-    }
-
-    private fun getTopLevelDescriptorsByFqName(topLevelDescriptorProvider: TopLevelDescriptorProvider, fqName: FqName, location: LookupLocation): Set<DeclarationDescriptor> {
+    private fun getTopLevelDescriptorsByFqName(
+        topLevelDescriptorProvider: TopLevelDescriptorProvider,
+        fqName: FqName,
+        location: LookupLocation
+    ): Set<DeclarationDescriptor> {
         val descriptors = HashSet<DeclarationDescriptor>()
 
         descriptors.addIfNotNull(topLevelDescriptorProvider.getPackageFragment(fqName))
-        descriptors.addAll(topLevelDescriptorProvider.getTopLevelClassDescriptors(fqName, location))
+        descriptors.addAll(topLevelDescriptorProvider.getTopLevelClassifierDescriptors(fqName, location))
         return descriptors
     }
 }

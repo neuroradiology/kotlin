@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ public interface TracingStrategy {
         public void noValueForParameter(@NotNull BindingTrace trace, @NotNull ValueParameterDescriptor valueParameter) {}
 
         @Override
-        public void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount) {}
+        public void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount, @NotNull CallableDescriptor descriptor) {}
 
         @Override
         public <D extends CallableDescriptor> void ambiguity(@NotNull BindingTrace trace, @NotNull Collection<? extends ResolvedCall<D>> descriptors) {}
@@ -102,9 +102,6 @@ public interface TracingStrategy {
 
         @Override
         public void typeInferenceFailed(@NotNull ResolutionContext<?> context, @NotNull InferenceErrorData inferenceErrorData) {}
-
-        @Override
-        public void nonExtensionFunctionCalledAsExtension(@NotNull BindingTrace trace) { }
     };
 
     void bindCall(@NotNull BindingTrace trace, @NotNull Call call);
@@ -132,7 +129,11 @@ public interface TracingStrategy {
 
     void noValueForParameter(@NotNull BindingTrace trace, @NotNull ValueParameterDescriptor valueParameter);
 
-    void wrongNumberOfTypeArguments(@NotNull BindingTrace trace, int expectedTypeArgumentCount);
+    void wrongNumberOfTypeArguments(
+            @NotNull BindingTrace trace,
+            int expectedTypeArgumentCount,
+            @NotNull CallableDescriptor descriptor
+    );
 
     <D extends CallableDescriptor> void ambiguity(@NotNull BindingTrace trace, @NotNull Collection<? extends ResolvedCall<D>> descriptors);
 
@@ -158,6 +159,4 @@ public interface TracingStrategy {
     void invisibleMember(@NotNull BindingTrace trace, @NotNull DeclarationDescriptorWithVisibility descriptor);
 
     void typeInferenceFailed(@NotNull ResolutionContext<?> context, @NotNull InferenceErrorData inferenceErrorData);
-
-    void nonExtensionFunctionCalledAsExtension(@NotNull BindingTrace trace);
 }

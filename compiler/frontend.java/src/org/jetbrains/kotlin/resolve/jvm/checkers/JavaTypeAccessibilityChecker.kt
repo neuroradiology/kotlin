@@ -16,18 +16,14 @@
 
 package org.jetbrains.kotlin.resolve.jvm.checkers
 
-import com.intellij.util.SmartList
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
-import org.jetbrains.kotlin.descriptors.ReceiverParameterDescriptor
 import org.jetbrains.kotlin.descriptors.Visibilities
 import org.jetbrains.kotlin.diagnostics.Errors
 import org.jetbrains.kotlin.load.java.descriptors.JavaClassDescriptor
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.resolve.calls.checkers.AdditionalTypeChecker
-import org.jetbrains.kotlin.resolve.calls.context.CallResolutionContext
 import org.jetbrains.kotlin.resolve.calls.context.ResolutionContext
-import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.types.KotlinType
 
 
@@ -43,51 +39,45 @@ class JavaTypeAccessibilityChecker : AdditionalTypeChecker {
         // To avoid superfluous diagnostics in case of invisible member class and so on,
         // we consider only Java classes as possibly inaccessible.
 
-        val inaccessibleTypes = findInaccessibleJavaTypes(expressionType, c)
-        if (inaccessibleTypes.isNotEmpty()) {
-            c.trace.report(Errors.INACCESSIBLE_TYPE.on(expression, expressionType, inaccessibleTypes))
+        if (c.isDebuggerContext) return
+
+        val inaccessibleClasses = findInaccessibleJavaClasses(expressionType, c)
+        if (inaccessibleClasses.isNotEmpty()) {
+            c.trace.report(Errors.INACCESSIBLE_TYPE.on(expression, expressionType, inaccessibleClasses))
             return
         }
 
         if (expressionTypeWithSmartCast != expressionType) {
-            val inaccessibleTypesWithSmartCast = findInaccessibleJavaTypes(expressionTypeWithSmartCast, c)
-            if (inaccessibleTypesWithSmartCast.isNotEmpty()) {
-                c.trace.report(Errors.INACCESSIBLE_TYPE.on(expression, expressionType, inaccessibleTypes))
+            val inaccessibleClassesWithSmartCast = findInaccessibleJavaClasses(expressionTypeWithSmartCast, c)
+            if (inaccessibleClassesWithSmartCast.isNotEmpty()) {
+                c.trace.report(Errors.INACCESSIBLE_TYPE.on(expression, expressionType, inaccessibleClassesWithSmartCast))
             }
         }
     }
 
-    override fun checkReceiver(
-            receiverParameter: ReceiverParameterDescriptor,
-            receiverArgument: ReceiverValue,
-            safeAccess: Boolean,
-            c: CallResolutionContext<*>
-    ) {}
-
-    private fun findInaccessibleJavaTypes(type: KotlinType, c: ResolutionContext<*>): List<KotlinType> {
+    private fun findInaccessibleJavaClasses(type: KotlinType, c: ResolutionContext<*>): Collection<ClassDescriptor> {
         val scopeOwner = c.scope.ownerDescriptor
-        val inaccessibleTypes = SmartList<KotlinType>()
-        findInaccessibleJavaTypesRec(type, scopeOwner, inaccessibleTypes, hashSetOf())
-        return inaccessibleTypes
+        val inaccessibleJavaClasses = LinkedHashSet<ClassDescriptor>()
+        findInaccessibleJavaClassesRec(type, scopeOwner, inaccessibleJavaClasses)
+        return inaccessibleJavaClasses
     }
 
-    private fun findInaccessibleJavaTypesRec(
+    private fun findInaccessibleJavaClassesRec(
             type: KotlinType,
             scopeOwner: DeclarationDescriptor,
-            inaccessibleTypes: SmartList<KotlinType>,
-            visitedTypeConstructors: MutableSet<DeclarationDescriptor>
+            inaccessibleClasses: MutableCollection<ClassDescriptor>
     ) {
-        val typeConstructor = type.constructor.declarationDescriptor
-        if (typeConstructor is ClassDescriptor) {
-            if (visitedTypeConstructors.contains(typeConstructor)) return
-            visitedTypeConstructors.add(typeConstructor)
+        val declarationDescriptor = type.constructor.declarationDescriptor
 
-            if (typeConstructor is JavaClassDescriptor && !Visibilities.isVisibleWithIrrelevantReceiver(typeConstructor, scopeOwner)) {
-                inaccessibleTypes.add(type)
+        if (declarationDescriptor is JavaClassDescriptor) {
+            if (!Visibilities.isVisibleIgnoringReceiver(declarationDescriptor, scopeOwner)) {
+                inaccessibleClasses.add(declarationDescriptor)
             }
-            for (typeProjection in type.arguments) {
-                findInaccessibleJavaTypesRec(typeProjection.type, scopeOwner, inaccessibleTypes, visitedTypeConstructors)
-            }
+        }
+
+        for (typeProjection in type.arguments) {
+            if (typeProjection.isStarProjection) continue
+            findInaccessibleJavaClassesRec(typeProjection.type, scopeOwner, inaccessibleClasses)
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,74 +16,24 @@
 
 package org.jetbrains.kotlin.types
 
-import org.jetbrains.kotlin.descriptors.PossiblyInnerType
-
-interface TypeCapability
-
-interface TypeCapabilities {
-    object NONE : TypeCapabilities {
-        override fun <T : TypeCapability> getCapability(capabilityClass: Class<T>): T? = null
-    }
-
-    fun <T : TypeCapability> getCapability(capabilityClass: Class<T>): T?
-}
-
-class CompositeTypeCapabilities(private val first: TypeCapabilities, private val second: TypeCapabilities) : TypeCapabilities {
-    override fun <T : TypeCapability> getCapability(capabilityClass: Class<T>): T? =
-            first.getCapability(capabilityClass) ?: second.getCapability(capabilityClass)
-}
-
-class SingletonTypeCapabilities(private val clazz: Class<*>, private val typeCapability: TypeCapability) : TypeCapabilities {
-    override fun <T : TypeCapability> getCapability(capabilityClass: Class<T>): T? {
-        if (capabilityClass == clazz) return typeCapability as T
-        return null
-    }
-}
-
-fun <T : TypeCapability> TypeCapabilities.addCapability(clazz: Class<T>, typeCapability: T): TypeCapabilities {
-    if (getCapability(clazz) === typeCapability) return this
-    val newCapabilities = SingletonTypeCapabilities(clazz, typeCapability)
-    if (this === TypeCapabilities.NONE) return newCapabilities
-
-    return CompositeTypeCapabilities(this, newCapabilities)
-}
-
-inline fun <reified T : TypeCapability> KotlinType.getCapability(): T? = getCapability(T::class.java)
-
-interface Specificity : TypeCapability {
-
-    enum class Relation {
-        LESS_SPECIFIC,
-        MORE_SPECIFIC,
-        DONT_KNOW
-    }
-
-    fun getSpecificityRelationTo(otherType: KotlinType): Relation
-}
-
-fun KotlinType.getSpecificityRelationTo(otherType: KotlinType) =
-        this.getCapability(Specificity::class.java)?.getSpecificityRelationTo(otherType) ?: Specificity.Relation.DONT_KNOW
-
-fun oneMoreSpecificThanAnother(a: KotlinType, b: KotlinType) =
-        a.getSpecificityRelationTo(b) != Specificity.Relation.DONT_KNOW || b.getSpecificityRelationTo(a) != Specificity.Relation.DONT_KNOW
 
 // To facilitate laziness, any KotlinType implementation may inherit from this trait,
 // even if it turns out that the type an instance represents is not actually a type variable
 // (i.e. it is not derived from a type parameter), see isTypeVariable
-interface CustomTypeVariable : TypeCapability {
+interface CustomTypeVariable {
     val isTypeVariable: Boolean
 
     // Throws an exception when isTypeVariable == false
     fun substitutionResult(replacement: KotlinType): KotlinType
 }
 
-fun KotlinType.isCustomTypeVariable(): Boolean = this.getCapability(CustomTypeVariable::class.java)?.isTypeVariable ?: false
+fun KotlinType.isCustomTypeVariable(): Boolean = (unwrap() as? CustomTypeVariable)?.isTypeVariable ?: false
 fun KotlinType.getCustomTypeVariable(): CustomTypeVariable? =
-        this.getCapability(CustomTypeVariable::class.java)?.let {
+        (unwrap() as? CustomTypeVariable)?.let {
             if (it.isTypeVariable) it else null
         }
 
-interface SubtypingRepresentatives : TypeCapability {
+interface SubtypingRepresentatives {
     val subTypeRepresentative: KotlinType
     val superTypeRepresentative: KotlinType
 
@@ -91,22 +41,13 @@ interface SubtypingRepresentatives : TypeCapability {
 }
 
 fun KotlinType.getSubtypeRepresentative(): KotlinType =
-        this.getCapability(SubtypingRepresentatives::class.java)?.subTypeRepresentative ?: this
+        (unwrap() as? SubtypingRepresentatives)?.subTypeRepresentative ?: this
 
 fun KotlinType.getSupertypeRepresentative(): KotlinType =
-        this.getCapability(SubtypingRepresentatives::class.java)?.superTypeRepresentative ?: this
+        (unwrap() as? SubtypingRepresentatives)?.superTypeRepresentative ?: this
 
 fun sameTypeConstructors(first: KotlinType, second: KotlinType): Boolean {
-    val typeRangeCapability = SubtypingRepresentatives::class.java
-    return first.getCapability(typeRangeCapability)?.sameTypeConstructor(second) ?: false
-           || second.getCapability(typeRangeCapability)?.sameTypeConstructor(first) ?: false
+    return (first.unwrap() as? SubtypingRepresentatives)?.sameTypeConstructor(second) ?: false
+           || (second.unwrap() as? SubtypingRepresentatives)?.sameTypeConstructor(first) ?: false
 }
 
-interface CustomSubstitutionCapability : TypeCapability {
-    val substitution: TypeSubstitution?
-    val substitutionToComposeWith: TypeSubstitution?
-}
-
-interface PossiblyInnerTypeCapability : TypeCapability {
-    val possiblyInnerType: PossiblyInnerType?
-}

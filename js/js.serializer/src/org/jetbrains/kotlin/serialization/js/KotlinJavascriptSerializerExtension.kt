@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,77 @@
 
 package org.jetbrains.kotlin.serialization.js
 
+import org.jetbrains.kotlin.config.LanguageFeature
+import org.jetbrains.kotlin.config.LanguageVersionSettings
+import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.deserialization.BinaryVersion
+import org.jetbrains.kotlin.metadata.js.JsProtoBuf
+import org.jetbrains.kotlin.metadata.serialization.MutableVersionRequirementTable
+import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.source.PsiSourceFile
 import org.jetbrains.kotlin.serialization.KotlinSerializerExtensionBase
-import org.jetbrains.kotlin.serialization.SerializerExtensionProtocol
+import org.jetbrains.kotlin.types.FlexibleType
 
-class KotlinJavascriptSerializerExtension : KotlinSerializerExtensionBase(JsSerializerProtocol)
+class KotlinJavascriptSerializerExtension(
+    private val fileRegistry: KotlinFileRegistry,
+    private val languageVersionSettings: LanguageVersionSettings,
+    override val metadataVersion: BinaryVersion
+) : KotlinSerializerExtensionBase(JsSerializerProtocol) {
+    override val stringTable = JavaScriptStringTable()
 
-object JsSerializerProtocol : SerializerExtensionProtocol(
-        JsProtoBuf.constructorAnnotation, JsProtoBuf.classAnnotation, JsProtoBuf.functionAnnotation, JsProtoBuf.propertyAnnotation,
-        JsProtoBuf.enumEntryAnnotation, JsProtoBuf.compileTimeValue, JsProtoBuf.parameterAnnotation, JsProtoBuf.typeAnnotation,
-        JsProtoBuf.typeParameterAnnotation
-)
+    override fun serializeFlexibleType(flexibleType: FlexibleType, lowerProto: ProtoBuf.Type.Builder, upperProto: ProtoBuf.Type.Builder) {
+        lowerProto.flexibleTypeCapabilitiesId = stringTable.getStringIndex(DynamicTypeDeserializer.id)
+    }
+
+    override fun serializeClass(
+        descriptor: ClassDescriptor,
+        proto: ProtoBuf.Class.Builder,
+        versionRequirementTable: MutableVersionRequirementTable
+    ) {
+        val id = getFileId(descriptor)
+        if (id != null) {
+            proto.setExtension(JsProtoBuf.classContainingFileId, id)
+        }
+        super.serializeClass(descriptor, proto, versionRequirementTable)
+    }
+
+    override fun serializeProperty(
+        descriptor: PropertyDescriptor,
+        proto: ProtoBuf.Property.Builder,
+        versionRequirementTable: MutableVersionRequirementTable
+    ) {
+        val id = getFileId(descriptor)
+        if (id != null) {
+            proto.setExtension(JsProtoBuf.propertyContainingFileId, id)
+        }
+        super.serializeProperty(descriptor, proto, versionRequirementTable)
+    }
+
+    override fun serializeFunction(descriptor: FunctionDescriptor, proto: ProtoBuf.Function.Builder) {
+        val id = getFileId(descriptor)
+        if (id != null) {
+            proto.setExtension(JsProtoBuf.functionContainingFileId, id)
+        }
+        super.serializeFunction(descriptor, proto)
+    }
+
+    private fun getFileId(descriptor: DeclarationDescriptor): Int? {
+        if (!DescriptorUtils.isTopLevelDeclaration(descriptor) || descriptor !is DeclarationDescriptorWithSource) return null
+
+        val fileId = descriptor.extractFileId()
+        if (fileId != null) {
+            (descriptor.containingDeclaration as? KotlinJavascriptPackageFragment)?.let { packageFragment ->
+                return fileRegistry.lookup(KotlinDeserializedFileMetadata(packageFragment, fileId))
+            }
+        }
+
+        val file = descriptor.source.containingFile as? PsiSourceFile ?: return null
+
+        val psiFile = file.psiFile
+        return (psiFile as? KtFile)?.let { fileRegistry.lookup(KotlinPsiFileMetadata(it)) }
+    }
+
+    override fun releaseCoroutines() = languageVersionSettings.supportsFeature(LanguageFeature.ReleaseCoroutines)
+}

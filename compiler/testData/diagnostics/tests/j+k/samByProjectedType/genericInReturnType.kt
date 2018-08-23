@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 // !CHECK_TYPE
 // FILE: EventListener.java
 public interface EventListener<E> {
@@ -19,34 +20,34 @@ public class A {
 // FILE: main.kt
 fun main() {
     A().foo {
-        x -> 1
+        x -> x.hashCode()
     }
 
     A.bar {
-        x -> 1
+        x -> x.hashCode()
     }
 
 
     // baz
     A.baz {
-        x -> "" // OK
+        x -> x.toString() // OK
     }
 
     A.baz {
-        x -> <!CONSTANT_EXPECTED_TYPE_MISMATCH!>1<!>
+        x -> <!NI;TYPE_MISMATCH, NI;TYPE_MISMATCH, TYPE_MISMATCH!>x.<!NI;TYPE_MISMATCH!>hashCode()<!><!>
     }
 
     val block: (String) -> Any? = {
-        x -> 1
+        x -> x.hashCode()
     }
 
     A().foo(block)
     A.bar(block)
 
     val block2: (String) -> CharSequence? = {
-        x -> ""
+        x -> x.toString()
     }
 
-    A.<!NONE_APPLICABLE!>baz<!>(block)
+    A.baz(<!TYPE_MISMATCH!>block<!>)
     A.baz(block2)
 }

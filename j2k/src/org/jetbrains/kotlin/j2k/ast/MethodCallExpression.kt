@@ -16,44 +16,53 @@
 
 package org.jetbrains.kotlin.j2k.ast
 
+import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.j2k.CodeBuilder
 import org.jetbrains.kotlin.j2k.append
 
 class MethodCallExpression(
         val methodExpression: Expression,
-        val arguments: List<Expression>,
+        val argumentList: ArgumentList,
         val typeArguments: List<Type>,
         override val isNullable: Boolean
 ) : Expression() {
 
     override fun generateCode(builder: CodeBuilder) {
         builder.appendOperand(this, methodExpression).append(typeArguments, ", ", "<", ">")
-        builder.append("(").append(arguments, ", ").append(")")
+        builder.append(argumentList)
     }
 
     companion object {
-        fun buildNotNull(receiver: Expression?,
-                                methodName: String,
-                                arguments: List<Expression> = listOf(),
-                                typeArguments: List<Type> = listOf()): MethodCallExpression
-                = build(receiver, methodName, arguments, typeArguments, false)
+        fun buildNonNull(
+                receiver: Expression?,
+                methodName: String,
+                argumentList: ArgumentList = ArgumentList.withNoPrototype(),
+                typeArguments: List<Type> = emptyList(),
+                dotPrototype: PsiElement? = null
+        ): MethodCallExpression = build(receiver, methodName, argumentList, typeArguments, false, dotPrototype)
 
-        fun buildNullable(receiver: Expression?,
-                                 methodName: String,
-                                 arguments: List<Expression> = listOf(),
-                                 typeArguments: List<Type> = listOf()): MethodCallExpression
-                = build(receiver, methodName, arguments, typeArguments, true)
+        fun buildNullable(
+                receiver: Expression?,
+                methodName: String,
+                argumentList: ArgumentList = ArgumentList.withNoPrototype(),
+                typeArguments: List<Type> = emptyList(),
+                dotPrototype: PsiElement? = null
+        ): MethodCallExpression = build(receiver, methodName, argumentList, typeArguments, true, dotPrototype)
 
-        fun build(receiver: Expression?,
-                         methodName: String,
-                         arguments: List<Expression>,
-                         typeArguments: List<Type>,
-                         isNullable: Boolean): MethodCallExpression {
-            val identifier = Identifier(methodName, false).assignNoPrototype()
-            return MethodCallExpression(if (receiver != null) QualifiedExpression(receiver, identifier).assignNoPrototype() else identifier,
-                                        arguments,
-                                        typeArguments,
-                                        isNullable)
+        fun build(
+                receiver: Expression?,
+                methodName: String,
+                argumentList: ArgumentList,
+                typeArguments: List<Type>,
+                isNullable: Boolean,
+                dotPrototype: PsiElement? = null
+        ): MethodCallExpression {
+            val identifier = Identifier.withNoPrototype(methodName, isNullable = false)
+            val methodExpression = if (receiver != null)
+                QualifiedExpression(receiver, identifier, dotPrototype).assignNoPrototype()
+            else
+                identifier
+            return MethodCallExpression(methodExpression, argumentList, typeArguments, isNullable)
         }
     }
 }

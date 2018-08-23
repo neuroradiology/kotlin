@@ -2,6 +2,7 @@
 
 Cleaning output files:
   out/production/module/Enum.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/Enum.kt
@@ -20,7 +21,7 @@ End of files
 Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
-Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type kotlin.Any?
+Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type Any?
 
 ================ Step #2 =================
 

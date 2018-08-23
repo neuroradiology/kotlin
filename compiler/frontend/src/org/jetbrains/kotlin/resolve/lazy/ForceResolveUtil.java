@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,13 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.descriptors.annotations.AnnotationWithTarget;
 import org.jetbrains.kotlin.descriptors.annotations.Annotations;
+import org.jetbrains.kotlin.descriptors.impl.ValueParameterDescriptorImpl;
 import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.resolve.scopes.MemberScope;
-import org.jetbrains.kotlin.types.*;
+import org.jetbrains.kotlin.types.FlexibleTypesKt;
+import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.TypeConstructor;
+import org.jetbrains.kotlin.types.TypeProjection;
 
 import java.util.Collection;
 
@@ -70,6 +74,9 @@ public class ForceResolveUtil {
             LazyEntity lazyEntity = (LazyEntity) object;
             lazyEntity.forceResolveAllContents();
         }
+        else if (object instanceof ValueParameterDescriptorImpl.WithDestructuringDeclaration) {
+            ((ValueParameterDescriptorImpl.WithDestructuringDeclaration) object).getDestructuringVariables();
+        }
         else if (object instanceof CallableDescriptor) {
             CallableDescriptor callableDescriptor = (CallableDescriptor) object;
             ReceiverParameterDescriptor parameter = callableDescriptor.getExtensionReceiverParameter();
@@ -85,6 +92,10 @@ public class ForceResolveUtil {
             forceResolveAllContents(callableDescriptor.getReturnType());
             forceResolveAllContents(callableDescriptor.getAnnotations());
         }
+        else if (object instanceof TypeAliasDescriptor) {
+            TypeAliasDescriptor typeAliasDescriptor = (TypeAliasDescriptor) object;
+            forceResolveAllContents(typeAliasDescriptor.getUnderlyingType());
+        }
     }
 
     @Nullable
@@ -93,8 +104,8 @@ public class ForceResolveUtil {
 
         forceResolveAllContents(type.getAnnotations());
         if (FlexibleTypesKt.isFlexible(type)) {
-            forceResolveAllContents(FlexibleTypesKt.flexibility(type).getLowerBound());
-            forceResolveAllContents(FlexibleTypesKt.flexibility(type).getUpperBound());
+            forceResolveAllContents(FlexibleTypesKt.asFlexibleType(type).getLowerBound());
+            forceResolveAllContents(FlexibleTypesKt.asFlexibleType(type).getUpperBound());
         }
         else {
             forceResolveAllContents(type.getConstructor());

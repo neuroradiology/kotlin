@@ -15,20 +15,20 @@
  */
 
 @file:JvmName("ReflectJvmMapping")
+
 package kotlin.reflect.jvm
 
-import org.jetbrains.kotlin.load.java.JvmAbi
 import org.jetbrains.kotlin.load.kotlin.header.KotlinClassHeader
-import org.jetbrains.kotlin.load.kotlin.reflect.ReflectKotlinClass
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBuf
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBufUtil
 import java.lang.reflect.*
-import java.util.*
-import kotlin.jvm.internal.Reflection
 import kotlin.reflect.*
+import kotlin.reflect.full.companionObject
+import kotlin.reflect.full.functions
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.jvm.internal.KPackageImpl
 import kotlin.reflect.jvm.internal.KTypeImpl
 import kotlin.reflect.jvm.internal.asKCallableImpl
 import kotlin.reflect.jvm.internal.asKPropertyImpl
+import kotlin.reflect.jvm.internal.components.ReflectKotlinClass
 
 // Kotlin reflection -> Java reflection
 
@@ -65,7 +65,8 @@ val KFunction<*>.javaMethod: Method?
  * Returns a Java [Constructor] instance corresponding to the given Kotlin function,
  * or `null` if this function is not a constructor or cannot be represented by a Java [Constructor].
  */
-@Suppress("UNCHECKED_CAST") val <T> KFunction<T>.javaConstructor: Constructor<T>?
+@Suppress("UNCHECKED_CAST")
+val <T> KFunction<T>.javaConstructor: Constructor<T>?
     get() = this.asKCallableImpl()?.caller?.member as? Constructor<T>
 
 
@@ -76,7 +77,6 @@ val KFunction<*>.javaMethod: Method?
  */
 val KType.javaType: Type
     get() = (this as KTypeImpl).javaType
-
 
 
 // Java reflection -> Kotlin reflection
@@ -101,21 +101,12 @@ val Field.kotlinProperty: KProperty<*>?
     }
 
 
-private fun Member.getKPackage(): KDeclarationContainer? {
-    // TODO: support multifile classes
-    val header = ReflectKotlinClass.create(declaringClass)?.classHeader
-    if (header != null && header.kind == KotlinClassHeader.Kind.FILE_FACADE && header.metadataVersion.isCompatible()) {
-        // TODO: avoid reading and parsing metadata twice (here and later in KPackageImpl#descriptor)
-        val (nameResolver, proto) = JvmProtoBufUtil.readPackageDataFrom(header.data!!, header.strings!!)
-        val moduleName =
-                if (proto.hasExtension(JvmProtoBuf.packageModuleName))
-                    nameResolver.getString(proto.getExtension(JvmProtoBuf.packageModuleName))
-                else JvmAbi.DEFAULT_MODULE_NAME
-        return Reflection.getOrCreateKotlinPackage(declaringClass, moduleName)
+private fun Member.getKPackage(): KDeclarationContainer? =
+    when (ReflectKotlinClass.create(declaringClass)?.classHeader?.kind) {
+        KotlinClassHeader.Kind.FILE_FACADE, KotlinClassHeader.Kind.MULTIFILE_CLASS, KotlinClassHeader.Kind.MULTIFILE_CLASS_PART ->
+            KPackageImpl(declaringClass)
+        else -> null
     }
-
-    return null
-}
 
 /**
  * Returns a [KFunction] instance corresponding to the given Java [Method] instance,
@@ -138,7 +129,7 @@ val Method.kotlinFunction: KFunction<*>?
                 companion.functions.firstOrNull {
                     val m = it.javaMethod
                     m != null && m.name == this.name &&
-                    Arrays.equals(m.parameterTypes, this.parameterTypes) && m.returnType == this.returnType
+                            m.parameterTypes!!.contentEquals(this.parameterTypes) && m.returnType == this.returnType
                 }?.let { return it }
             }
         }

@@ -16,11 +16,11 @@
 
 package org.jetbrains.kotlin.serialization.builtins
 
-import org.jetbrains.kotlin.builtins.createBuiltInPackageFragmentProvider
+import org.jetbrains.kotlin.builtins.DefaultBuiltIns
 import org.jetbrains.kotlin.codegen.forTestCompile.ForTestCompileRuntime
+import org.jetbrains.kotlin.descriptors.deserialization.PlatformDependentDeclarationFilter
 import org.jetbrains.kotlin.jvm.compiler.LoadDescriptorUtil.TEST_PACKAGE_FQNAME
-import org.jetbrains.kotlin.resolve.TargetPlatform
-import org.jetbrains.kotlin.serialization.deserialization.ClassDescriptorFactory
+import org.jetbrains.kotlin.serialization.deserialization.builtins.BuiltInsLoaderImpl
 import org.jetbrains.kotlin.storage.LockBasedStorageManager
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.jetbrains.kotlin.test.TestCaseWithTmpdir
@@ -35,14 +35,13 @@ class BuiltInsSerializerTest : TestCaseWithTmpdir() {
                 tmpdir,
                 srcDirs = listOf(File(source)),
                 extraClassPath = listOf(ForTestCompileRuntime.runtimeJarForTests()),
-                onComplete = { totalSize, totalFiles -> }
+                onComplete = { _, _ -> }
         )
 
-        val platform = TargetPlatform.Default
-        val module = KotlinTestUtils.createEmptyModule("<module>", platform)
+        val module = KotlinTestUtils.createEmptyModule("<module>", DefaultBuiltIns.Instance)
 
-        val packageFragmentProvider = createBuiltInPackageFragmentProvider(
-                LockBasedStorageManager(), module, setOf(TEST_PACKAGE_FQNAME), ClassDescriptorFactory.EMPTY
+        val packageFragmentProvider = BuiltInsLoaderImpl().createBuiltInPackageFragmentProvider(
+                LockBasedStorageManager(), module, setOf(TEST_PACKAGE_FQNAME), emptyList(), PlatformDependentDeclarationFilter.All
         ) {
             val file = File(tmpdir, it)
             if (file.exists()) FileInputStream(file) else null
@@ -104,5 +103,13 @@ class BuiltInsSerializerTest : TestCaseWithTmpdir() {
 
     fun testVarArgs() {
         doTest("annotationArguments/varargs.kt")
+    }
+
+    fun testSourceRetainedAnnotation() {
+        doTest("sourceRetainedAnnotation.kt")
+    }
+
+    fun testBinaryRetainedAnnotation() {
+        doTest("binaryRetainedAnnotation.kt")
     }
 }

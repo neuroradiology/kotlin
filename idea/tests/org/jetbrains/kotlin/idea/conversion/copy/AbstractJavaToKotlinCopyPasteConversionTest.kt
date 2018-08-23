@@ -18,9 +18,9 @@ package org.jetbrains.kotlin.idea.conversion.copy
 
 import com.intellij.openapi.actionSystem.IdeActions
 import org.jetbrains.kotlin.idea.AbstractCopyPasteTest
+import org.jetbrains.kotlin.idea.editor.KotlinEditorOptions
 import org.jetbrains.kotlin.idea.test.KotlinWithJdkAndRuntimeLightProjectDescriptor
 import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
-import org.jetbrains.kotlin.idea.editor.KotlinEditorOptions
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import java.io.File
@@ -43,7 +43,7 @@ abstract class AbstractJavaToKotlinCopyPasteConversionTest : AbstractCopyPasteTe
     }
 
     override fun tearDown() {
-        KotlinEditorOptions.getInstance().loadState(oldEditorOptions)
+        oldEditorOptions?.let { KotlinEditorOptions.getInstance().loadState(it) }
         super.tearDown()
     }
 
@@ -62,12 +62,12 @@ abstract class AbstractJavaToKotlinCopyPasteConversionTest : AbstractCopyPasteTe
 
         configureTargetFile(testName + ".to.kt")
 
-        ConvertJavaCopyPastePostProcessor.conversionPerformed = false
+        ConvertJavaCopyPasteProcessor.conversionPerformed = false
 
         myFixture.performEditorAction(IdeActions.ACTION_PASTE)
 
-        assertEquals(noConversionExpected, !ConvertJavaCopyPastePostProcessor.conversionPerformed,
-        if (noConversionExpected) "Conversion to Kotlin should not be suggested" else "No conversion to Kotlin suggested")
+        assertEquals(noConversionExpected, !ConvertJavaCopyPasteProcessor.conversionPerformed,
+                     if (noConversionExpected) "Conversion to Kotlin should not be suggested" else "No conversion to Kotlin suggested")
 
         KotlinTestUtils.assertEqualsToFile(File(path.replace(".java", ".expected.kt")), myFixture.file.text)
     }

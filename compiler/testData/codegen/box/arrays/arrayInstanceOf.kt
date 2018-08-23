@@ -1,3 +1,4 @@
+// IGNORE_BACKEND: JS_IR
 //test [], get and iterator calls
 fun test(createIntNotLong: Boolean): String {
     val a = if (createIntNotLong) IntArray(5) else LongArray(5)
@@ -22,5 +23,8 @@ fun test(createIntNotLong: Boolean): String {
 }
 
 fun box(): String {
+    // Only run this test if primitive array `is` checks work (KT-17137)
+    if ((intArrayOf() as Any) is Array<*>) return "OK"
+
     return test(true) + test(false)
 }

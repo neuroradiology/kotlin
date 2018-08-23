@@ -16,7 +16,6 @@
 
 package org.jetbrains.kotlin.idea.codeInsight.upDownMover;
 
-import com.google.common.base.Predicate;
 import com.intellij.codeInsight.editorActions.moveUpDown.LineRange;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
@@ -27,21 +26,17 @@ import com.intellij.psi.util.PsiTreeUtil;
 import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.kotlin.idea.refactoring.JetRefactoringUtilKt;
+import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringUtilKt;
 import org.jetbrains.kotlin.lexer.KtTokens;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.psi.psiUtil.PsiUtilsKt;
 
 import java.util.List;
+import java.util.function.Predicate;
 
 public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
 
-    private static final Predicate<KtElement> IS_CALL_EXPRESSION = new Predicate<KtElement>() {
-        @Override
-        public boolean apply(@Nullable KtElement input) {
-            return input instanceof KtCallExpression;
-        }
-    };
+    private static final Predicate<KtElement> IS_CALL_EXPRESSION = input -> input instanceof KtCallExpression;
 
     public KotlinExpressionMover() {
     }
@@ -70,20 +65,12 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
     private final static Class[] FUNCTIONLIKE_ELEMENT_CLASSES =
             {KtFunction.class, KtPropertyAccessor.class, KtAnonymousInitializer.class};
 
-    private static final Predicate<KtElement> CHECK_BLOCK_LIKE_ELEMENT = new Predicate<KtElement>() {
-        @Override
-        public boolean apply(@Nullable KtElement input) {
-            return (input instanceof KtBlockExpression || input instanceof KtClassBody)
-                   && !PsiTreeUtil.instanceOf(input.getParent(), FUNCTIONLIKE_ELEMENT_CLASSES);
-        }
-    };
+    private static final Predicate<KtElement> CHECK_BLOCK_LIKE_ELEMENT =
+            input -> (input instanceof KtBlockExpression || input instanceof KtClassBody)
+                     && !PsiTreeUtil.instanceOf(input.getParent(), FUNCTIONLIKE_ELEMENT_CLASSES);
 
-    private static final Predicate<KtElement> CHECK_BLOCK = new Predicate<KtElement>() {
-        @Override
-        public boolean apply(@Nullable KtElement input) {
-            return input instanceof KtBlockExpression && !PsiTreeUtil.instanceOf(input.getParent(), FUNCTIONLIKE_ELEMENT_CLASSES);
-        }
-    };
+    private static final Predicate<KtElement> CHECK_BLOCK =
+            input -> input instanceof KtBlockExpression && !PsiTreeUtil.instanceOf(input.getParent(), FUNCTIONLIKE_ELEMENT_CLASSES);
 
     @Nullable
     private static PsiElement getStandaloneClosingBrace(@NotNull PsiFile file, @NotNull Editor editor) {
@@ -197,7 +184,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         while (current != null) {
             PsiElement parent = current.getParent();
             if (parent instanceof KtClassBody ||
-                parent instanceof KtAnonymousInitializer ||
+                (parent instanceof KtAnonymousInitializer && !(parent instanceof KtScriptInitializer)) ||
                 parent instanceof KtNamedFunction ||
                 (parent instanceof KtProperty && !((KtProperty) parent).isLocal())) {
                 return null;
@@ -222,7 +209,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
     }
 
     @Nullable
-    private static KtBlockExpression getDSLLambdaBlock(@NotNull PsiElement element, boolean down) {
+    private static KtBlockExpression getDSLLambdaBlock(@NotNull Editor editor, @NotNull PsiElement element, boolean down) {
         KtCallExpression callExpression =
                 (KtCallExpression) KtPsiUtil.getOutermostDescendantElement(element, down, IS_CALL_EXPRESSION);
         if (callExpression == null) return null;
@@ -230,20 +217,68 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         List<KtLambdaArgument> functionLiterals = callExpression.getLambdaArguments();
         if (functionLiterals.isEmpty()) return null;
 
-        return functionLiterals.get(0).getLambdaExpression().getBodyExpression();
+        KtLambdaExpression lambdaExpression = functionLiterals.get(0).getLambdaExpression();
+        if (lambdaExpression == null) return null;
+
+        Document document = editor.getDocument();
+        TextRange range = lambdaExpression.getTextRange();
+        if (document.getLineNumber(range.getStartOffset()) == document.getLineNumber(range.getEndOffset())) return null;
+
+        return lambdaExpression.getBodyExpression();
     }
 
     @Nullable
     private static LineRange getExpressionTargetRange(@NotNull Editor editor, @NotNull PsiElement sibling, boolean down) {
-        if (sibling instanceof KtIfExpression && !down) {
-            KtExpression elseBranch = ((KtIfExpression) sibling).getElse();
-            if (elseBranch instanceof KtBlockExpression) {
-                sibling = elseBranch;
-            }
-        }
 
         PsiElement start = sibling;
         PsiElement end = sibling;
+
+        if (!down) {
+            if (sibling instanceof KtIfExpression) {
+                KtIfExpression ifExpression = (KtIfExpression) sibling;
+                KtExpression elseExpression = ifExpression.getElse();
+                while (elseExpression instanceof KtIfExpression) {
+                    KtIfExpression elseIfExpression = (KtIfExpression) elseExpression;
+                    KtExpression next = elseIfExpression.getElse();
+                    if (next == null) {
+                        elseExpression = elseIfExpression.getThen();
+                        break;
+                    }
+                    elseExpression = next;
+                }
+                if (elseExpression instanceof KtBlockExpression) {
+                    sibling = elseExpression;
+                    start = sibling;
+                }
+
+            } else if (sibling instanceof KtWhenExpression) {
+                List<KtWhenEntry> entries = ((KtWhenExpression) sibling).getEntries();
+                if (!entries.isEmpty()) {
+                    KtWhenEntry lastEntry = null;
+                    for (KtWhenEntry entry : entries) {
+                        if (entry.getExpression() instanceof KtBlockExpression) lastEntry = entry;
+                    }
+                    if (lastEntry != null) {
+                        sibling = lastEntry;
+                        start = sibling;
+                    }
+                }
+
+            } else if (sibling instanceof KtTryExpression) {
+                KtTryExpression tryExpression = (KtTryExpression) sibling;
+                KtFinallySection finallyBlock = tryExpression.getFinallyBlock();
+                if (finallyBlock != null) {
+                    sibling = finallyBlock;
+                    start = sibling;
+                } else {
+                    List<KtCatchClause> clauses = tryExpression.getCatchClauses();
+                    if (!clauses.isEmpty()) {
+                        sibling = clauses.get(clauses.size() - 1);
+                        start = sibling;
+                    }
+                }
+            }
+        }
 
         // moving out of code block
         if (sibling.getNode().getElementType() == (down ? KtTokens.RBRACE : KtTokens.LBRACE)) {
@@ -290,7 +325,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         else {
             PsiElement blockLikeElement;
 
-            KtBlockExpression dslBlock = getDSLLambdaBlock(sibling, down);
+            KtBlockExpression dslBlock = getDSLLambdaBlock(editor, sibling, down);
             if (dslBlock != null) {
                 // Use JetFunctionLiteral (since it contains braces)
                 blockLikeElement = dslBlock.getParent();
@@ -428,7 +463,8 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         return block.getLBrace() == null && block.getRBrace() == null;
     }
 
-    protected static PsiElement adjustSibling(
+    private static PsiElement adjustSibling(
+            @NotNull Editor editor,
             @NotNull LineRange sourceRange,
             @NotNull MoveInfo info,
             boolean down
@@ -445,7 +481,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         }
 
         if (whiteSpaceTestSubject instanceof PsiWhiteSpace) {
-            if (JetRefactoringUtilKt.isMultiLine(whiteSpaceTestSubject)) {
+            if (KotlinRefactoringUtilKt.isMultiLine(whiteSpaceTestSubject)) {
                 int nearLine = down ? sourceRange.endLine : sourceRange.startLine - 1;
 
                 info.toMove = sourceRange;
@@ -463,7 +499,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         if (sibling == null) {
             KtCallExpression callExpression = PsiTreeUtil.getParentOfType(element, KtCallExpression.class);
             if (callExpression != null) {
-                KtBlockExpression dslBlock = getDSLLambdaBlock(callExpression, down);
+                KtBlockExpression dslBlock = getDSLLambdaBlock(editor, callExpression, down);
                 if (PsiTreeUtil.isAncestor(dslBlock, element, false)) {
                     //noinspection ConstantConditions
                     PsiElement blockParent = dslBlock.getParent();
@@ -521,7 +557,7 @@ public class KotlinExpressionMover extends AbstractKotlinUpDownMover {
         LineRange sourceRange = getSourceRange(firstElement, lastElement, editor, oldRange);
         if (sourceRange == null) return false;
 
-        PsiElement sibling = getLastNonWhiteSiblingInLine(adjustSibling(sourceRange, info, down), editor, down);
+        PsiElement sibling = getLastNonWhiteSiblingInLine(adjustSibling(editor, sourceRange, info, down), editor, down);
 
         // Either reached last sibling, or jumped over multi-line whitespace
         if (sibling == null) return true;

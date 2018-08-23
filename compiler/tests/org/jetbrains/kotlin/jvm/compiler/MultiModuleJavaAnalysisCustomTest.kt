@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,37 +19,42 @@ package org.jetbrains.kotlin.jvm.compiler
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.search.DelegatingGlobalSearchScope
 import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.testFramework.UsefulTestCase
-import org.jetbrains.kotlin.analyzer.ModuleContent
-import org.jetbrains.kotlin.analyzer.ModuleInfo
-import org.jetbrains.kotlin.analyzer.ResolverForProject
+import org.jetbrains.kotlin.analyzer.*
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.jvm.JvmBuiltIns
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.cli.jvm.config.addJavaSourceRoots
-import org.jetbrains.kotlin.config.CompilerConfiguration
+import org.jetbrains.kotlin.config.LanguageFeature
+import org.jetbrains.kotlin.config.LanguageVersionSettings
+import org.jetbrains.kotlin.container.get
 import org.jetbrains.kotlin.context.ProjectContext
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
+import org.jetbrains.kotlin.load.kotlin.PackagePartProvider
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.resolve.CompilerEnvironment
+import org.jetbrains.kotlin.resolve.constants.EnumValue
+import org.jetbrains.kotlin.resolve.descriptorUtil.annotationClass
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.resolve.jvm.JvmAnalyzerFacade
 import org.jetbrains.kotlin.resolve.jvm.JvmPlatformParameters
-import org.jetbrains.kotlin.cli.jvm.compiler.JvmPackagePartProvider
+import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
+import org.jetbrains.kotlin.test.ConfigurationKind
 import org.jetbrains.kotlin.test.KotlinTestUtils
+import org.jetbrains.kotlin.test.TestJdkKind
+import org.jetbrains.kotlin.test.testFramework.KtUsefulTestCase
 import org.jetbrains.kotlin.types.ErrorUtils
 import org.junit.Assert
 import java.io.File
-import java.util.HashMap
+import java.util.*
 
-class MultiModuleJavaAnalysisCustomTest : UsefulTestCase() {
+class MultiModuleJavaAnalysisCustomTest : KtUsefulTestCase() {
 
-    private class TestModule(val _name: String, val kotlinFiles: List<KtFile>, val javaFilesScope: GlobalSearchScope,
-                             val _dependencies: TestModule.() -> List<TestModule>) :
-            ModuleInfo {
+    private class TestModule(
+            val _name: String, val kotlinFiles: List<KtFile>, val javaFilesScope: GlobalSearchScope,
+            val _dependencies: TestModule.() -> List<TestModule>
+    ) : ModuleInfo {
         override fun dependencies() = _dependencies()
         override val name = Name.special("<$_name>")
     }
@@ -58,26 +63,40 @@ class MultiModuleJavaAnalysisCustomTest : UsefulTestCase() {
         val moduleDirs = File(PATH_TO_TEST_ROOT_DIR).listFiles { it -> it.isDirectory }!!
         val environment = createEnvironment(moduleDirs)
         val modules = setupModules(environment, moduleDirs)
-        val resolverForProject = JvmAnalyzerFacade.setupResolverForProject(
-                "test",
-                ProjectContext(environment.project), modules,
-                { m -> ModuleContent(m.kotlinFiles, m.javaFilesScope) },
-                JvmPlatformParameters {
-                    javaClass ->
-                    val moduleName = javaClass.name.asString().toLowerCase().first().toString()
-                    modules.first { it._name == moduleName }
-                },
-                CompilerEnvironment,
-                packagePartProviderFactory = { a, b -> JvmPackagePartProvider(environment) }
+        val projectContext = ProjectContext(environment.project)
+        val builtIns = JvmBuiltIns(projectContext.storageManager)
+        val resolverForProject = ResolverForProjectImpl(
+            "test",
+            projectContext, modules,
+            modulesContent = { module -> ModuleContent(module, module.kotlinFiles, module.javaFilesScope) },
+            modulePlatforms = { JvmPlatform.multiTargetPlatform },
+            moduleLanguageSettingsProvider = LanguageSettingsProvider.Default,
+            resolverForModuleFactoryByPlatform = { JvmAnalyzerFacade },
+            platformParameters = { _ ->
+                JvmPlatformParameters(
+                    packagePartProviderFactory = { PackagePartProvider.Empty },
+                    moduleByJavaClass = { javaClass ->
+                        val moduleName = javaClass.name.asString().toLowerCase().first().toString()
+                        modules.first { it._name == moduleName }
+                    }
+                )
+            },
+            builtIns = builtIns
         )
+
+        builtIns.initialize(
+                resolverForProject.descriptorForModule(resolverForProject.allModules.first()),
+                resolverForProject.resolverForModule(resolverForProject.allModules.first())
+                        .componentProvider.get<LanguageVersionSettings>()
+                        .supportsFeature(LanguageFeature.AdditionalBuiltInsMembers))
 
         performChecks(resolverForProject, modules)
     }
 
     private fun createEnvironment(moduleDirs: Array<File>): KotlinCoreEnvironment {
-        val configuration = CompilerConfiguration()
-        configuration.addJavaSourceRoots(moduleDirs.toList())
-        return KotlinCoreEnvironment.createForTests(testRootDisposable!!, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES)
+        val configuration =
+                KotlinTestUtils.newConfiguration(ConfigurationKind.JDK_ONLY, TestJdkKind.MOCK_JDK, emptyList(), moduleDirs.toList())
+        return KotlinCoreEnvironment.createForTests(testRootDisposable, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES)
     }
 
     private fun setupModules(environment: KotlinCoreEnvironment, moduleDirs: Array<File>): List<TestModule> {
@@ -98,7 +117,7 @@ class MultiModuleJavaAnalysisCustomTest : UsefulTestCase() {
                     "a" -> listOf(this)
                     "b" -> listOf(this, modules["a"]!!)
                     "c" -> listOf(this, modules["b"]!!, modules["a"]!!)
-                    else -> throw IllegalStateException("$_name")
+                    else -> throw IllegalStateException(_name)
                 }
             }
         }
@@ -143,9 +162,21 @@ class MultiModuleJavaAnalysisCustomTest : UsefulTestCase() {
             it.type.constructor.declarationDescriptor!!
         }.forEach { checkDescriptor(it, callable) }
 
-        callable.annotations.map {
-            it.type.constructor.declarationDescriptor!!
-        }.forEach { checkDescriptor(it, callable) }
+        callable.annotations.forEach {
+            val annotationClassDescriptor = it.annotationClass!!
+            checkDescriptor(annotationClassDescriptor, callable)
+
+            Assert.assertEquals(
+                    "Annotation value arguments number is not equal to number of parameters in $callable",
+                    annotationClassDescriptor.constructors.single().valueParameters.size, it.allValueArguments.size)
+
+            it.allValueArguments.forEach {
+                val argument = it.value
+                if (argument is EnumValue) {
+                    Assert.assertEquals("Enum entry name should be <module-name>X", "X", argument.enumEntryName.identifier.last().toString())
+                }
+            }
+        }
     }
 
     private fun checkSupertypes(classDescriptor: ClassDescriptor) {
@@ -162,7 +193,7 @@ class MultiModuleJavaAnalysisCustomTest : UsefulTestCase() {
         assert(!ErrorUtils.isError(referencedDescriptor)) { "Error descriptor: $referencedDescriptor" }
 
         val descriptorName = referencedDescriptor.name.asString()
-        val expectedModuleName = "<${descriptorName.toLowerCase().first().toString()}>"
+        val expectedModuleName = "<${descriptorName.toLowerCase().first()}>"
         val moduleName = referencedDescriptor.module.name.asString()
         Assert.assertEquals(
                 "Java class $descriptorName in $context should be in module $expectedModuleName, but instead was in $moduleName",

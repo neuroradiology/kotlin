@@ -1,3 +1,4 @@
+// !WITH_NEW_INFERENCE
 // FILE: b.kt
 
 
@@ -6,20 +7,20 @@ package foobar.a
 
     val a : <!PLATFORM_CLASS_MAPPED_TO_KOTLIN!>java.util.List<Int><!>? = null
     val a2 : <!UNRESOLVED_REFERENCE!>util<!>.<!DEBUG_INFO_MISSING_UNRESOLVED!>List<!><Int>? = null
-    val a3 : <!UNRESOLVED_REFERENCE!>ArrayList<!><Int>? = null
+    val a3 : <!UNRESOLVED_REFERENCE!>LinkedList<!><Int>? = null
 
 // FILE: b.kt
 package foobar
 
 abstract class Foo<T>() {
-    abstract val x : T<!WRONG_NUMBER_OF_TYPE_ARGUMENTS!><Int><!>
+    abstract val x : T<!TYPE_ARGUMENTS_NOT_ALLOWED!><Int><!>
 }
 
 // FILE: b.kt
 package foobar.a
     import java.util.*
 
-    val b : List<Int>? = <!TYPE_MISMATCH!>a<!>
+    val b : List<Int>? = <!NI;TYPE_MISMATCH, TYPE_MISMATCH!>a<!>
     val b1 : <!UNRESOLVED_REFERENCE!>util<!>.<!DEBUG_INFO_MISSING_UNRESOLVED!>List<!><Int>? = a
 
 // FILE: b.kt

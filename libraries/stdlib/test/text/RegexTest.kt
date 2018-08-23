@@ -1,18 +1,34 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
+@file:Suppress("NAMED_ARGUMENTS_NOT_ALLOWED") // for common tests
 package test.text
 
 import kotlin.text.*
 
 import kotlin.test.*
-import org.junit.Test as test
 
 class RegexTest {
 
-    @test fun matchResult() {
+    @Test fun properties() {
+        val pattern = "\\s+$"
+        val regex1 = Regex(pattern, RegexOption.IGNORE_CASE)
+        assertEquals(pattern, regex1.pattern)
+        assertEquals(setOf(RegexOption.IGNORE_CASE), regex1.options)
+
+        val options2 = setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
+        val regex2 = Regex(pattern, options2)
+        assertEquals(options2, regex2.options)
+    }
+
+    @Test fun matchResult() {
         val p = "\\d+".toRegex()
         val input = "123 456 789"
 
-        assertFalse(input.matches(p))
-        assertFalse(p.matches(input))
+        assertFalse(input matches p)
+        assertFalse(p matches input)
 
         assertTrue(p in input)
 
@@ -35,12 +51,12 @@ class RegexTest {
         assertEquals(null, noMatch)
     }
 
-    @test fun matchIgnoreCase() {
+    @Test fun matchIgnoreCase() {
         for (input in listOf("ascii", "shrödinger"))
             assertTrue(input.toUpperCase().matches(input.toLowerCase().toRegex(RegexOption.IGNORE_CASE)))
     }
 
-    @test fun matchSequence() {
+    @Test fun matchSequence() {
         val input = "123 456 789"
         val pattern = "\\d+".toRegex()
 
@@ -54,7 +70,7 @@ class RegexTest {
         assertEquals(listOf(0..2, 4..6, 8..10), matches.map { it.range }.toList())
     }
 
-    @test fun matchAllSequence() {
+    @Test fun matchAllSequence() {
         val input = "test"
         val pattern = ".*".toRegex()
         val matches = pattern.findAll(input).toList()
@@ -63,7 +79,7 @@ class RegexTest {
         assertEquals(2, matches.size)
     }
 
-    @test fun matchGroups() {
+    @Test fun matchGroups() {
         val input = "1a 2b 3c"
         val pattern = "(\\d)(\\w)".toRegex()
 
@@ -97,7 +113,7 @@ class RegexTest {
         }
     }
 
-    @test fun matchOptionalGroup() {
+    @Test fun matchOptionalGroup() {
         val pattern = "(hi)|(bye)".toRegex(RegexOption.IGNORE_CASE)
 
         pattern.find("Hi!")!!.let { m ->
@@ -127,14 +143,14 @@ class RegexTest {
         }
     }
 
-    @test fun matchMultiline() {
+    @Test fun matchMultiline() {
         val regex = "^[a-z]*$".toRegex(setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE))
         val matchedValues = regex.findAll("test\n\nLine").map { it.value }.toList()
         assertEquals(listOf("test", "", "Line"), matchedValues)
     }
 
 
-    @test fun matchEntire() {
+    @Test fun matchEntire() {
         val regex = "(\\d)(\\w)".toRegex()
 
         assertNull(regex.matchEntire("1a 2b"))
@@ -145,7 +161,7 @@ class RegexTest {
         }
     }
 
-    @test fun matchEntireLazyQuantor() {
+    @Test fun matchEntireLazyQuantor() {
         val regex = "a+b+?".toRegex()
         val input = StringBuilder("aaaabbbb")
 
@@ -153,13 +169,13 @@ class RegexTest {
         assertEquals("aaaabbbb", regex.matchEntire(input)!!.value)
     }
 
-    @test fun escapeLiteral() {
+    @Test fun escapeLiteral() {
         val literal = """[-\/\\^$*+?.()|[\]{}]"""
         assertTrue(Regex.fromLiteral(literal).matches(literal))
         assertTrue(Regex.escape(literal).toRegex().matches(literal))
     }
 
-    @test fun replace() {
+    @Test fun replace() {
         val input = "123-456"
         val pattern = "(\\d+)".toRegex()
         assertEquals("(123)-(456)", pattern.replace(input, "($1)"))
@@ -168,14 +184,14 @@ class RegexTest {
         assertEquals("X-456", pattern.replaceFirst(input, "X"))
     }
 
-    @test fun replaceEvaluator() {
+    @Test fun replaceEvaluator() {
         val input = "/12/456/7890/"
         val pattern = "\\d+".toRegex()
-        assertEquals("/2/3/4/", pattern.replace(input, { it.value.length.toString() } ))
+        assertEquals("/2/3/4/", pattern.replace(input, { it.value.length.toString() }))
     }
 
 
-    @test fun split() {
+    @Test fun split() {
         val input = """
          some  ${"\t"}  word
          split

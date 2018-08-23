@@ -31,13 +31,23 @@ import org.jetbrains.kotlin.idea.core.completion.DeclarationLookupObject
 import org.jetbrains.kotlin.idea.core.completion.PackageLookupObject
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.idea.util.CallType
-import org.jetbrains.kotlin.idea.util.FuzzyType
+import org.jetbrains.kotlin.idea.util.CallTypeAndReceiver
+import org.jetbrains.kotlin.idea.util.toFuzzyType
+import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.descriptorUtil.parentsWithSelf
 import org.jetbrains.kotlin.resolve.findOriginalTopMostOverriddenDescriptors
+import org.jetbrains.kotlin.types.typeUtil.isNothing
 
 object PriorityWeigher : LookupElementWeigher("kotlin.priority") {
     override fun weigh(element: LookupElement, context: WeighingContext)
             = element.getUserData(ITEM_PRIORITY_KEY) ?: ItemPriority.DEFAULT
+}
+
+object PreferDslMembers : LookupElementWeigher("kotlin.preferDsl") {
+    override fun weigh(element: LookupElement, context: WeighingContext): Boolean {
+        if (element.isDslMember == true) return false // high priority
+        return true // lower priority
+    }
 }
 
 class NotImportedWeigher(private val classifier: ImportableFqNameClassifier) : LookupElementWeigher("kotlin.notImported") {
@@ -72,8 +82,8 @@ class NotImportedStaticMemberWeigher(private val classifier: ImportableFqNameCla
 class ImportedWeigher(private val classifier: ImportableFqNameClassifier) : LookupElementWeigher("kotlin.imported") {
     private enum class Weight {
         currentPackage,
-        defaultImport,
         preciseImport,
+        defaultImport,
         allUnderImport
     }
 
@@ -135,7 +145,55 @@ object KindWeigher : LookupElementWeigher("kotlin.kind") {
 }
 
 object CallableWeigher : LookupElementWeigher("kotlin.callableWeight") {
-    override fun weigh(element: LookupElement) = element.getUserData(CALLABLE_WEIGHT_KEY)
+    private enum class Weight1 {
+        local,
+        memberOrExtension,
+        globalOrStatic,
+        typeParameterExtension,
+        receiverCastRequired
+    }
+
+    private enum class Weight2 {
+        thisClassMember,
+        baseClassMember,
+        thisTypeExtension,
+        baseTypeExtension,
+        other
+    }
+
+    private data class CompoundWeight(val weight1: Weight1, val receiverIndex: Int, val weight2: Weight2) : Comparable<CompoundWeight> {
+        override fun compareTo(other: CompoundWeight): Int {
+            if (weight1 != other.weight1) return weight1.compareTo(other.weight1)
+            if (receiverIndex != other.receiverIndex) return receiverIndex.compareTo(other.receiverIndex)
+            return weight2.compareTo(other.weight2)
+        }
+    }
+
+    override fun weigh(element: LookupElement): Comparable<*>? {
+        val weight = element.getUserData(CALLABLE_WEIGHT_KEY) ?: return null
+        val w1 = when (weight.enum) {
+            CallableWeightEnum.local -> Weight1.local
+
+            CallableWeightEnum.thisClassMember,
+            CallableWeightEnum.baseClassMember,
+            CallableWeightEnum.thisTypeExtension,
+            CallableWeightEnum.baseTypeExtension -> Weight1.memberOrExtension
+
+            CallableWeightEnum.globalOrStatic -> Weight1.globalOrStatic
+
+            CallableWeightEnum.typeParameterExtension -> Weight1.typeParameterExtension
+
+            CallableWeightEnum.receiverCastRequired -> Weight1.receiverCastRequired
+        }
+        val w2 = when (weight.enum) {
+            CallableWeightEnum.thisClassMember -> Weight2.thisClassMember
+            CallableWeightEnum.baseClassMember -> Weight2.baseClassMember
+            CallableWeightEnum.thisTypeExtension -> Weight2.thisTypeExtension
+            CallableWeightEnum.baseTypeExtension -> Weight2.baseTypeExtension
+            else -> Weight2.other
+        }
+        return CompoundWeight(w1, weight.receiverIndex ?: Int.MAX_VALUE, w2)
+    }
 }
 
 object VariableOrFunctionWeigher : LookupElementWeigher("kotlin.variableOrFunction"){
@@ -154,6 +212,19 @@ object VariableOrFunctionWeigher : LookupElementWeigher("kotlin.variableOrFuncti
     }
 }
 
+/**
+ * Decreases priority of properties when prefix starts with "get" or "set" (and the property name does not)
+ */
+object PreferGetSetMethodsToPropertyWeigher : LookupElementWeigher("kotlin.preferGetSetMethodsToProperty", false, true){
+    override fun weigh(element: LookupElement, context: WeighingContext): Int {
+        val property = (element.`object` as? DeclarationLookupObject)?.descriptor as? PropertyDescriptor ?: return 0
+        val prefixMatcher = context.itemMatcher(element)
+        if (prefixMatcher.prefixMatches(property.name.asString())) return 0
+        val matchedLookupStrings = element.allLookupStrings.filter { prefixMatcher.prefixMatches(it) }
+        return if (matchedLookupStrings.all { it.startsWith("get") || it.startsWith("set") }) 1 else 0
+    }
+}
+
 object DeprecatedWeigher : LookupElementWeigher("kotlin.deprecated") {
     override fun weigh(element: LookupElement): Int {
         val o = element.`object` as? DeclarationLookupObject ?: return 0
@@ -166,6 +237,8 @@ object PreferMatchingItemWeigher : LookupElementWeigher("kotlin.preferMatching",
         keywordExactMatch,
         defaultExactMatch,
         functionExactMatch,
+        notImportedExactMatch,
+        specialExactMatch,
         notExactMatch
     }
 
@@ -178,7 +251,17 @@ object PreferMatchingItemWeigher : LookupElementWeigher("kotlin.preferMatching",
             val o = element.`object`
             return when (o) {
                 is KeywordLookupObject -> Weight.keywordExactMatch
-                is DeclarationLookupObject -> if (o.descriptor is FunctionDescriptor) Weight.functionExactMatch else Weight.defaultExactMatch
+
+                is DeclarationLookupObject -> {
+                    val smartCompletionPriority = element.getUserData(SMART_COMPLETION_ITEM_PRIORITY_KEY)
+                    when {
+                        smartCompletionPriority != null && smartCompletionPriority != SmartCompletionItemPriority.DEFAULT -> Weight.specialExactMatch
+                        element.getUserData(NOT_IMPORTED_KEY) != null -> Weight.notImportedExactMatch
+                        o.descriptor is FunctionDescriptor -> Weight.functionExactMatch
+                        else -> Weight.defaultExactMatch
+                    }
+                }
+
                 else -> Weight.defaultExactMatch
             }
         }
@@ -187,34 +270,38 @@ object PreferMatchingItemWeigher : LookupElementWeigher("kotlin.preferMatching",
 
 class SmartCompletionInBasicWeigher(
         private val smartCompletion: SmartCompletion,
-        private val callType: CallType<*>,
-        private val resolutionFacade: ResolutionFacade
+        private val callTypeAndReceiver: CallTypeAndReceiver<*, *>,
+        private val resolutionFacade: ResolutionFacade,
+        private val bindingContext: BindingContext
 ) : LookupElementWeigher("kotlin.smartInBasic", true, false) {
 
     companion object {
         val KEYWORD_VALUE_MATCHED_KEY = Key<Unit>("SmartCompletionInBasicWeigher.KEYWORD_VALUE_MATCHED_KEY")
+        val NAMED_ARGUMENT_KEY = Key<Unit>("SmartCompletionInBasicWeigher.NAMED_ARGUMENT_KEY")
     }
 
     private val descriptorsToSkip = smartCompletion.descriptorsToSkip
     private val expectedInfos = smartCompletion.expectedInfos
 
-    private fun fullMatchWeight(nameSimilarity: Int) = (3L shl 32) + nameSimilarity
+    private val PRIORITY_COUNT = SmartCompletionItemPriority.values().size
 
-    private fun ifNotNullMatchWeight(nameSimilarity: Int) = (2L shl 32) + nameSimilarity
+    private fun itemWeight(priority: SmartCompletionItemPriority, nameSimilarity: Int)
+            = (nameSimilarity.toLong() shl 32) + PRIORITY_COUNT - priority.ordinal
 
-    private fun smartCompletionItemWeight(nameSimilarity: Int) = (1L shl 32) + nameSimilarity
+    private val NAMED_ARGUMENT_WEIGHT = 1L
 
     private val NO_MATCH_WEIGHT = 0L
 
     private val DESCRIPTOR_TO_SKIP_WEIGHT = -1L // if descriptor is skipped from smart completion then it's probably irrelevant
 
     override fun weigh(element: LookupElement): Long {
-        if (element.getUserData(KEYWORD_VALUE_MATCHED_KEY) != null) {
-            return fullMatchWeight(0)
+        if (element.getUserData(NAMED_ARGUMENT_KEY) != null) {
+            return NAMED_ARGUMENT_WEIGHT
         }
 
-        if (element.getUserData(SMART_COMPLETION_ITEM_PRIORITY_KEY) != null) { // it's an "additional item" came from smart completion, don't match it against expected type
-            return smartCompletionItemWeight(element.getUserData(NAME_SIMILARITY_KEY) ?: 0)
+        val priority = element.getUserData(SMART_COMPLETION_ITEM_PRIORITY_KEY)
+        if (priority != null) { // it's an "additional item" came from smart completion, don't match it against expected type
+            return itemWeight(priority, element.getUserData(NAME_SIMILARITY_KEY) ?: 0)
         }
 
         val o = element.`object`
@@ -228,10 +315,10 @@ class SmartCompletionInBasicWeigher(
         val (fuzzyTypes, name) = when (o) {
             is DeclarationLookupObject -> {
                 val descriptor = o.descriptor ?: return NO_MATCH_WEIGHT
-                descriptor.fuzzyTypesForSmartCompletion(smartCastCalculator, callType, resolutionFacade) to descriptor.name
+                descriptor.fuzzyTypesForSmartCompletion(smartCastCalculator, callTypeAndReceiver, resolutionFacade, bindingContext) to descriptor.name
             }
 
-            is ThisItemLookupObject -> smartCastCalculator.types(o.receiverParameter).map { FuzzyType(it, emptyList()) } to null
+            is ThisItemLookupObject -> smartCastCalculator.types(o.receiverParameter).map { it.toFuzzyType(emptyList()) } to null
 
             else -> return NO_MATCH_WEIGHT
         }
@@ -250,13 +337,13 @@ class SmartCompletionInBasicWeigher(
         }
 
         return if (matched.any { it.second.isMatch() })
-            fullMatchWeight(nameSimilarity)
+            itemWeight(SmartCompletionItemPriority.DEFAULT, nameSimilarity)
         else
-            ifNotNullMatchWeight(nameSimilarity)
+            itemWeight(SmartCompletionItemPriority.NULLABLE, nameSimilarity)
     }
 }
 
-class PreferContextElementsWeigher(private val context: DeclarationDescriptor) : LookupElementWeigher("kotlin.preferContextElements", true, false) {
+class PreferContextElementsWeigher(context: DeclarationDescriptor) : LookupElementWeigher("kotlin.preferContextElements", true, false) {
     private val contextElements = context.parentsWithSelf
             .takeWhile { it !is PackageFragmentDescriptor }
             .toList()
@@ -296,5 +383,15 @@ object PreferLessParametersWeigher : LookupElementWeigher("kotlin.preferLessPara
         val lookupObject = element.`object` as? DeclarationLookupObject ?: return null
         val function = lookupObject.descriptor as? FunctionDescriptor ?: return null
         return function.valueParameters.size
+    }
+}
+
+class CallableReferenceWeigher(private val callType: CallType<*>) : LookupElementWeigher("kotlin.callableReference") {
+    override fun weigh(element: LookupElement): Int? {
+        if (callType == CallType.CALLABLE_REFERENCE || element.getUserData(SMART_COMPLETION_ITEM_PRIORITY_KEY) == SmartCompletionItemPriority.CALLABLE_REFERENCE) {
+            val descriptor = (element.`object` as? DeclarationLookupObject)?.descriptor as? CallableDescriptor
+            return if (descriptor?.returnType?.isNothing() == true) 1 else 0
+        }
+        return null
     }
 }

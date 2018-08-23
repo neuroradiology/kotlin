@@ -1,5 +1,5 @@
-// ERROR: Abstract member cannot be accessed directly
-// ERROR: Abstract member cannot be accessed directly
+// ERROR: Property must be initialized
+// ERROR: Property must be initialized
 internal interface I {
     val something1: Int
 
@@ -15,9 +15,9 @@ internal interface I {
 }
 
 internal interface I1 : I {
-    fun setSomething1(value: Int)
 
     val something6: Int
+    fun setSomething1(value: Int)
 }
 
 internal open class B {
@@ -26,21 +26,17 @@ internal open class B {
 
     open var fromB2: String
         get() = ""
-        set(value) {
-        }
+        set(value) {}
 
     open var fromB3: String
         get() = ""
-        set(value) {
-        }
+        set(value) {}
 
     open var fromB4: String
         get() = ""
-        set(value) {
-        }
+        set(value) {}
 
-    open fun setFromB5(value: String) {
-    }
+    open fun setFromB5(value: String) {}
 }
 
 internal abstract class C(override val something1: Int) : B(), I {
@@ -51,28 +47,17 @@ internal abstract class C(override val something1: Int) : B(), I {
 
     override var something3: Int
         get() = 0
-        set(value) {
-        }
+        set(value) {}
 
     override var something4: Int
         get() = 0
-        set(value: Int) {
-            super.something4 = value
-        }
+        set
 
     override var something5: Int
-        get() = super.something5
+        get
         set(value) {
 
         }
-
-    fun getSomething6(): Int {
-        return mySomething6
-    }
-
-    override fun setSomething6(value: Int) {
-        mySomething6 = value
-    }
 
     override val fromB1: String
         get() = super.fromB1
@@ -97,6 +82,14 @@ internal abstract class C(override val something1: Int) : B(), I {
 
     val fromB5: String
         get() = ""
+
+    fun getSomething6(): Int {
+        return mySomething6
+    }
+
+    override fun setSomething6(value: Int) {
+        mySomething6 = value
+    }
 
     override fun setFromB5(value: String) {
         super.setFromB5(value)

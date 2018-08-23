@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,14 +21,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiElementFactory
-import com.intellij.psi.PsiMethod
-import com.intellij.psi.PsiType
+import com.intellij.psi.*
 import com.intellij.refactoring.BaseRefactoringProcessor
 import com.intellij.refactoring.changeSignature.*
 import com.intellij.refactoring.util.CanonicalTypes
-import com.intellij.testFramework.LightVirtualFile
 import com.intellij.util.VisibilityUtil
 import org.jetbrains.annotations.TestOnly
 import org.jetbrains.kotlin.asJava.getRepresentativeLightMethod
@@ -36,16 +32,15 @@ import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
-import org.jetbrains.kotlin.idea.KotlinFileType
 import org.jetbrains.kotlin.idea.codeInsight.DescriptorToSourceUtilsIde
-import org.jetbrains.kotlin.idea.refactoring.createJavaMethod
-import org.jetbrains.kotlin.idea.refactoring.toPsiFile
+import org.jetbrains.kotlin.idea.core.getDeepestSuperDeclarations
 import org.jetbrains.kotlin.idea.refactoring.CallableRefactoring
+import org.jetbrains.kotlin.idea.refactoring.broadcastRefactoringExit
 import org.jetbrains.kotlin.idea.refactoring.changeSignature.ui.KotlinChangePropertySignatureDialog
 import org.jetbrains.kotlin.idea.refactoring.changeSignature.ui.KotlinChangeSignatureDialog
+import org.jetbrains.kotlin.idea.refactoring.createJavaMethod
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getElementTextWithContext
-import org.jetbrains.kotlin.resolve.OverrideResolver
 
 interface KotlinChangeSignatureConfiguration {
     fun configure(originalDescriptor: KotlinMethodDescriptor): KotlinMethodDescriptor = originalDescriptor
@@ -66,16 +61,20 @@ fun runChangeSignature(project: Project,
                               configuration: KotlinChangeSignatureConfiguration,
                               defaultValueContext: PsiElement,
                               commandName: String? = null): Boolean {
-    return KotlinChangeSignature(project, callableDescriptor, configuration, defaultValueContext, commandName).run()
+    val result = KotlinChangeSignature(project, callableDescriptor, configuration, defaultValueContext, commandName).run()
+    if (!result) {
+        broadcastRefactoringExit(project, "refactoring.changeSignature")
+    }
+    return result
 }
 
-class KotlinChangeSignature(project: Project,
-                                   callableDescriptor: CallableDescriptor,
-                                   val configuration: KotlinChangeSignatureConfiguration,
-                                   val defaultValueContext: PsiElement,
-                                   commandName: String?): CallableRefactoring<CallableDescriptor>(project,
-                                                                                               callableDescriptor,
-                                                                                               commandName ?: ChangeSignatureHandler.REFACTORING_NAME) {
+class KotlinChangeSignature(
+        project: Project,
+        callableDescriptor: CallableDescriptor,
+        val configuration: KotlinChangeSignatureConfiguration,
+        val defaultValueContext: PsiElement,
+        commandName: String?
+): CallableRefactoring<CallableDescriptor>(project, callableDescriptor, commandName ?: ChangeSignatureHandler.REFACTORING_NAME) {
 
     private val LOG = Logger.getInstance(KotlinChangeSignature::class.java)
 
@@ -121,11 +120,28 @@ class KotlinChangeSignature(project: Project,
                 }
 
                 val (preview, javaChangeInfo) = getPreviewInfoForJavaMethod(descriptor)
-                object: JavaChangeSignatureDialog(project, JavaMethodDescriptor(preview), false, null) {
+                val javaDescriptor = object : JavaMethodDescriptor(preview) {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun getParameters() = javaChangeInfo.newParameters.toMutableList() as MutableList<ParameterInfoImpl>
+                }
+                object: JavaChangeSignatureDialog(project, javaDescriptor, false, null) {
                     override fun createRefactoringProcessor(): BaseRefactoringProcessor? {
-                        val processor = super.createRefactoringProcessor()
-                        (processor as? ChangeSignatureProcessor)?.changeInfo?.updateMethod(javaChangeInfo.method)
-                        return processor
+                        val parameters = parameters
+                        LOG.assertTrue(myMethod.method.isValid)
+                        val newJavaChangeInfo = JavaChangeInfoImpl(
+                                visibility ?: VisibilityUtil.getVisibilityModifier(myMethod.method.modifierList),
+                                javaChangeInfo.method,
+                                methodName,
+                                returnType ?: CanonicalTypes.createTypeWrapper(PsiType.VOID),
+                                parameters.toTypedArray(),
+                                exceptions,
+                                isGenerateDelegate,
+                                myMethodsToPropagateParameters ?: HashSet(),
+                                myMethodsToPropagateExceptions ?: HashSet()
+                        ).also {
+                            it.setCheckUnusedParameter()
+                        }
+                        return ChangeSignatureProcessor(myProject, newJavaChangeInfo)
                     }
                 }
             }
@@ -142,17 +158,17 @@ class KotlinChangeSignature(project: Project,
         // Generate new Java method signature from the Kotlin point of view
         val ktChangeInfo = KotlinChangeInfo(methodDescriptor = descriptor, context = defaultValueContext)
         val ktSignature = ktChangeInfo.getNewSignature(descriptor.originalPrimaryCallable)
+        val previewClassName = if (originalMethod.isConstructor) originalMethod.name else "Dummy"
         val dummyFileText = with(StringBuilder()) {
             contextFile.packageDirective?.let { append(it.text).append("\n") }
-            append("class Dummy {\n").append(ktSignature).append("{}\n}")
+            append("class $previewClassName {\n").append(ktSignature).append("{}\n}")
             toString()
         }
-        val dummyFile = LightVirtualFile("dummy.kt", KotlinFileType.INSTANCE, dummyFileText).toPsiFile(project) as KtFile
-        dummyFile.analysisContext = originalMethod
+        val dummyFile = KtPsiFactory(project).createFileWithLightClassSupport("dummy.kt", dummyFileText, originalMethod)
         val dummyDeclaration = (dummyFile.declarations.first() as KtClass).getBody()!!.declarations.first()
 
         // Convert to PsiMethod which can be used in Change Signature dialog
-        val containingClass = PsiElementFactory.SERVICE.getInstance(project).createClass("Dummy")
+        val containingClass = PsiElementFactory.SERVICE.getInstance(project).createClass(previewClassName)
         val preview = createJavaMethod(dummyDeclaration.getRepresentativeLightMethod()!!, containingClass)
 
         // Create JavaChangeInfo based on new signature
@@ -225,9 +241,8 @@ class KotlinChangeSignature(project: Project,
         defaultValueContext: PsiElement
 ): KotlinChangeInfo? {
     val jetChangeSignature = KotlinChangeSignature(project, callableDescriptor, configuration, defaultValueContext, null)
-    val declarations = if (callableDescriptor is CallableMemberDescriptor) {
-        OverrideResolver.getDeepestSuperDeclarations(callableDescriptor)
-    } else listOf(callableDescriptor)
+    val declarations =
+            (callableDescriptor as? CallableMemberDescriptor)?.getDeepestSuperDeclarations() ?: listOf(callableDescriptor)
 
     val adjustedDescriptor = jetChangeSignature.adjustDescriptor(declarations) ?: return null
 
@@ -237,5 +252,5 @@ class KotlinChangeSignature(project: Project,
             adjustedDescriptor,
             defaultValueContext
     ) as KotlinChangeSignatureProcessor
-    return processor.changeInfo
+    return processor.ktChangeInfo
 }

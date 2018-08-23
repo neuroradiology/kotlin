@@ -19,7 +19,6 @@ package org.jetbrains.kotlin.idea.quickfix
 import com.intellij.codeInsight.CodeInsightUtilCore
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiFile
 import org.jetbrains.kotlin.diagnostics.Diagnostic
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiUtil
@@ -32,11 +31,13 @@ class MoveWhenElseBranchFix(element: KtWhenExpression) : KotlinQuickFixAction<Kt
 
     override fun getText() = familyName
 
-    override fun isAvailable(project: Project, editor: Editor?, file: PsiFile): Boolean {
-        return super.isAvailable(project, editor, file) && KtPsiUtil.checkWhenExpressionHasSingleElse(element)
+    override fun isAvailable(project: Project, editor: Editor?, file: KtFile): Boolean {
+        val element = element ?: return false
+        return KtPsiUtil.checkWhenExpressionHasSingleElse(element)
     }
 
     override fun invoke(project: Project, editor: Editor?, file: KtFile) {
+        val element = element ?: return
         val entries = element.entries
         val lastEntry = entries.lastOrNull() ?: return
         val elseEntry = entries.singleOrNull { it.isElse } ?: return

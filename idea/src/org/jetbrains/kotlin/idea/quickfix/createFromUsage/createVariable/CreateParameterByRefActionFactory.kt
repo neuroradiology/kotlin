@@ -22,7 +22,7 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptorWithResolutionScopes
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.diagnostics.Diagnostic
-import org.jetbrains.kotlin.idea.caches.resolve.analyzeFullyAndGetResult
+import org.jetbrains.kotlin.idea.caches.resolve.analyzeWithAllCompilerChecks
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
 import org.jetbrains.kotlin.idea.core.quickfix.QuickFixUtil
 import org.jetbrains.kotlin.idea.quickfix.createFromUsage.callableBuilder.getExpressionForTypeGuess
@@ -51,9 +51,7 @@ object CreateParameterByRefActionFactory : CreateParameterFromUsageFactory<KtSim
     }
 
     fun extractFixData(element: KtSimpleNameExpression): CreateParameterData<KtSimpleNameExpression>? {
-        val result = (element.containingFile as? KtFile)?.analyzeFullyAndGetResult() ?: return null
-        val context = result.bindingContext
-        val moduleDescriptor = result.moduleDescriptor
+        val (context, moduleDescriptor) = (element.containingFile as? KtFile)?.analyzeWithAllCompilerChecks() ?: return null
 
         val varExpected = element.getAssignmentByLHS() != null
 
@@ -89,7 +87,7 @@ object CreateParameterByRefActionFactory : CreateParameterFromUsageFactory<KtSim
                         when {
                             (it is KtNamedFunction || it is KtSecondaryConstructor) && varExpected ||
                             it is KtPropertyAccessor -> chooseContainingClass(it)
-                            it is KtAnonymousInitializer -> it.parent?.parent as? KtClass
+                            it is KtAnonymousInitializer -> it.parent.parent as? KtClass
                             it is KtSuperTypeListEntry -> {
                                 val klass = it.getStrictParentOfType<KtClassOrObject>()
                                 if (klass is KtClass && !klass.isInterface() && klass !is KtEnumEntry) klass else null
@@ -116,7 +114,6 @@ object CreateParameterByRefActionFactory : CreateParameterFromUsageFactory<KtSim
         if (paramType.hasTypeParametersToAdd(functionDescriptor, context)) return null
 
         return CreateParameterData(
-                context,
                 KotlinParameterInfo(callableDescriptor = functionDescriptor,
                                     name = element.getReferencedName(),
                                     originalTypeInfo = KotlinTypeInfo(false, paramType),
@@ -139,12 +136,10 @@ fun KotlinType.hasTypeParametersToAdd(functionDescriptor: FunctionDescriptor, co
                     (functionDescriptor.containingDeclaration as? ClassDescriptorWithResolutionScopes)?.scopeForClassHeaderResolution
                 }
 
-                is FunctionDescriptor -> {
+                else -> {
                     val function = functionDescriptor.source.getPsi() as? KtFunction
                     function?.bodyExpression?.getResolutionScope(context, function.getResolutionFacade())
                 }
-
-                else -> null
             } ?: return true
 
     return typeParametersToAdd.any { scope.findClassifier(it.name, NoLookupLocation.FROM_IDE) != it }

@@ -31,11 +31,12 @@ public object Obj {
         protected final override /*1*/ /*fake_override*/ fun clone(): kotlin.Any
         public final override /*1*/ /*fake_override*/ fun compareTo(/*0*/ other: Obj.NestedEnum): kotlin.Int
         public final override /*1*/ /*fake_override*/ fun equals(/*0*/ other: kotlin.Any?): kotlin.Boolean
+        protected/*protected and package*/ final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun finalize(): kotlin.Unit
+        public final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun getDeclaringClass(): java.lang.Class<Obj.NestedEnum!>!
         public final override /*1*/ /*fake_override*/ fun hashCode(): kotlin.Int
         public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
 
         // Static members
-        @kotlin.Deprecated(level = DeprecationLevel.ERROR, message = "Use 'values()' function instead", replaceWith = kotlin.ReplaceWith(expression = "this.values()", imports = {})) public final /*synthesized*/ val values: kotlin.Array<Obj.NestedEnum>
         public final /*synthesized*/ fun valueOf(/*0*/ value: kotlin.String): Obj.NestedEnum
         public final /*synthesized*/ fun values(): kotlin.Array<Obj.NestedEnum>
     }
@@ -94,11 +95,12 @@ public final class WithClassObject {
         protected final override /*1*/ /*fake_override*/ fun clone(): kotlin.Any
         public final override /*1*/ /*fake_override*/ fun compareTo(/*0*/ other: WithClassObject.NestedEnum): kotlin.Int
         public final override /*1*/ /*fake_override*/ fun equals(/*0*/ other: kotlin.Any?): kotlin.Boolean
+        protected/*protected and package*/ final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun finalize(): kotlin.Unit
+        public final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun getDeclaringClass(): java.lang.Class<WithClassObject.NestedEnum!>!
         public final override /*1*/ /*fake_override*/ fun hashCode(): kotlin.Int
         public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
 
         // Static members
-        @kotlin.Deprecated(level = DeprecationLevel.ERROR, message = "Use 'values()' function instead", replaceWith = kotlin.ReplaceWith(expression = "this.values()", imports = {})) public final /*synthesized*/ val values: kotlin.Array<WithClassObject.NestedEnum>
         public final /*synthesized*/ fun valueOf(/*0*/ value: kotlin.String): WithClassObject.NestedEnum
         public final /*synthesized*/ fun values(): kotlin.Array<WithClassObject.NestedEnum>
     }
@@ -150,11 +152,12 @@ public final class WithoutClassObject {
         protected final override /*1*/ /*fake_override*/ fun clone(): kotlin.Any
         public final override /*1*/ /*fake_override*/ fun compareTo(/*0*/ other: WithoutClassObject.NestedEnum): kotlin.Int
         public final override /*1*/ /*fake_override*/ fun equals(/*0*/ other: kotlin.Any?): kotlin.Boolean
+        protected/*protected and package*/ final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun finalize(): kotlin.Unit
+        public final override /*1*/ /*fake_override*/ /*isHiddenForResolutionEverywhereBesideSupercalls*/ fun getDeclaringClass(): java.lang.Class<WithoutClassObject.NestedEnum!>!
         public final override /*1*/ /*fake_override*/ fun hashCode(): kotlin.Int
         public open override /*1*/ /*fake_override*/ fun toString(): kotlin.String
 
         // Static members
-        @kotlin.Deprecated(level = DeprecationLevel.ERROR, message = "Use 'values()' function instead", replaceWith = kotlin.ReplaceWith(expression = "this.values()", imports = {})) public final /*synthesized*/ val values: kotlin.Array<WithoutClassObject.NestedEnum>
         public final /*synthesized*/ fun valueOf(/*0*/ value: kotlin.String): WithoutClassObject.NestedEnum
         public final /*synthesized*/ fun values(): kotlin.Array<WithoutClassObject.NestedEnum>
     }

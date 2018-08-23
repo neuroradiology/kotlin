@@ -1,6 +1,5 @@
+// IGNORE_BACKEND: JS_IR
 package d
-
-import java.util.ArrayList
 
 fun box(): String {
     ListTag().test(listOf("a", "b"))

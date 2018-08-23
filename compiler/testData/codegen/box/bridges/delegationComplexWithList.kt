@@ -1,4 +1,5 @@
-import java.util.*
+// IGNORE_BACKEND: JS_IR
+// WITH_RUNTIME
 
 open class Content() {
     override fun toString() = "OK"

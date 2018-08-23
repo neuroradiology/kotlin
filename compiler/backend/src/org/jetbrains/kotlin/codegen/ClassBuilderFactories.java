@@ -55,9 +55,12 @@ public class ClassBuilderFactories {
             throw new IllegalStateException();
         }
     };
+    
+    public static ClassBuilderFactory TEST = new TestClassBuilderFactory();
 
-    @NotNull
-    public static ClassBuilderFactory TEST = new ClassBuilderFactory() {
+    public static class TestClassBuilderFactory implements ClassBuilderFactory {
+        public TestClassBuilderFactory() {}
+
         @NotNull
         @Override
         public ClassBuilderMode getClassBuilderMode() {
@@ -89,8 +92,8 @@ public class ClassBuilderFactories {
         public void close() {
 
         }
-    };
-
+    }
+    
     @NotNull
     public static ClassBuilderFactory BINARIES = new ClassBuilderFactory() {
         @NotNull
@@ -117,9 +120,7 @@ public class ClassBuilderFactories {
         }
 
         @Override
-        public void close() {
-
-        }
+        public void close() {}
     };
 
     private ClassBuilderFactories() {

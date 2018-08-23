@@ -17,54 +17,86 @@
 package org.jetbrains.kotlin.idea.intentions
 
 import com.intellij.openapi.editor.Editor
+import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiWhiteSpace
+import org.jetbrains.kotlin.idea.refactoring.getLineNumber
+import org.jetbrains.kotlin.idea.util.CommentSaver
+import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.psi.psiUtil.startOffset
+import org.jetbrains.kotlin.psi.psiUtil.*
+import java.lang.IllegalArgumentException
 
-class AddBracesIntention : SelfTargetingIntention<KtExpression>(KtExpression::class.java, "Add braces") {
-    override fun isApplicableTo(element: KtExpression, caretOffset: Int): Boolean {
+class AddBracesIntention : SelfTargetingIntention<KtElement>(KtElement::class.java, "Add braces") {
+    override fun isApplicableTo(element: KtElement, caretOffset: Int): Boolean {
         val expression = element.getTargetExpression(caretOffset) ?: return false
         if (expression is KtBlockExpression) return false
 
-        val description = (expression.parent as KtContainerNode).description()!!
-        text = "Add braces to '$description' statement"
-        return true
+        val parent = expression.parent
+        return when (parent) {
+            is KtContainerNode -> {
+                val description = parent.description()!!
+                text = "Add braces to '$description' statement"
+                true
+            }
+            is KtWhenEntry -> {
+                text = "Add braces to 'when' entry"
+                true
+            }
+            else -> {
+                false
+            }
+        }
     }
 
-    override fun applyTo(element: KtExpression, editor: Editor?) {
+    override fun applyTo(element: KtElement, editor: Editor?) {
         if (editor == null) throw IllegalArgumentException("This intention requires an editor")
         val expression = element.getTargetExpression(editor.caretModel.offset)!!
 
-        if (element.nextSibling?.text == ";") {
-            element.nextSibling!!.delete()
+        val psiFactory = KtPsiFactory(element)
+
+        val semicolon = element.getNextSiblingIgnoringWhitespaceAndComments()?.takeIf { it.node.elementType == KtTokens.SEMICOLON }
+        if (semicolon != null) {
+            val afterSemicolon = semicolon.getNextSiblingIgnoringWhitespace()
+            if (semicolon.getLineNumber() == afterSemicolon?.getLineNumber())
+                semicolon.replace(psiFactory.createNewLine())
+            else
+                semicolon.delete()
         }
 
-        val psiFactory = KtPsiFactory(element)
-        expression.replace(psiFactory.createSingleStatementBlock(expression))
+        val nextComment = when {
+            element is KtDoWhileExpression -> null // bound to the closing while
+            element is KtIfExpression && expression === element.then && element.`else` != null -> null // bound to else
+            else -> element.getNextSiblingIgnoringWhitespace().takeIf { it is PsiComment }
+        }
+        val saver = if (nextComment == null) CommentSaver(element) else CommentSaver(PsiChildRange(element, nextComment))
+        element.allChildren.filterIsInstance<PsiComment>().toList().forEach {
+            it.delete()
+        }
+        nextComment?.delete()
+
+        val result = expression.replace(psiFactory.createSingleStatementBlock(expression))
 
         if (element is KtDoWhileExpression) { // remove new line between '}' and while
             (element.body!!.parent.nextSibling as? PsiWhiteSpace)?.delete()
         }
+        saver.restore(result)
     }
 
-    private fun KtExpression.getTargetExpression(caretLocation: Int): KtExpression? {
-        when (this) {
+    private fun KtElement.getTargetExpression(caretLocation: Int): KtExpression? {
+        return when (this) {
             is KtIfExpression -> {
                 val thenExpr = then ?: return null
                 val elseExpr = `else`
                 if (elseExpr != null && caretLocation >= elseKeyword!!.startOffset) {
-                    return elseExpr
+                    elseExpr
+                } else {
+                    thenExpr
                 }
-                return thenExpr
             }
 
-            is KtWhileExpression -> return body
-
-            is KtDoWhileExpression -> return body
-
-            is KtForExpression -> return body
-
-            else -> return null
+            is KtLoopExpression -> body
+            is KtWhenEntry -> expression
+            else -> null
         }
     }
 }

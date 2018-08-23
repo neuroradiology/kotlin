@@ -19,16 +19,14 @@ package org.jetbrains.kotlin.idea.intentions
 import com.intellij.codeInsight.intention.LowPriorityAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
 import org.jetbrains.kotlin.idea.conversion.copy.end
 import org.jetbrains.kotlin.idea.conversion.copy.start
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatch
 import org.jetbrains.kotlin.resolve.calls.model.ArgumentMatchStatus
 import org.jetbrains.kotlin.resolve.calls.model.VarargValueArgument
-import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 
 class AddNameToArgumentIntention
   : SelfTargetingIntention<KtValueArgument>(KtValueArgument::class.java, "Add name to argument"), LowPriorityAction {
@@ -48,7 +46,7 @@ class AddNameToArgumentIntention
     }
 
     override fun allowCaretInsideElement(element: PsiElement)
-            = element !is KtValueArgumentList && element !is KtContainerNode
+            = element !is KtValueArgumentList && element !is KtContainerNode && super.allowCaretInsideElement(element)
 
     override fun applyTo(element: KtValueArgument, editor: Editor?) {
         val name = detectNameToAdd(element)!!
@@ -64,7 +62,7 @@ class AddNameToArgumentIntention
         if (argument != argumentList.arguments.last { !it.isNamed() }) return null
 
         val callExpr = argumentList.parent as? KtCallElement ?: return null
-        val resolvedCall = callExpr.getResolvedCall(callExpr.analyze(BodyResolveMode.PARTIAL)) ?: return null
+        val resolvedCall = callExpr.resolveToCall() ?: return null
         val argumentMatch = resolvedCall.getArgumentMapping(argument) as? ArgumentMatch ?: return null
         if (argumentMatch.status != ArgumentMatchStatus.SUCCESS) return null
 

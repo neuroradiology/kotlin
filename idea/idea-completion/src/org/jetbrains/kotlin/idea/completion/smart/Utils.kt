@@ -22,8 +22,8 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementDecorator
 import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.intellij.openapi.util.Key
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.builtins.ReflectionTypes
+import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor
 import org.jetbrains.kotlin.idea.completion.handlers.WithExpressionPrefixInsertHandler
@@ -33,16 +33,22 @@ import org.jetbrains.kotlin.idea.completion.suppressAutoInsertion
 import org.jetbrains.kotlin.idea.core.*
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.idea.util.*
-import org.jetbrains.kotlin.resolve.callableReferences.getReflectionTypeForCandidateDescriptor
+import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.types.TypeSubstitutor
+import org.jetbrains.kotlin.types.expressions.DoubleColonExpressionResolver
+import org.jetbrains.kotlin.types.expressions.DoubleColonLHS
+import org.jetbrains.kotlin.types.isDynamic
 import org.jetbrains.kotlin.types.typeUtil.TypeNullability
 import org.jetbrains.kotlin.types.typeUtil.isNothing
+import org.jetbrains.kotlin.types.typeUtil.isNullableNothing
 import org.jetbrains.kotlin.util.descriptorsEqualWithSubstitution
-import org.jetbrains.kotlin.utils.addToStdlib.singletonOrEmptyList
 import java.util.*
 
 class ArtificialElementInsertHandler(
-        val textBeforeCaret: String, val textAfterCaret: String, val shortenRefs: Boolean) : InsertHandler<LookupElement>{
+        private val textBeforeCaret: String,
+        private val textAfterCaret: String,
+        private val shortenRefs: Boolean
+) : InsertHandler<LookupElement>{
     override fun handleInsert(context: InsertionContext, item: LookupElement) {
         val offset = context.editor.caretModel.offset
         val startOffset = offset - item.lookupString.length
@@ -156,7 +162,7 @@ fun Collection<FuzzyType>.matchExpectedInfo(expectedInfo: ExpectedInfo): Expecte
     return ExpectedInfoMatch.noMatch
 }
 
-fun FuzzyType.classifyExpectedInfo(expectedInfo: ExpectedInfo) = listOf(this).matchExpectedInfo(expectedInfo)
+fun FuzzyType.matchExpectedInfo(expectedInfo: ExpectedInfo) = listOf(this).matchExpectedInfo(expectedInfo)
 
 fun<TDescriptor: DeclarationDescriptor?> MutableCollection<LookupElement>.addLookupElements(
         descriptor: TDescriptor,
@@ -205,11 +211,12 @@ fun<TDescriptor: DeclarationDescriptor?> MutableCollection<LookupElement>.addLoo
     }
 }
 
+@Suppress("UNCHECKED_CAST")
 private fun <T : DeclarationDescriptor?> T.substituteFixed(substitutor: TypeSubstitutor): T {
-    if (this is LocalVariableDescriptor || this is ValueParameterDescriptor || this is TypeParameterDescriptor) { // TODO: it's not implemented for them
+    if (this is LocalVariableDescriptor || this is ValueParameterDescriptor || this !is Substitutable<*>) {
         return this
     }
-    return this?.substitute(substitutor) as T
+    return this.substitute(substitutor) as T
 }
 
 private fun MutableCollection<LookupElement>.addLookupElementsForNullable(factory: () -> Collection<LookupElement>, matchedInfos: Collection<ExpectedInfo>) {
@@ -246,19 +253,30 @@ private fun MutableCollection<LookupElement>.addLookupElementsForNullable(factor
     }
 }
 
-fun CallableDescriptor.callableReferenceType(resolutionFacade: ResolutionFacade): FuzzyType? {
+fun CallableDescriptor.callableReferenceType(resolutionFacade: ResolutionFacade, lhs: DoubleColonLHS?): FuzzyType? {
     if (!CallType.CALLABLE_REFERENCE.descriptorKindFilter.accepts(this)) return null // not supported by callable references
-    val type = getReflectionTypeForCandidateDescriptor(this, resolutionFacade.getFrontendService(ReflectionTypes::class.java)) ?: return null
-    return FuzzyType(type, emptyList())
+
+    return DoubleColonExpressionResolver.createKCallableTypeForReference(
+            this,
+            lhs,
+            resolutionFacade.getFrontendService(ReflectionTypes::class.java),
+            resolutionFacade.moduleDescriptor
+    )?.toFuzzyType(emptyList())
 }
 
 enum class SmartCompletionItemPriority {
+    ARRAY_LITERAL_IN_ANNOTATION,
     MULTIPLE_ARGUMENTS_ITEM,
+    LAMBDA_SIGNATURE,
+    LAMBDA_SIGNATURE_EXPLICIT_PARAMETER_TYPES,
     IT,
     TRUE,
     FALSE,
+    NAMED_ARGUMENT_TRUE,
+    NAMED_ARGUMENT_FALSE,
     CLASS_LITERAL,
     THIS,
+    DELEGATES_STATIC_MEMBER,
     DEFAULT,
     NULLABLE,
     INSTANTIATION,
@@ -266,8 +284,9 @@ enum class SmartCompletionItemPriority {
     ANONYMOUS_OBJECT,
     LAMBDA_NO_PARAMS,
     LAMBDA,
-    FUNCTION_REFERENCE,
+    CALLABLE_REFERENCE,
     NULL,
+    NAMED_ARGUMENT_NULL,
     INHERITOR_INSTANTIATION
 }
 
@@ -280,27 +299,35 @@ fun LookupElement.assignSmartCompletionPriority(priority: SmartCompletionItemPri
 
 fun DeclarationDescriptor.fuzzyTypesForSmartCompletion(
         smartCastCalculator: SmartCastCalculator,
-        callType: CallType<*>,
-        resolutionFacade: ResolutionFacade
+        callTypeAndReceiver: CallTypeAndReceiver<*, *>,
+        resolutionFacade: ResolutionFacade,
+        bindingContext: BindingContext
 ): Collection<FuzzyType> {
-    if (callType == CallType.CALLABLE_REFERENCE) {
-        return (this as? CallableDescriptor)?.callableReferenceType(resolutionFacade).singletonOrEmptyList()
+    if (callTypeAndReceiver is CallTypeAndReceiver.CALLABLE_REFERENCE) {
+        val lhs = callTypeAndReceiver.receiver?.let { bindingContext[BindingContext.DOUBLE_COLON_LHS, it] }
+        return listOfNotNull((this as? CallableDescriptor)?.callableReferenceType(resolutionFacade, lhs))
     }
 
     if (this is CallableDescriptor) {
-        var returnType = fuzzyReturnType() ?: return emptyList()
-        // skip declarations of type Nothing or of generic parameter type which has no real bounds
-        if (returnType.type.isNothing() || returnType.isAlmostEverything()) return emptyList()
+        val returnType = fuzzyReturnType() ?: return emptyList()
 
-        if (this is VariableDescriptor) { //TODO: generic properties!
-            return smartCastCalculator.types(this).map { FuzzyType(it, emptyList()) }
+        // skip declarations of types Nothing, Nothing?, dynamic or of generic parameter type which has no real bounds
+        if (returnType.type.isNothing() ||
+            returnType.type.isNullableNothing() ||
+            returnType.type.isDynamic() ||
+            returnType.isAlmostEverything()) {
+            return emptyList()
+        }
+
+        return if (this is VariableDescriptor) { //TODO: generic properties!
+            smartCastCalculator.types(this).map { it.toFuzzyType(emptyList()) }
         }
         else {
-            return listOf(returnType)
+            listOf(returnType)
         }
     }
     else if (this is ClassDescriptor && kind.isSingleton) {
-        return listOf(FuzzyType(defaultType, emptyList()))
+        return listOf(defaultType.toFuzzyType(emptyList()))
     }
     else {
         return emptyList()
@@ -308,8 +335,7 @@ fun DeclarationDescriptor.fuzzyTypesForSmartCompletion(
 }
 
 fun Collection<ExpectedInfo>.filterFunctionExpected()
-        = filter { it.fuzzyType != null && KotlinBuiltIns.isExactFunctionOrExtensionFunctionType(it.fuzzyType!!.type) }
+        = filter { it.fuzzyType != null && it.fuzzyType!!.type.isFunctionType }
 
 fun Collection<ExpectedInfo>.filterCallableExpected()
         = filter { it.fuzzyType != null && ReflectionTypes.isCallableType(it.fuzzyType!!.type) }
-

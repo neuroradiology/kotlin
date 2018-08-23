@@ -27,7 +27,7 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.psiUtil.isAncestor
 import java.util.*
 
-fun<T> CodeBuilder.buildList(generators: Collection<() -> T>, separator: String, prefix: String = "", suffix: String = ""): CodeBuilder {
+fun <T> CodeBuilder.buildList(generators: Collection<() -> T>, separator: String, prefix: String = "", suffix: String = ""): CodeBuilder {
     if (generators.isNotEmpty()) {
         append(prefix)
         var first = true
@@ -51,6 +51,8 @@ fun CodeBuilder.append(elements: Collection<Element>, separator: String, prefix:
 class ElementCreationStackTraceRequiredException : RuntimeException()
 
 class CodeBuilder(private val topElement: PsiElement?, private var docConverter: DocCommentConverter) {
+    private val commentPatternsToDrop = listOf("^//[ ]*noinspection[ ]+[A-Za-z][A-Za-z0-9_]*([ ].*?)?$".toRegex())
+
     private val builder = StringBuilder()
     private var endOfLineCommentAtEnd = false
 
@@ -58,25 +60,35 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
 
     private val imports = LinkedHashSet<FqName>()
 
-    infix fun append(text: String): CodeBuilder
-            = append(text, false)
+    infix fun append(text: String): CodeBuilder = append(text, NON_COMMENT_INFO)
 
     fun addImport(fqName: FqName) {
         imports.add(fqName)
     }
 
-    private fun appendCommentOrWhiteSpace(element: PsiElement) {
+    private class CommentInfo(element: PsiElement?, val isPostInsert: Boolean) {
+        val isComment: Boolean = element is PsiComment
+        val endOfLineComment: Boolean = element?.isEndOfLineComment() ?: false
+        val isCommentAtFirstColumn: Boolean = element?.isCommentAtFirstColumn() ?: false
+        val isFirstNonWhitespaceElementInLine: Boolean = element?.isFirstNonWhitespaceElementInLine() ?: false
+    }
+
+    private val NON_COMMENT_INFO = CommentInfo(null, false)
+
+    private fun appendCommentOrWhiteSpace(element: PsiElement, postInsert: Boolean = false) {
         if (element is PsiDocComment) {
-            append(docConverter.convertDocComment(element), false)
+            append(docConverter.convertDocComment(element))
         }
         else {
-            append(element.text!!, element.isEndOfLineComment())
+            if (element !is PsiComment || !commentPatternsToDrop.any { it.matches(element.text) }) {
+                append(element.text!!, CommentInfo(element, postInsert))
+            }
         }
     }
 
-    private fun append(text: String, endOfLineComment: Boolean = false): CodeBuilder {
+    private fun append(text: String, commentInfo: CommentInfo = NON_COMMENT_INFO): CodeBuilder {
         if (text.isEmpty()) {
-            assert(!endOfLineComment)
+            assert(!commentInfo.endOfLineComment)
             return this
         }
 
@@ -87,8 +99,21 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
             endOfLineCommentAtEnd = false
         }
 
+        if (commentInfo.isComment) {
+            // Original comment was first in line, but there's no line break before the current one
+            if (!commentInfo.isPostInsert && commentInfo.isFirstNonWhitespaceElementInLine &&
+                !builder.takeLastWhile(Char::isWhitespace).contains('\n')) {
+                builder.append('\n')
+            }
+
+            // Original comment wasn't at the first column, so we add a space before current one. Deal with KEEP_FIRST_COLUMN_COMMENT setting
+            if (!commentInfo.isCommentAtFirstColumn && builder.lastOrNull() == '\n') {
+                builder.append(" ")
+            }
+        }
+
         builder.append(text)
-        endOfLineCommentAtEnd = endOfLineComment
+        endOfLineCommentAtEnd = commentInfo.endOfLineComment
         return this
     }
 
@@ -133,7 +158,7 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
         if (prefix.lineBreaksBefore > 0) {
             val lineBreaksToAdd = prefix.lineBreaksBefore - builder.trailingLineBreakCount()
             for (it in 1..lineBreaksToAdd) {
-                append("\n", false)
+                append("\n")
             }
         }
 
@@ -144,10 +169,10 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
         // scan for all comments inside which are not yet used in the text and put them here to not loose any comment from code
         for ((prototype, inheritance) in element.prototypes!!) {
             if (inheritance.commentsInside) {
-                prototype.accept(object : JavaRecursiveElementVisitor(){
+                prototype.accept(object : JavaRecursiveElementVisitor() {
                     override fun visitComment(comment: PsiComment) {
                         if (comment !in notInsideElements && commentsAndSpacesUsed.add(comment)) {
-                            appendCommentOrWhiteSpace(comment)
+                            appendCommentOrWhiteSpace(comment, true)
                         }
                     }
                 })
@@ -251,7 +276,7 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
                     collectCommentsAndSpacesBefore(prev)
                 }
             }
-            else if (prev.isEmptyElement()){
+            else if (prev.isEmptyElement()) {
                 collectCommentsAndSpacesBefore(prev)
             }
         }
@@ -273,7 +298,7 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
                     collectCommentsAndSpacesAfter(next)
                 }
             }
-            else if (next.isEmptyElement()){
+            else if (next.isEmptyElement()) {
                 collectCommentsAndSpacesAfter(next)
             }
         }
@@ -285,7 +310,7 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
 
     private fun MutableList<PsiElement>.collectCommentsAndSpacesAtStart(element: PsiElement): MutableList<PsiElement> {
         var child = element.firstChild
-        while(child != null) {
+        while (child != null) {
             if (child.isCommentOrSpace()) {
                 if (child !in commentsAndSpacesUsed) add(child) else break
             }
@@ -300,7 +325,7 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
 
     private fun MutableList<PsiElement>.collectCommentsAndSpacesAtEnd(element: PsiElement): MutableList<PsiElement> {
         var child = element.lastChild
-        while(child != null) {
+        while (child != null) {
             if (child.isCommentOrSpace()) {
                 if (child !in commentsAndSpacesUsed) add(child) else break
             }
@@ -314,22 +339,22 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
     }
 
     private companion object {
-        operator fun<T> List<T>.plus(other: List<T>): List<T> {
-            when {
-                isEmpty() -> return other
+        operator fun <T> List<T>.plus(other: List<T>): List<T> {
+            return when {
+                isEmpty() -> other
 
-                other.isEmpty() -> return this
+                other.isEmpty() -> this
 
                 else -> {
                     val result = ArrayList<T>(size + other.size)
                     result.addAll(this)
                     result.addAll(other)
-                    return result
+                    result
                 }
             }
         }
 
-        fun<T> List<T>.reversed(): List<T> {
+        fun <T> List<T>.reversed(): List<T> {
             return if (size <= 1)
                 this
             else
@@ -341,6 +366,12 @@ class CodeBuilder(private val topElement: PsiElement?, private var docConverter:
         fun PsiElement.isEndOfLineComment() = this is PsiComment && tokenType == JavaTokenType.END_OF_LINE_COMMENT
 
         fun PsiElement.isEmptyElement() = firstChild == null && textLength == 0
+
+        fun PsiElement.isCommentAtFirstColumn() =
+                this is PsiComment && (this.prevSibling?.let { it is PsiWhiteSpace && it.text.endsWith("\\n") } ?: false)
+
+        fun PsiElement.isFirstNonWhitespaceElementInLine() =
+                this is PsiComment && (this.prevSibling?.let { it is PsiWhiteSpace && it.text.contains('\n') } ?: false)
 
         fun PsiWhiteSpace.lineBreakCount() = StringUtil.getLineBreakCount(text)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,6 @@
  */
 
 package org.jetbrains.kotlin.descriptors.annotations
-
-import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.resolve.DescriptorUtils
 
 class AnnotationsImpl : Annotations {
     private val annotations: List<AnnotationDescriptor>
@@ -38,12 +34,7 @@ class AnnotationsImpl : Annotations {
         this.annotations = targetedAnnotations.filter { it.target == null }.map { it.annotation }
     }
 
-    override fun isEmpty() = annotations.isEmpty()
-
-    override fun findAnnotation(fqName: FqName) = annotations.firstOrNull {
-        val descriptor = it.type.constructor.declarationDescriptor
-        descriptor is ClassDescriptor && fqName.toUnsafe() == DescriptorUtils.getFqName(descriptor)
-    }
+    override fun isEmpty() = targetedAnnotations.isEmpty()
 
     override fun getUseSiteTargetedAnnotations(): List<AnnotationWithTarget> {
         return targetedAnnotations
@@ -53,19 +44,14 @@ class AnnotationsImpl : Annotations {
 
     override fun getAllAnnotations() = targetedAnnotations
 
-    override fun findExternalAnnotation(fqName: FqName) = null
-
     override fun iterator() = annotations.iterator()
 
     override fun toString() = annotations.toString()
 
     companion object {
-        @JvmStatic fun create(annotationsWithTargets: List<AnnotationWithTarget>): AnnotationsImpl {
+        @JvmStatic
+        fun create(annotationsWithTargets: List<AnnotationWithTarget>): AnnotationsImpl {
             return AnnotationsImpl(annotationsWithTargets, 0)
-        }
-
-        @JvmStatic fun createWithNoTarget(vararg annotations: AnnotationDescriptor): AnnotationsImpl {
-            return create(annotations.map { AnnotationWithTarget(it, null) })
         }
     }
 }

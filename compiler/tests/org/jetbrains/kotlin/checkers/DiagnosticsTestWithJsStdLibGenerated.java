@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2016 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
  */
 
 package org.jetbrains.kotlin.checkers;
@@ -19,6 +8,7 @@ package org.jetbrains.kotlin.checkers;
 import com.intellij.testFramework.TestDataPath;
 import org.jetbrains.kotlin.test.JUnit3RunnerWithInners;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.TargetBackend;
 import org.jetbrains.kotlin.test.TestMetadata;
 import org.junit.runner.RunWith;
 
@@ -31,214 +21,292 @@ import java.util.regex.Pattern;
 @TestDataPath("$PROJECT_ROOT")
 @RunWith(JUnit3RunnerWithInners.class)
 public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTestWithJsStdLib {
-    public void testAllFilesPresentInTestsWithJsStdLib() throws Exception {
-        KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib"), Pattern.compile("^(.+)\\.kt$"), true);
+    private void runTest(String testDataFilePath) throws Exception {
+        KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
     }
 
-    @TestMetadata("Serializable.kt")
-    public void testSerializable() throws Exception {
-        String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/Serializable.kt");
-        doTest(fileName);
+    public void testAllFilesPresentInTestsWithJsStdLib() throws Exception {
+        KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+    }
+
+    @TestMetadata("implementingFunction.kt")
+    public void testImplementingFunction() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/implementingFunction.kt");
+    }
+
+    @TestMetadata("localClassMetadata.kt")
+    public void testLocalClassMetadata() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/localClassMetadata.kt");
+    }
+
+    @TestMetadata("noImpl.kt")
+    public void testNoImpl() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/noImpl.kt");
+    }
+
+    @TestMetadata("platformDependent.kt")
+    public void testPlatformDependent() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/platformDependent.kt");
+    }
+
+    @TestMetadata("runtimeAnnotations.kt")
+    public void testRuntimeAnnotations() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/runtimeAnnotations.kt");
+    }
+
+    @TestMetadata("wrongMultipleInheritance.kt")
+    public void testWrongMultipleInheritance() throws Exception {
+        runTest("compiler/testData/diagnostics/testsWithJsStdLib/wrongMultipleInheritance.kt");
     }
 
     @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes")
     @TestDataPath("$PROJECT_ROOT")
     @RunWith(JUnit3RunnerWithInners.class)
     public static class DynamicTypes extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
         public void testAllFilesPresentInDynamicTypes() throws Exception {
-            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes"), Pattern.compile("^(.+)\\.kt$"), true);
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("allowedDynamicFunctionType.kt")
+        public void testAllowedDynamicFunctionType() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/allowedDynamicFunctionType.kt");
         }
 
         @TestMetadata("assignment.kt")
         public void testAssignment() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/assignment.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/assignment.kt");
         }
 
         @TestMetadata("block.kt")
         public void testBlock() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/block.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/block.kt");
         }
 
         @TestMetadata("callableReferences.kt")
         public void testCallableReferences() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/callableReferences.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/callableReferences.kt");
+        }
+
+        @TestMetadata("classDelegateBy.kt")
+        public void testClassDelegateBy() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/classDelegateBy.kt");
         }
 
         @TestMetadata("comparisonToNull.kt")
         public void testComparisonToNull() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/comparisonToNull.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/comparisonToNull.kt");
         }
 
         @TestMetadata("conditions.kt")
         public void testConditions() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/conditions.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/conditions.kt");
         }
 
         @TestMetadata("conventions.kt")
         public void testConventions() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/conventions.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/conventions.kt");
         }
 
-        @TestMetadata("delegationBy.kt")
-        public void testDelegationBy() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/delegationBy.kt");
-            doTest(fileName);
+        @TestMetadata("destructuring.kt")
+        public void testDestructuring() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/destructuring.kt");
         }
 
         @TestMetadata("dynamicCalls.kt")
         public void testDynamicCalls() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCalls.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCalls.kt");
         }
 
         @TestMetadata("dynamicCallsWithLambdas.kt")
         public void testDynamicCallsWithLambdas() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCallsWithLambdas.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCallsWithLambdas.kt");
         }
 
         @TestMetadata("dynamicCastTarget.kt")
         public void testDynamicCastTarget() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCastTarget.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicCastTarget.kt");
+        }
+
+        @TestMetadata("dynamicExtension.kt")
+        public void testDynamicExtension() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicExtension.kt");
         }
 
         @TestMetadata("dynamicSafeCalls.kt")
         public void testDynamicSafeCalls() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicSafeCalls.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicSafeCalls.kt");
         }
 
         @TestMetadata("dynamicVsGeneric.kt")
         public void testDynamicVsGeneric() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicVsGeneric.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/dynamicVsGeneric.kt");
         }
 
         @TestMetadata("extensionVals.kt")
         public void testExtensionVals() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionVals.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionVals.kt");
         }
 
         @TestMetadata("extensionVars.kt")
         public void testExtensionVars() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionVars.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionVars.kt");
         }
 
         @TestMetadata("extensions.kt")
         public void testExtensions() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensions.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensions.kt");
         }
 
         @TestMetadata("extensionsToDynamic.kt")
         public void testExtensionsToDynamic() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionsToDynamic.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/extensionsToDynamic.kt");
         }
 
         @TestMetadata("implicitDynamicReceiver.kt")
         public void testImplicitDynamicReceiver() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/implicitDynamicReceiver.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/implicitDynamicReceiver.kt");
+        }
+
+        @TestMetadata("inExpression.kt")
+        public void testInExpression() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/inExpression.kt");
+        }
+
+        @TestMetadata("indexedAccess.kt")
+        public void testIndexedAccess() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/indexedAccess.kt");
         }
 
         @TestMetadata("inference.kt")
         public void testInference() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/inference.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/inference.kt");
         }
 
         @TestMetadata("membersOfAny.kt")
         public void testMembersOfAny() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/membersOfAny.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/membersOfAny.kt");
         }
 
         @TestMetadata("namedArguments.kt")
         public void testNamedArguments() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/namedArguments.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/namedArguments.kt");
         }
 
         @TestMetadata("noUnsupportedInLocals.kt")
         public void testNoUnsupportedInLocals() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/noUnsupportedInLocals.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/noUnsupportedInLocals.kt");
         }
 
         @TestMetadata("nullable.kt")
         public void testNullable() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/nullable.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/nullable.kt");
         }
 
         @TestMetadata("overloading.kt")
         public void testOverloading() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overloading.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overloading.kt");
         }
 
         @TestMetadata("overloadingAmbiguity.kt")
         public void testOverloadingAmbiguity() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overloadingAmbiguity.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overloadingAmbiguity.kt");
         }
 
         @TestMetadata("overrides.kt")
         public void testOverrides() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overrides.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/overrides.kt");
+        }
+
+        @TestMetadata("propertyDelegateBy.kt")
+        public void testPropertyDelegateBy() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/propertyDelegateBy.kt");
+        }
+
+        @TestMetadata("protected.kt")
+        public void testProtected() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/protected.kt");
+        }
+
+        @TestMetadata("rangeExpression.kt")
+        public void testRangeExpression() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/rangeExpression.kt");
         }
 
         @TestMetadata("reified.kt")
         public void testReified() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/reified.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/reified.kt");
         }
 
         @TestMetadata("smartCast.kt")
         public void testSmartCast() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/smartCast.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/smartCast.kt");
         }
 
         @TestMetadata("spreadOperator.kt")
         public void testSpreadOperator() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/spreadOperator.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/spreadOperator.kt");
         }
 
         @TestMetadata("staticCallsInDynamicContext.kt")
         public void testStaticCallsInDynamicContext() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/staticCallsInDynamicContext.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/staticCallsInDynamicContext.kt");
+        }
+
+        @TestMetadata("staticExtensions.kt")
+        public void testStaticExtensions() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/staticExtensions.kt");
         }
 
         @TestMetadata("substitution.kt")
         public void testSubstitution() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/substitution.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/substitution.kt");
         }
 
         @TestMetadata("supertypesAndBounds.kt")
         public void testSupertypesAndBounds() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/supertypesAndBounds.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/supertypesAndBounds.kt");
+        }
+
+        @TestMetadata("typealiasExpandingToDynamic.kt")
+        public void testTypealiasExpandingToDynamic() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/typealiasExpandingToDynamic.kt");
+        }
+
+        @TestMetadata("typealiasWithAnnotatedDynamic.kt")
+        public void testTypealiasWithAnnotatedDynamic() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/typealiasWithAnnotatedDynamic.kt");
+        }
+
+        @TestMetadata("typealiasWithDynamic.kt")
+        public void testTypealiasWithDynamic() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/typealiasWithDynamic.kt");
         }
 
         @TestMetadata("varargs.kt")
         public void testVarargs() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/varargs.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/dynamicTypes/varargs.kt");
+        }
+    }
+
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/inline")
+    @TestDataPath("$PROJECT_ROOT")
+    @RunWith(JUnit3RunnerWithInners.class)
+    public static class Inline extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
+        public void testAllFilesPresentInInline() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/inline"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("Reified.kt")
+        public void testReified() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/inline/Reified.kt");
         }
     }
 
@@ -246,32 +314,286 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
     @TestDataPath("$PROJECT_ROOT")
     @RunWith(JUnit3RunnerWithInners.class)
     public static class JsCode extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
         public void testAllFilesPresentInJsCode() throws Exception {
-            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/jsCode"), Pattern.compile("^(.+)\\.kt$"), true);
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/jsCode"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
         }
 
         @TestMetadata("argumentIsLiteral.kt")
         public void testArgumentIsLiteral() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/argumentIsLiteral.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/argumentIsLiteral.kt");
+        }
+
+        @TestMetadata("badAssignment.kt")
+        public void testBadAssignment() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/badAssignment.kt");
+        }
+
+        @TestMetadata("deleteOperation.kt")
+        public void testDeleteOperation() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/deleteOperation.kt");
         }
 
         @TestMetadata("error.kt")
         public void testError() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/error.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/error.kt");
         }
 
         @TestMetadata("noJavaScriptProduced.kt")
         public void testNoJavaScriptProduced() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/noJavaScriptProduced.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/noJavaScriptProduced.kt");
         }
 
         @TestMetadata("warning.kt")
         public void testWarning() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/warning.kt");
-            doTest(fileName);
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jsCode/warning.kt");
+        }
+    }
+
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/jvmDeclarations")
+    @TestDataPath("$PROJECT_ROOT")
+    @RunWith(JUnit3RunnerWithInners.class)
+    public static class JvmDeclarations extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
+        public void testAllFilesPresentInJvmDeclarations() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/jvmDeclarations"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("cloneable.kt")
+        public void testCloneable() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/jvmDeclarations/cloneable.kt");
+        }
+    }
+
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/module")
+    @TestDataPath("$PROJECT_ROOT")
+    @RunWith(JUnit3RunnerWithInners.class)
+    public static class Module extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
+        public void testAllFilesPresentInModule() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/module"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("dualModuleFromUmd.kt")
+        public void testDualModuleFromUmd() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/dualModuleFromUmd.kt");
+        }
+
+        @TestMetadata("incompleteReifiedArg.kt")
+        public void testIncompleteReifiedArg() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/incompleteReifiedArg.kt");
+        }
+
+        @TestMetadata("jsModuleNonExternal.kt")
+        public void testJsModuleNonExternal() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/jsModuleNonExternal.kt");
+        }
+
+        @TestMetadata("jsModuleWithoutParameters.kt")
+        public void testJsModuleWithoutParameters() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/jsModuleWithoutParameters.kt");
+        }
+
+        @TestMetadata("jsVarProhibited.kt")
+        public void testJsVarProhibited() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/jsVarProhibited.kt");
+        }
+
+        @TestMetadata("nestedProhibited.kt")
+        public void testNestedProhibited() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/nestedProhibited.kt");
+        }
+
+        @TestMetadata("prohibitedOnNonNative.kt")
+        public void testProhibitedOnNonNative() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/prohibitedOnNonNative.kt");
+        }
+
+        @TestMetadata("wrongCallToModule.kt")
+        public void testWrongCallToModule() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/wrongCallToModule.kt");
+        }
+
+        @TestMetadata("wrongCallToNonModule.kt")
+        public void testWrongCallToNonModule() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/module/wrongCallToNonModule.kt");
+        }
+    }
+
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/name")
+    @TestDataPath("$PROJECT_ROOT")
+    @RunWith(JUnit3RunnerWithInners.class)
+    public static class Name extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
+        public void testAllFilesPresentInName() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/name"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("bridgeClash.kt")
+        public void testBridgeClash() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/bridgeClash.kt");
+        }
+
+        @TestMetadata("builtinClash.kt")
+        public void testBuiltinClash() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/builtinClash.kt");
+        }
+
+        @TestMetadata("classAndFunction.kt")
+        public void testClassAndFunction() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/classAndFunction.kt");
+        }
+
+        @TestMetadata("classAndTypealias.kt")
+        public void testClassAndTypealias() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/classAndTypealias.kt");
+        }
+
+        @TestMetadata("classLevelMethodAndProperty.kt")
+        public void testClassLevelMethodAndProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/classLevelMethodAndProperty.kt");
+        }
+
+        @TestMetadata("conflictingNamesFromSuperclass.kt")
+        public void testConflictingNamesFromSuperclass() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/conflictingNamesFromSuperclass.kt");
+        }
+
+        @TestMetadata("declarationClash.kt")
+        public void testDeclarationClash() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/declarationClash.kt");
+        }
+
+        @TestMetadata("extensionPropertyAndMethod.kt")
+        public void testExtensionPropertyAndMethod() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/extensionPropertyAndMethod.kt");
+        }
+
+        @TestMetadata("illegalName.kt")
+        public void testIllegalName() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/illegalName.kt");
+        }
+
+        @TestMetadata("illegalPackageName.kt")
+        public void testIllegalPackageName() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/illegalPackageName.kt");
+        }
+
+        @TestMetadata("jsNameAndOverridden.kt")
+        public void testJsNameAndOverridden() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameAndOverridden.kt");
+        }
+
+        @TestMetadata("jsNameClash.kt")
+        public void testJsNameClash() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameClash.kt");
+        }
+
+        @TestMetadata("jsNameClashWithDefault.kt")
+        public void testJsNameClashWithDefault() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameClashWithDefault.kt");
+        }
+
+        @TestMetadata("jsNameMissingOnAccessors.kt")
+        public void testJsNameMissingOnAccessors() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameMissingOnAccessors.kt");
+        }
+
+        @TestMetadata("jsNameOnAccessors.kt")
+        public void testJsNameOnAccessors() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameOnAccessors.kt");
+        }
+
+        @TestMetadata("jsNameOnOverride.kt")
+        public void testJsNameOnOverride() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameOnOverride.kt");
+        }
+
+        @TestMetadata("jsNameOnPropertyAndAccessor.kt")
+        public void testJsNameOnPropertyAndAccessor() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameOnPropertyAndAccessor.kt");
+        }
+
+        @TestMetadata("jsNamePrihibitedOnPrimaryConstructor.kt")
+        public void testJsNamePrihibitedOnPrimaryConstructor() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNamePrihibitedOnPrimaryConstructor.kt");
+        }
+
+        @TestMetadata("jsNameProhibitedOnExtensionProperty.kt")
+        public void testJsNameProhibitedOnExtensionProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameProhibitedOnExtensionProperty.kt");
+        }
+
+        @TestMetadata("jsNameUseTargetOnProperty.kt")
+        public void testJsNameUseTargetOnProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameUseTargetOnProperty.kt");
+        }
+
+        @TestMetadata("jsNameWithoutParameter.kt")
+        public void testJsNameWithoutParameter() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/jsNameWithoutParameter.kt");
+        }
+
+        @TestMetadata("methodAndMethod.kt")
+        public void testMethodAndMethod() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/methodAndMethod.kt");
+        }
+
+        @TestMetadata("nameSwapInOverride.kt")
+        public void testNameSwapInOverride() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/nameSwapInOverride.kt");
+        }
+
+        @TestMetadata("overrideOverloadedNativeFunction.kt")
+        public void testOverrideOverloadedNativeFunction() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/overrideOverloadedNativeFunction.kt");
+        }
+
+        @TestMetadata("packageAndMethod.kt")
+        public void testPackageAndMethod() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/packageAndMethod.kt");
+        }
+
+        @TestMetadata("packageAndProperty.kt")
+        public void testPackageAndProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/packageAndProperty.kt");
+        }
+
+        @TestMetadata("privateJsNameClash.kt")
+        public void testPrivateJsNameClash() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/privateJsNameClash.kt");
+        }
+
+        @TestMetadata("propertyAndMethodInImplementor.kt")
+        public void testPropertyAndMethodInImplementor() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/propertyAndMethodInImplementor.kt");
+        }
+
+        @TestMetadata("propertyAndMethodInSubclass.kt")
+        public void testPropertyAndMethodInSubclass() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/propertyAndMethodInSubclass.kt");
+        }
+
+        @TestMetadata("topLevelMethodAndJsNameConstructor.kt")
+        public void testTopLevelMethodAndJsNameConstructor() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/topLevelMethodAndJsNameConstructor.kt");
+        }
+
+        @TestMetadata("topLevelMethodAndProperty.kt")
+        public void testTopLevelMethodAndProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/name/topLevelMethodAndProperty.kt");
         }
     }
 
@@ -279,76 +601,169 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
     @TestDataPath("$PROJECT_ROOT")
     @RunWith(JUnit3RunnerWithInners.class)
     public static class Native extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
         public void testAllFilesPresentInNative() throws Exception {
-            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native"), Pattern.compile("^(.+)\\.kt$"), true);
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("anonymousInitializer.kt")
+        public void testAnonymousInitializer() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/anonymousInitializer.kt");
+        }
+
+        @TestMetadata("body.kt")
+        public void testBody() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/body.kt");
+        }
+
+        @TestMetadata("delegatedConstructorCall.kt")
+        public void testDelegatedConstructorCall() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/delegatedConstructorCall.kt");
+        }
+
+        @TestMetadata("delegation.kt")
+        public void testDelegation() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/delegation.kt");
+        }
+
+        @TestMetadata("enumEntry.kt")
+        public void testEnumEntry() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/enumEntry.kt");
+        }
+
+        @TestMetadata("extensionFunctionAndProperty.kt")
+        public void testExtensionFunctionAndProperty() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/extensionFunctionAndProperty.kt");
+        }
+
+        @TestMetadata("extensionFunctionArgumentOrReturnType.kt")
+        public void testExtensionFunctionArgumentOrReturnType() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/extensionFunctionArgumentOrReturnType.kt");
+        }
+
+        @TestMetadata("externalInterfaceNested.kt")
+        public void testExternalInterfaceNested() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/externalInterfaceNested.kt");
+        }
+
+        @TestMetadata("inheritance.kt")
+        public void testInheritance() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/inheritance.kt");
+        }
+
+        @TestMetadata("inline.kt")
+        public void testInline() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/inline.kt");
+        }
+
+        @TestMetadata("inlineClass.kt")
+        public void testInlineClass() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/inlineClass.kt");
+        }
+
+        @TestMetadata("inlineClassAsParameterOrReturnType.kt.kt")
+        public void testInlineClassAsParameterOrReturnType_kt() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/inlineClassAsParameterOrReturnType.kt.kt");
+        }
+
+        @TestMetadata("inlineExtensionToNative.kt")
+        public void testInlineExtensionToNative() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/inlineExtensionToNative.kt");
+        }
+
+        @TestMetadata("innerClass.kt")
+        public void testInnerClass() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/innerClass.kt");
+        }
+
+        @TestMetadata("nested.kt")
+        public void testNested() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nested.kt");
+        }
+
+        @TestMetadata("nonAbstractMembersOfInterface.kt")
+        public void testNonAbstractMembersOfInterface() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nonAbstractMembersOfInterface.kt");
+        }
+
+        @TestMetadata("overrideOptionalParam.kt")
+        public void testOverrideOptionalParam() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/overrideOptionalParam.kt");
+        }
+
+        @TestMetadata("privateMembers.kt")
+        public void testPrivateMembers() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/privateMembers.kt");
+        }
+
+        @TestMetadata("propertyParameter.kt")
+        public void testPropertyParameter() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/propertyParameter.kt");
+        }
+
+        @TestMetadata("wrongTarget.kt")
+        public void testWrongTarget() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/wrongTarget.kt");
         }
 
         @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter")
         @TestDataPath("$PROJECT_ROOT")
         @RunWith(JUnit3RunnerWithInners.class)
         public static class NativeGetter extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
             public void testAllFilesPresentInNativeGetter() throws Exception {
-                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter"), Pattern.compile("^(.+)\\.kt$"), true);
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
             @TestMetadata("onLocalExtensionFun.kt")
             public void testOnLocalExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalExtensionFun.kt");
-                doTest(fileName);
-            }
-
-            @TestMetadata("onLocalNativeClassMembers.kt")
-            public void testOnLocalNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalExtensionFun.kt");
             }
 
             @TestMetadata("onLocalNonNativeClassMembers.kt")
             public void testOnLocalNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onLocalOtherDeclarations.kt")
             public void testOnLocalOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onLocalOtherDeclarations.kt");
             }
 
             @TestMetadata("onNativeClassMembers.kt")
             public void testOnNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNativeClassMembers.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNativeClass.kt")
             public void testOnNestedDeclarationsInsideNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNestedDeclarationsInsideNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNestedDeclarationsInsideNativeClass.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNonNativeClass.kt")
             public void testOnNestedDeclarationsInsideNonNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNestedDeclarationsInsideNonNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNestedDeclarationsInsideNonNativeClass.kt");
             }
 
             @TestMetadata("onNonNativeClassMembers.kt")
             public void testOnNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onToplevelExtensionFun.kt")
             public void testOnToplevelExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onToplevelExtensionFun.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onToplevelExtensionFun.kt");
             }
 
             @TestMetadata("onToplevelOtherDeclarations.kt")
             public void testOnToplevelOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onToplevelOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeGetter/onToplevelOtherDeclarations.kt");
             }
         }
 
@@ -356,68 +771,57 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
         @TestDataPath("$PROJECT_ROOT")
         @RunWith(JUnit3RunnerWithInners.class)
         public static class NativeInvoke extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
             public void testAllFilesPresentInNativeInvoke() throws Exception {
-                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke"), Pattern.compile("^(.+)\\.kt$"), true);
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
             @TestMetadata("onLocalExtensionFun.kt")
             public void testOnLocalExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalExtensionFun.kt");
-                doTest(fileName);
-            }
-
-            @TestMetadata("onLocalNativeClassMembers.kt")
-            public void testOnLocalNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalExtensionFun.kt");
             }
 
             @TestMetadata("onLocalNonNativeClassMembers.kt")
             public void testOnLocalNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onLocalOtherDeclarations.kt")
             public void testOnLocalOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onLocalOtherDeclarations.kt");
             }
 
             @TestMetadata("onNativeClassMembers.kt")
             public void testOnNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNativeClassMembers.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNativeClass.kt")
             public void testOnNestedDeclarationsInsideNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNestedDeclarationsInsideNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNestedDeclarationsInsideNativeClass.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNonNativeClass.kt")
             public void testOnNestedDeclarationsInsideNonNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNestedDeclarationsInsideNonNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNestedDeclarationsInsideNonNativeClass.kt");
             }
 
             @TestMetadata("onNonNativeClassMembers.kt")
             public void testOnNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onToplevelExtensionFun.kt")
             public void testOnToplevelExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onToplevelExtensionFun.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onToplevelExtensionFun.kt");
             }
 
             @TestMetadata("onToplevelOtherDeclarations.kt")
             public void testOnToplevelOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onToplevelOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeInvoke/onToplevelOtherDeclarations.kt");
             }
         }
 
@@ -425,68 +829,57 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
         @TestDataPath("$PROJECT_ROOT")
         @RunWith(JUnit3RunnerWithInners.class)
         public static class NativeSetter extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
             public void testAllFilesPresentInNativeSetter() throws Exception {
-                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter"), Pattern.compile("^(.+)\\.kt$"), true);
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
             @TestMetadata("onLocalExtensionFun.kt")
             public void testOnLocalExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalExtensionFun.kt");
-                doTest(fileName);
-            }
-
-            @TestMetadata("onLocalNativeClassMembers.kt")
-            public void testOnLocalNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalExtensionFun.kt");
             }
 
             @TestMetadata("onLocalNonNativeClassMembers.kt")
             public void testOnLocalNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onLocalOtherDeclarations.kt")
             public void testOnLocalOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onLocalOtherDeclarations.kt");
             }
 
             @TestMetadata("onNativeClassMembers.kt")
             public void testOnNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNativeClassMembers.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNativeClass.kt")
             public void testOnNestedDeclarationsInsideNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNestedDeclarationsInsideNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNestedDeclarationsInsideNativeClass.kt");
             }
 
             @TestMetadata("onNestedDeclarationsInsideNonNativeClass.kt")
             public void testOnNestedDeclarationsInsideNonNativeClass() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNestedDeclarationsInsideNonNativeClass.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNestedDeclarationsInsideNonNativeClass.kt");
             }
 
             @TestMetadata("onNonNativeClassMembers.kt")
             public void testOnNonNativeClassMembers() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNonNativeClassMembers.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onNonNativeClassMembers.kt");
             }
 
             @TestMetadata("onToplevelExtensionFun.kt")
             public void testOnToplevelExtensionFun() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onToplevelExtensionFun.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onToplevelExtensionFun.kt");
             }
 
             @TestMetadata("onToplevelOtherDeclarations.kt")
             public void testOnToplevelOtherDeclarations() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onToplevelOtherDeclarations.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/nativeSetter/onToplevelOtherDeclarations.kt");
             }
         }
 
@@ -494,32 +887,70 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
         @TestDataPath("$PROJECT_ROOT")
         @RunWith(JUnit3RunnerWithInners.class)
         public static class OptionlBody extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
             public void testAllFilesPresentInOptionlBody() throws Exception {
-                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody"), Pattern.compile("^(.+)\\.kt$"), true);
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
             @TestMetadata("native.kt")
             public void testNative() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/native.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/native.kt");
             }
 
             @TestMetadata("nativeGetter.kt")
             public void testNativeGetter() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeGetter.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeGetter.kt");
             }
 
             @TestMetadata("nativeInvoke.kt")
             public void testNativeInvoke() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeInvoke.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeInvoke.kt");
             }
 
             @TestMetadata("nativeSetter.kt")
             public void testNativeSetter() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeSetter.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/optionlBody/nativeSetter.kt");
+            }
+        }
+
+        @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti")
+        @TestDataPath("$PROJECT_ROOT")
+        @RunWith(JUnit3RunnerWithInners.class)
+        public static class Rtti extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
+            public void testAllFilesPresentInRtti() throws Exception {
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+            }
+
+            @TestMetadata("castToNativeInterface.kt")
+            public void testCastToNativeInterface() throws Exception {
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti/castToNativeInterface.kt");
+            }
+
+            @TestMetadata("checkForNativeInterface.kt")
+            public void testCheckForNativeInterface() throws Exception {
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti/checkForNativeInterface.kt");
+            }
+
+            @TestMetadata("nativeInterfaceAsReifiedTypeArgument.kt")
+            public void testNativeInterfaceAsReifiedTypeArgument() throws Exception {
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti/nativeInterfaceAsReifiedTypeArgument.kt");
+            }
+
+            @TestMetadata("nativeInterfaceClassLiteral.kt")
+            public void testNativeInterfaceClassLiteral() throws Exception {
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti/nativeInterfaceClassLiteral.kt");
+            }
+
+            @TestMetadata("whenIsNativeInterface.kt")
+            public void testWhenIsNativeInterface() throws Exception {
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/rtti/whenIsNativeInterface.kt");
             }
         }
 
@@ -527,54 +958,74 @@ public class DiagnosticsTestWithJsStdLibGenerated extends AbstractDiagnosticsTes
         @TestDataPath("$PROJECT_ROOT")
         @RunWith(JUnit3RunnerWithInners.class)
         public static class UnusedParam extends AbstractDiagnosticsTestWithJsStdLib {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+            }
+
             public void testAllFilesPresentInUnusedParam() throws Exception {
-                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam"), Pattern.compile("^(.+)\\.kt$"), true);
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
             @TestMetadata("native.kt")
             public void testNative() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/native.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/native.kt");
             }
 
             @TestMetadata("nativeGetter.kt")
             public void testNativeGetter() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeGetter.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeGetter.kt");
             }
 
             @TestMetadata("nativeInvoke.kt")
             public void testNativeInvoke() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeInvoke.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeInvoke.kt");
             }
 
             @TestMetadata("nativeSetter.kt")
             public void testNativeSetter() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeSetter.kt");
-                doTest(fileName);
+                runTest("compiler/testData/diagnostics/testsWithJsStdLib/native/unusedParam/nativeSetter.kt");
             }
         }
     }
 
-    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/unsupportedFeatures")
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/qualifier")
     @TestDataPath("$PROJECT_ROOT")
     @RunWith(JUnit3RunnerWithInners.class)
-    public static class UnsupportedFeatures extends AbstractDiagnosticsTestWithJsStdLib {
-        public void testAllFilesPresentInUnsupportedFeatures() throws Exception {
-            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/unsupportedFeatures"), Pattern.compile("^(.+)\\.kt$"), true);
+    public static class Qualifier extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
         }
 
-        @TestMetadata("localClassifier.kt")
-        public void testLocalClassifier() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/unsupportedFeatures/localClassifier.kt");
-            doTest(fileName);
+        public void testAllFilesPresentInQualifier() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/qualifier"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
         }
 
-        @TestMetadata("nestedInnerClassifier.kt")
-        public void testNestedInnerClassifier() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/diagnostics/testsWithJsStdLib/unsupportedFeatures/nestedInnerClassifier.kt");
-            doTest(fileName);
+        @TestMetadata("jsQualifierNonExternal.kt")
+        public void testJsQualifierNonExternal() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/qualifier/jsQualifierNonExternal.kt");
+        }
+
+        @TestMetadata("wrongQualifier.kt")
+        public void testWrongQualifier() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/qualifier/wrongQualifier.kt");
+        }
+    }
+
+    @TestMetadata("compiler/testData/diagnostics/testsWithJsStdLib/reflection")
+    @TestDataPath("$PROJECT_ROOT")
+    @RunWith(JUnit3RunnerWithInners.class)
+    public static class Reflection extends AbstractDiagnosticsTestWithJsStdLib {
+        private void runTest(String testDataFilePath) throws Exception {
+            KotlinTestUtils.runTest(this::doTest, TargetBackend.ANY, testDataFilePath);
+        }
+
+        public void testAllFilesPresentInReflection() throws Exception {
+            KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/diagnostics/testsWithJsStdLib/reflection"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+        }
+
+        @TestMetadata("reflectionApi.kt")
+        public void testReflectionApi() throws Exception {
+            runTest("compiler/testData/diagnostics/testsWithJsStdLib/reflection/reflectionApi.kt");
         }
     }
 }

@@ -1,34 +1,22 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2000-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
  */
 
 package org.jetbrains.kotlin.descriptors;
 
+import kotlin.annotations.jvm.ReadOnly;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.annotations.ReadOnly;
 import org.jetbrains.kotlin.resolve.scopes.MemberScope;
-import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.SimpleType;
 import org.jetbrains.kotlin.types.TypeProjection;
 import org.jetbrains.kotlin.types.TypeSubstitution;
-import org.jetbrains.kotlin.types.TypeSubstitutor;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface ClassDescriptor extends ClassifierDescriptor, MemberDescriptor, ClassOrPackageFragmentDescriptor {
+public interface ClassDescriptor extends ClassifierDescriptorWithTypeParameters, ClassOrPackageFragmentDescriptor {
     @NotNull
     MemberScope getMemberScope(@NotNull List<? extends TypeProjection> typeArguments);
 
@@ -46,7 +34,7 @@ public interface ClassDescriptor extends ClassifierDescriptor, MemberDescriptor,
 
     @NotNull
     @ReadOnly
-    Collection<ConstructorDescriptor> getConstructors();
+    Collection<ClassConstructorDescriptor> getConstructors();
 
     @Override
     @NotNull
@@ -57,11 +45,7 @@ public interface ClassDescriptor extends ClassifierDescriptor, MemberDescriptor,
      */
     @NotNull
     @Override
-    KotlinType getDefaultType();
-
-    @NotNull
-    @Override
-    ClassDescriptor substitute(@NotNull TypeSubstitutor substitutor);
+    SimpleType getDefaultType();
 
     /**
      * @return nested object declared as 'companion' if one is present.
@@ -80,27 +64,36 @@ public interface ClassDescriptor extends ClassifierDescriptor, MemberDescriptor,
     @NotNull
     Visibility getVisibility();
 
-    /**
-     * @return <code>true</code> if this class contains a reference to its outer class (as opposed to static nested class)
-     */
-    boolean isInner();
-
     boolean isCompanionObject();
 
     boolean isData();
+
+    boolean isInline();
 
     @NotNull
     ReceiverParameterDescriptor getThisAsReceiverParameter();
 
     @Nullable
-    ConstructorDescriptor getUnsubstitutedPrimaryConstructor();
+    ClassConstructorDescriptor getUnsubstitutedPrimaryConstructor();
 
     /**
      * It may differ from 'typeConstructor.parameters' in current class is inner, 'typeConstructor.parameters' contains
      * captured parameters from outer declaration.
      * @return list of type parameters actually declared type parameters in current class
      */
+    @Override
     @ReadOnly
     @NotNull
     List<TypeParameterDescriptor> getDeclaredTypeParameters();
+
+    /**
+     * @return direct subclasses of this class if it's a sealed class, empty list otherwise
+     */
+    @ReadOnly
+    @NotNull
+    Collection<ClassDescriptor> getSealedSubclasses();
+
+    @NotNull
+    @Override
+    ClassDescriptor getOriginal();
 }

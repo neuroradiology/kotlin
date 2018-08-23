@@ -1,3 +1,7 @@
+// IGNORE_BACKEND: JVM_IR
+// IGNORE_BACKEND: JS_IR
+// DONT_RUN_GENERATED_CODE: JS
+
 tailrec fun test(x : Int = 0, e : Any = "a") {
     if (!e.equals("a")) {
         throw IllegalArgumentException()

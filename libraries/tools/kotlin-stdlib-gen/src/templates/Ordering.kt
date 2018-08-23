@@ -1,16 +1,21 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package templates
 
 import templates.Family.*
+import templates.SequenceClass.*
 
-fun ordering(): List<GenericFunction> {
-    val templates = arrayListOf<GenericFunction>()
+object Ordering : TemplateGroupBase() {
 
-    templates add f("reverse()") {
-        doc { f -> "Reverses ${f.element.pluralize()} in the ${f.collection} in-place." }
-        only(Lists, InvariantArraysOfObjects, ArraysOfPrimitives)
-        customReceiver(Lists) { "MutableList<T>" }
-        returns { "Unit" }
-        body { f ->
+    val f_reverse = fn("reverse()") {
+        include(Lists, InvariantArraysOfObjects, ArraysOfPrimitives)
+    } builder {
+        doc { "Reverses ${f.element.pluralize()} in the ${f.collection} in-place." }
+        returns("Unit")
+        body {
             """
             val midPoint = (size / 2) - 1
             if (midPoint < 0) return
@@ -23,17 +28,24 @@ fun ordering(): List<GenericFunction> {
             }
             """
         }
-        body(Lists) { """java.util.Collections.reverse(this)""" }
+        specialFor(Lists) {
+            receiver("MutableList<T>")
+            on(Platform.JVM) {
+                body { """java.util.Collections.reverse(this)""" }
+            }
+        }
     }
 
-    templates add f("reversed()") {
+    val f_reversed = fn("reversed()") {
+        include(Iterables, ArraysOfObjects, ArraysOfPrimitives, CharSequences, Strings)
+    } builder {
         doc { "Returns a list with elements in reversed order." }
-        returns { "List<T>" }
+        returns("List<T>")
         body {
             """
-            if (this is Collection && isEmpty()) return emptyList()
+            if (this is Collection && size <= 1) return toList()
             val list = toMutableList()
-            Collections.reverse(list)
+            list.reverse()
             return list
             """
         }
@@ -42,29 +54,25 @@ fun ordering(): List<GenericFunction> {
             """
             if (isEmpty()) return emptyList()
             val list = toMutableList()
-            Collections.reverse(list)
+            list.reverse()
             return list
             """
         }
 
-        doc(CharSequences, Strings) { f -> "Returns a ${f.collection} with characters in reversed order." }
-        returns(CharSequences, Strings) { "SELF" }
-        body(CharSequences) { f ->
-            """
-            return StringBuilder(this).reverse()
-            """
+        specialFor(CharSequences, Strings) {
+            returns("SELF")
+            doc { "Returns a ${f.collection} with characters in reversed order." }
         }
-        inline(Strings) { Inline.Only }
-        body(Strings) {
-            "return (this as CharSequence).reversed().toString()"
-        }
+        body(CharSequences) { "return StringBuilder(this).reverse()" }
+        specialFor(Strings) { inlineOnly() }
+        body(Strings) { "return (this as CharSequence).reversed().toString()" }
 
-        exclude(Sequences)
     }
 
-    templates add f("reversedArray()") {
+    val f_reversedArray = fn("reversedArray()") {
+        include(InvariantArraysOfObjects, ArraysOfPrimitives)
+    } builder {
         doc { "Returns an array with elements of this array in reversed order." }
-        only(InvariantArraysOfObjects, ArraysOfPrimitives)
         returns("SELF")
         body(InvariantArraysOfObjects) {
             """
@@ -88,8 +96,10 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sorted()") {
+    val f_sorted = fn("sorted()") {
+        includeDefault()
         exclude(PrimitiveType.Boolean)
+    } builder {
 
         doc {
             """
@@ -101,7 +111,8 @@ fun ordering(): List<GenericFunction> {
         body {
             """
                 if (this is Collection) {
-                    if (size <= 1) return this.toMutableList()
+                    if (size <= 1) return this.toList()
+                    @Suppress("UNCHECKED_CAST")
                     return (toTypedArray<Comparable<T>>() as Array<T>).apply { sort() }.asList()
                 }
                 return toMutableList().apply { sort() }
@@ -118,9 +129,12 @@ fun ordering(): List<GenericFunction> {
             """
         }
 
-        returns("SELF", Sequences)
-        doc(Sequences) {
-            "Returns a sequence that yields elements of this sequence sorted according to their natural sort order."
+        specialFor(Sequences) {
+            returns("SELF")
+            doc {
+                "Returns a sequence that yields elements of this sequence sorted according to their natural sort order."
+            }
+            sequenceClassification(intermediate, stateful)
         }
         body(Sequences) {
             """
@@ -135,15 +149,16 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortedArray()") {
-        only(InvariantArraysOfObjects, ArraysOfPrimitives)
+    val f_sortedArray = fn("sortedArray()") {
+        include(InvariantArraysOfObjects, ArraysOfPrimitives)
         exclude(PrimitiveType.Boolean)
+    } builder {
         doc {
             "Returns an array with all elements of this array sorted according to their natural sort order."
         }
         typeParam("T : Comparable<T>")
         returns("SELF")
-        body() {
+        body {
             """
             if (isEmpty()) return this
             return this.copyOf().apply { sort() }
@@ -151,13 +166,16 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortDescending()") {
-        only(Lists, ArraysOfObjects, ArraysOfPrimitives)
+    val f_sortDescending = fn("sortDescending()") {
+        include(Lists, ArraysOfObjects, ArraysOfPrimitives)
         exclude(PrimitiveType.Boolean)
-        doc { f -> """Sorts elements in the ${f.collection} in-place descending according to their natural sort order.""" }
+    } builder {
+        doc { """Sorts elements in the ${f.collection} in-place descending according to their natural sort order.""" }
         returns("Unit")
         typeParam("T : Comparable<T>")
-        customReceiver(Lists) { "MutableList<T>" }
+        specialFor(Lists) {
+            receiver("MutableList<T>")
+        }
 
         body { """sortWith(reverseOrder())""" }
         body(ArraysOfPrimitives) {
@@ -170,8 +188,10 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortedDescending()") {
+    val f_sortedDescending = fn("sortedDescending()") {
+        includeDefault()
         exclude(PrimitiveType.Boolean)
+    } builder {
 
         doc {
             """
@@ -191,15 +211,19 @@ fun ordering(): List<GenericFunction> {
             """
         }
 
-        returns("SELF", Sequences)
-        doc(Sequences) {
-            "Returns a sequence that yields elements of this sequence sorted descending according to their natural sort order."
+        specialFor(Sequences) {
+            returns("SELF")
+            doc {
+                "Returns a sequence that yields elements of this sequence sorted descending according to their natural sort order."
+            }
+            sequenceClassification(intermediate, stateful)
         }
     }
 
-    templates add f("sortedArrayDescending()") {
-        only(InvariantArraysOfObjects, ArraysOfPrimitives)
+    val f_sortedArrayDescending = fn("sortedArrayDescending()") {
+        include(InvariantArraysOfObjects, ArraysOfPrimitives)
         exclude(PrimitiveType.Boolean)
+    } builder {
         doc {
             "Returns an array with all elements of this array sorted descending according to their natural sort order."
         }
@@ -210,9 +234,8 @@ fun ordering(): List<GenericFunction> {
             if (isEmpty()) return this
             return this.copyOf().apply { sortWith(reverseOrder()) }
             """
-
         }
-        body() {
+        body(ArraysOfPrimitives) {
             """
             if (isEmpty()) return this
             return this.copyOf().apply { sortDescending() }
@@ -220,7 +243,9 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortedWith(comparator: Comparator<in T>)") {
+    val f_sortedWith = fn("sortedWith(comparator: Comparator<in T>)") {
+        includeDefault()
+    } builder {
         returns("List<T>")
         doc {
             """
@@ -230,7 +255,8 @@ fun ordering(): List<GenericFunction> {
         body {
             """
              if (this is Collection) {
-                if (size <= 1) return this.toMutableList()
+                if (size <= 1) return this.toList()
+                @Suppress("UNCHECKED_CAST")
                 return (toTypedArray<Any?>() as Array<T>).apply { sortWith(comparator) }.asList()
             }
             return toMutableList().apply { sortWith(comparator) }
@@ -247,9 +273,12 @@ fun ordering(): List<GenericFunction> {
             """
         }
 
-        returns("SELF", Sequences)
-        doc(Sequences) {
-            "Returns a sequence that yields elements of this sequence sorted according to the specified [comparator]."
+        specialFor(Sequences) {
+            returns("SELF")
+            doc {
+                "Returns a sequence that yields elements of this sequence sorted according to the specified [comparator]."
+            }
+            sequenceClassification(intermediate, stateful)
         }
         body(Sequences) {
             """
@@ -264,13 +293,14 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortedArrayWith(comparator: Comparator<in T>)") {
-        only(ArraysOfObjects)
+    val f_sortedArrayWith = fn("sortedArrayWith(comparator: Comparator<in T>)") {
+        include(ArraysOfObjects)
+    } builder {
         doc {
             "Returns an array with all elements of this array sorted according the specified [comparator]."
         }
         returns("SELF")
-        body() {
+        body {
             """
             if (isEmpty()) return this
             return this.copyOf().apply { sortWith(comparator) }
@@ -278,19 +308,22 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    templates add f("sortBy(crossinline selector: (T) -> R?)") {
-        inline(true)
-        only(Lists, ArraysOfObjects)
-        doc { f -> """Sorts elements in the ${f.collection} in-place according to natural sort order of the value returned by specified [selector] function.""" }
+    val f_sortBy = fn("sortBy(crossinline selector: (T) -> R?)") {
+        include(Lists, ArraysOfObjects)
+    } builder {
+        inline()
+        doc { """Sorts elements in the ${f.collection} in-place according to natural sort order of the value returned by specified [selector] function.""" }
         returns("Unit")
         typeParam("R : Comparable<R>")
-        customReceiver(Lists) { "MutableList<T>" }
+        specialFor(Lists) { receiver("MutableList<T>") }
 
         body { """if (size > 1) sortWith(compareBy(selector))""" }
     }
 
-    templates add f("sortedBy(crossinline selector: (T) -> R?)") {
-        inline(true)
+    val f_sortedBy = fn("sortedBy(crossinline selector: (T) -> R?)") {
+        includeDefault()
+    } builder {
+        inline()
         returns("List<T>")
         typeParam("R : Comparable<R>")
 
@@ -300,30 +333,35 @@ fun ordering(): List<GenericFunction> {
             """
         }
 
-        returns("SELF", Sequences)
-        doc(Sequences) {
-            "Returns a sequence that yields elements of this sequence sorted according to natural sort order of the value returned by specified [selector] function."
+        specialFor(Sequences) {
+            returns("SELF")
+            doc {
+                "Returns a sequence that yields elements of this sequence sorted according to natural sort order of the value returned by specified [selector] function."
+            }
+            sequenceClassification(intermediate, stateful)
         }
-
         body {
             "return sortedWith(compareBy(selector))"
         }
     }
 
-    templates add f("sortByDescending(crossinline selector: (T) -> R?)") {
-        inline(true)
-        only(Lists, ArraysOfObjects)
-        doc { f -> """Sorts elements in the ${f.collection} in-place descending according to natural sort order of the value returned by specified [selector] function.""" }
+    val f_sortByDescending = fn("sortByDescending(crossinline selector: (T) -> R?)") {
+        include(Lists, ArraysOfObjects)
+    } builder {
+        inline()
+        doc { """Sorts elements in the ${f.collection} in-place descending according to natural sort order of the value returned by specified [selector] function.""" }
         returns("Unit")
         typeParam("R : Comparable<R>")
-        customReceiver(Lists) { "MutableList<T>" }
+        specialFor(Lists) { receiver("MutableList<T>") }
 
         body {
             """if (size > 1) sortWith(compareByDescending(selector))""" }
     }
 
-    templates add f("sortedByDescending(crossinline selector: (T) -> R?)") {
-        inline(true)
+    val f_sortedByDescending = fn("sortedByDescending(crossinline selector: (T) -> R?)") {
+        includeDefault()
+    } builder {
+        inline()
         returns("List<T>")
         typeParam("R : Comparable<R>")
 
@@ -333,9 +371,12 @@ fun ordering(): List<GenericFunction> {
             """
         }
 
-        returns("SELF", Sequences)
-        doc(Sequences) {
-            "Returns a sequence that yields elements of this sequence sorted descending according to natural sort order of the value returned by specified [selector] function."
+        specialFor(Sequences) {
+            returns("SELF")
+            doc {
+                "Returns a sequence that yields elements of this sequence sorted descending according to natural sort order of the value returned by specified [selector] function."
+            }
+            sequenceClassification(intermediate, stateful)
         }
 
         body {
@@ -343,5 +384,4 @@ fun ordering(): List<GenericFunction> {
         }
     }
 
-    return templates
 }

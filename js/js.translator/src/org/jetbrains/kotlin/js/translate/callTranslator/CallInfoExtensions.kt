@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,26 +16,29 @@
 
 package org.jetbrains.kotlin.js.translate.callTranslator
 
+import org.jetbrains.kotlin.js.backend.ast.JsExpression
+import org.jetbrains.kotlin.js.backend.ast.JsName
+import org.jetbrains.kotlin.js.backend.ast.metadata.SideEffectKind
+import org.jetbrains.kotlin.js.backend.ast.metadata.sideEffects
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
-import org.jetbrains.kotlin.js.translate.utils.AnnotationsUtils
-import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
-import org.jetbrains.kotlin.psi.KtSuperExpression
-import com.google.dart.compiler.backend.js.ast.JsExpression
-import org.jetbrains.kotlin.descriptors.VariableDescriptor
-import com.google.dart.compiler.backend.js.ast.JsName
-import org.jetbrains.kotlin.js.translate.context.Namer
-import org.jetbrains.kotlin.js.translate.utils.JsAstUtils
-import org.jetbrains.kotlin.js.translate.context.TranslationContext
+import org.jetbrains.kotlin.descriptors.PropertyAccessorDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
+import org.jetbrains.kotlin.descriptors.VariableDescriptor
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptor
+import org.jetbrains.kotlin.js.translate.reference.ReferenceTranslator
+import org.jetbrains.kotlin.js.translate.utils.AnnotationsUtils
+import org.jetbrains.kotlin.js.translate.utils.JsAstUtils
+import org.jetbrains.kotlin.js.translate.utils.TranslationUtils
+import org.jetbrains.kotlin.psi.KtSuperExpression
 import org.jetbrains.kotlin.resolve.descriptorUtil.isExtension
+import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 
 
 val CallInfo.callableDescriptor: CallableDescriptor
-    get() = resolvedCall.resultingDescriptor.original
-
-fun CallInfo.isExtension(): Boolean = extensionReceiver != null
-
-fun CallInfo.isMemberCall(): Boolean = dispatchReceiver != null
+    get() {
+        val result = resolvedCall.resultingDescriptor.original
+        return if (result is TypeAliasConstructorDescriptor) result.underlyingConstructorDescriptor else result
+    }
 
 fun CallInfo.isNative(): Boolean = AnnotationsUtils.isNativeObject(callableDescriptor)
 
@@ -43,6 +46,12 @@ fun CallInfo.isSuperInvocation(): Boolean {
     val dispatchReceiver = resolvedCall.dispatchReceiver
     return dispatchReceiver is ExpressionReceiver && dispatchReceiver.expression is KtSuperExpression
 }
+
+val CallInfo.calleeOwner: JsExpression
+    get() {
+        val calleeOwner = resolvedCall.resultingDescriptor.containingDeclaration
+        return ReferenceTranslator.translateAsValueReference(calleeOwner, context)
+    }
 
 val VariableAccessInfo.variableDescriptor: VariableDescriptor
     get() = callableDescriptor as VariableDescriptor
@@ -52,22 +61,32 @@ val VariableAccessInfo.variableName: JsName
 
 fun VariableAccessInfo.isGetAccess(): Boolean = value == null
 
-fun VariableAccessInfo.getAccessFunctionName(): String {
-    val descriptor = variableDescriptor
-    if (descriptor is PropertyDescriptor && descriptor.isExtension) {
-        val propertyAccessorDescriptor = if (isGetAccess()) descriptor.getter else descriptor.setter
-        return context.getNameForDescriptor(propertyAccessorDescriptor!!).ident
+fun VariableAccessInfo.getAccessDescriptor(): PropertyAccessorDescriptor {
+    val property = variableDescriptor as PropertyDescriptor
+    return if (isGetAccess()) property.getter!! else property.setter!!
+}
+
+fun VariableAccessInfo.getAccessDescriptorIfNeeded(): CallableDescriptor {
+    return if (variableDescriptor is PropertyDescriptor &&
+               (variableDescriptor.isExtension || TranslationUtils.shouldAccessViaFunctions(variableDescriptor))
+                   ) {
+        getAccessDescriptor()
     }
     else {
-        return Namer.getNameForAccessor(variableName.ident, isGetAccess(), false)
+        variableDescriptor
     }
 }
 
 fun VariableAccessInfo.constructAccessExpression(ref: JsExpression): JsExpression {
-    if (isGetAccess()) {
-        return ref
-    } else {
-        return JsAstUtils.assignment(ref, value!!)
+    return if (isGetAccess()) {
+        ref
+    }
+    else {
+        // This is useful when passing AST to TemporaryAssignmentElimination. It can bring
+        // property assignment like `obj.propertyName = $tmp` to places where `$tmp` gets its value,
+        // but only when it's sure that no side effects possible.
+        ref.sideEffects = SideEffectKind.PURE
+        JsAstUtils.assignment(ref, value!!)
     }
 }
 
@@ -75,12 +94,3 @@ val FunctionCallInfo.functionName: JsName
     get() = context.getNameForDescriptor(callableDescriptor)
 
 fun FunctionCallInfo.hasSpreadOperator(): Boolean = argumentsInfo.hasSpreadOperator
-
-fun TranslationContext.aliasOrValue(callableDescriptor: CallableDescriptor, value: (CallableDescriptor) -> JsExpression): JsExpression {
-    val alias = getAliasForDescriptor(callableDescriptor)
-    if (alias != null) {
-        return alias
-    } else {
-        return value(callableDescriptor)
-    }
-}

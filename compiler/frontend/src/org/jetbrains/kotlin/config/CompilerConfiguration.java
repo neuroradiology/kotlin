@@ -24,8 +24,14 @@ import java.util.*;
 
 @SuppressWarnings("unchecked")
 public class CompilerConfiguration {
-    private final Map<Key, Object> map = new HashMap<Key, Object>();
+    public static CompilerConfiguration EMPTY = new CompilerConfiguration();
+
+    private final Map<Key, Object> map = new LinkedHashMap<>();
     private boolean readOnly = false;
+
+    static {
+        EMPTY.setReadOnly(true);
+    }
 
     @Nullable
     public <T> T get(@NotNull CompilerConfigurationKey<T> key) {
@@ -35,22 +41,34 @@ public class CompilerConfiguration {
 
     @NotNull
     public <T> T get(@NotNull CompilerConfigurationKey<T> key, @NotNull T defaultValue) {
-        T data = (T) map.get(key.ideaKey);
-        return data == null ? defaultValue : unmodifiable(data);
+        T data = get(key);
+        return data == null ? defaultValue : data;
+    }
+
+    @NotNull
+    public <T> T getNotNull(@NotNull CompilerConfigurationKey<T> key) {
+        T data = get(key);
+        assert data != null : "No value for configuration key: " + key;
+        return data;
+    }
+
+    public boolean getBoolean(@NotNull CompilerConfigurationKey<Boolean> key) {
+        return get(key, false);
     }
 
     @NotNull
     public <T> List<T> getList(@NotNull CompilerConfigurationKey<List<T>> key) {
-        List<T> data = (List<T>) map.get(key.ideaKey);
-        if (data == null) {
-            return Collections.emptyList();
-        }
-        else {
-            return Collections.unmodifiableList(data);
-        }
+        List<T> data = get(key);
+        return data == null ? Collections.emptyList() : data;
     }
 
-    public <T> void put(@NotNull CompilerConfigurationKey<T> key, @Nullable T value) {
+    @NotNull
+    public <K, V> Map<K, V> getMap(@NotNull CompilerConfigurationKey<Map<K, V>> key) {
+        Map<K, V> data = get(key);
+        return data == null ? Collections.emptyMap() : data;
+    }
+
+    public <T> void put(@NotNull CompilerConfigurationKey<T> key, @NotNull T value) {
         checkReadOnly();
         map.put(key.ideaKey, value);
     }
@@ -58,22 +76,30 @@ public class CompilerConfiguration {
     public <T> void add(@NotNull CompilerConfigurationKey<List<T>> key, @NotNull T value) {
         checkReadOnly();
         Key<List<T>> ideaKey = key.ideaKey;
-        if (map.get(ideaKey) == null) {
-            map.put(ideaKey, new ArrayList<T>());
-        }
+        map.computeIfAbsent(ideaKey, k -> new ArrayList<T>());
         List<T> list = (List<T>) map.get(ideaKey);
         list.add(value);
     }
 
+    public <K, V> void put(@NotNull CompilerConfigurationKey<Map<K, V>> configurationKey, @NotNull K key, @NotNull V value) {
+        checkReadOnly();
+        Key<Map<K, V>> ideaKey = configurationKey.ideaKey;
+        map.computeIfAbsent(ideaKey, k -> new HashMap<K, V>());
+        Map<K, V> data = (Map<K, V>) map.get(ideaKey);
+        data.put(key, value);
+    }
+
     public <T> void addAll(@NotNull CompilerConfigurationKey<List<T>> key, @NotNull Collection<T> values) {
+        addAll(key, getList(key).size(), values);
+    }
+
+    public <T> void addAll(@NotNull CompilerConfigurationKey<List<T>> key, int index, @NotNull Collection<T> values) {
         checkReadOnly();
         checkForNullElements(values);
         Key<List<T>> ideaKey = key.ideaKey;
-        if (map.get(ideaKey) == null) {
-            map.put(ideaKey, new ArrayList<T>());
-        }
+        map.computeIfAbsent(ideaKey, k -> new ArrayList<T>());
         List<T> list = (List<T>) map.get(ideaKey);
-        list.addAll(values);
+        list.addAll(index, values);
     }
 
     public CompilerConfiguration copy() {
@@ -90,9 +116,12 @@ public class CompilerConfiguration {
 
     public void setReadOnly(boolean readOnly) {
         if (readOnly != this.readOnly) {
-            checkReadOnly();
             this.readOnly = readOnly;
         }
+    }
+
+    public boolean isReadOnly() {
+        return readOnly;
     }
 
     @NotNull
@@ -102,6 +131,9 @@ public class CompilerConfiguration {
         }
         else if (object instanceof Map) {
             return (T) Collections.unmodifiableMap((Map) object);
+        }
+        else if (object instanceof Set) {
+            return (T) Collections.unmodifiableSet((Set) object);
         }
         else if (object instanceof Collection) {
             return (T) Collections.unmodifiableCollection((Collection) object);

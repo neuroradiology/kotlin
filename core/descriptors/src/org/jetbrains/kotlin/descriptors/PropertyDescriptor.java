@@ -18,15 +18,18 @@ package org.jetbrains.kotlin.descriptors;
 
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.types.TypeSubstitution;
 import org.jetbrains.kotlin.types.TypeSubstitutor;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface PropertyDescriptor extends VariableDescriptor, CallableMemberDescriptor {
+public interface PropertyDescriptor extends VariableDescriptorWithAccessors, CallableMemberDescriptor {
+    @Override
     @Nullable
     PropertyGetterDescriptor getGetter();
 
+    @Override
     @Nullable
     PropertySetterDescriptor getSetter();
 
@@ -54,5 +57,7 @@ public interface PropertyDescriptor extends VariableDescriptor, CallableMemberDe
     @Override
     PropertyDescriptor substitute(@NotNull TypeSubstitutor substitutor);
 
-    boolean isLateInit();
+    @NotNull
+    @Override
+    CopyBuilder<? extends PropertyDescriptor> newCopyBuilder();
 }

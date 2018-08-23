@@ -22,30 +22,32 @@ import com.intellij.util.IncorrectOperationException
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtDestructuringDeclaration
+import org.jetbrains.kotlin.psi.KtDestructuringDeclarationEntry
 import org.jetbrains.kotlin.resolve.BindingContext
 
-class KtDestructuringDeclarationReference(element: KtDestructuringDeclaration) : KtMultiReference<KtDestructuringDeclaration>(element) {
+class KtDestructuringDeclarationReference(element: KtDestructuringDeclarationEntry) : AbstractKtReference<KtDestructuringDeclarationEntry>(element) {
     override fun getTargetDescriptors(context: BindingContext): Collection<DeclarationDescriptor> {
-        return expression.entries.mapNotNull { entry ->
-            context.get(BindingContext.COMPONENT_RESOLVED_CALL, entry)?.candidateDescriptor
-        }
+        return listOfNotNull(context[BindingContext.COMPONENT_RESOLVED_CALL, element]?.candidateDescriptor)
     }
 
-    override fun getRangeInElement(): TextRange? {
-        val start = expression.lPar
-        val end = expression.rPar
-        if (start == null || end == null) return TextRange.EMPTY_RANGE
-        return TextRange(start.startOffsetInParent, end.startOffsetInParent)
-    }
+    override fun getRangeInElement() = TextRange(0, element.textLength)
 
     override fun canRename(): Boolean {
         val bindingContext = expression.analyze() //TODO: should it use full body resolve?
         return resolveToDescriptors(bindingContext).all { it is CallableMemberDescriptor && it.kind == CallableMemberDescriptor.Kind.SYNTHESIZED}
     }
 
-    override fun handleElementRename(newElementName: String?): PsiElement? {
+    override fun handleElementRename(newElementName: String): PsiElement? {
         if (canRename()) return expression
         throw IncorrectOperationException()
     }
+
+    override val resolvesByNames: Collection<Name>
+        get() {
+            val destructuringParent = element.parent as? KtDestructuringDeclaration ?: return emptyList()
+            val componentIndex = destructuringParent.entries.indexOf(element) + 1
+            return listOf(Name.identifier("component$componentIndex"))
+        }
 }

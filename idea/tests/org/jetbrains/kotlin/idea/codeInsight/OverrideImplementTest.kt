@@ -17,11 +17,16 @@
 package org.jetbrains.kotlin.idea.codeInsight
 
 import org.jetbrains.kotlin.idea.test.PluginTestCaseBase
+import org.jetbrains.kotlin.idea.test.configureLanguageAndApiVersion
 
 class OverrideImplementTest : AbstractOverrideImplementTest() {
     override fun setUp() {
         super.setUp()
         myFixture.testDataPath = PluginTestCaseBase.getTestDataPathBase() + "/codeInsight/overrideImplement"
+    }
+
+    fun testAndroidxNotNull() {
+        doOverrideDirectoryTest("foo")
     }
 
     fun testEmptyClassBodyFunctionMethod() {
@@ -120,6 +125,10 @@ class OverrideImplementTest : AbstractOverrideImplementTest() {
         doOverrideFileTest()
     }
 
+    fun testOverrideExtensionFunction() {
+        doOverrideFileTest()
+    }
+
     fun testOverrideExtensionProperty() {
         doOverrideFileTest()
     }
@@ -204,6 +213,10 @@ class OverrideImplementTest : AbstractOverrideImplementTest() {
         doOverrideFileTest()
     }
 
+    fun testSuspendFun() {
+        doOverrideFileTest()
+    }
+
     fun testDoNotOverrideFinal() {
         doMultiOverrideFileTest()
     }
@@ -230,5 +243,58 @@ class OverrideImplementTest : AbstractOverrideImplementTest() {
 
     fun testDuplicatedAnyMembersBug() {
         doMultiOverrideFileTest()
+    }
+
+    fun testEqualsInInterface() {
+        doOverrideFileTest("equals")
+    }
+
+    fun testCopyKDoc() {
+        doOverrideFileTest("foo")
+    }
+
+    fun testConvertJavaDoc() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testPlatformTypes() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testPlatformCollectionTypes() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testNullableJavaType() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testJavaxNonnullJavaType() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testNullableKotlinType() {
+        doOverrideDirectoryTest("foo")
+    }
+
+    fun testAbstractAndNonAbstractInheritedFromInterface() {
+        doImplementFileTest("getFoo")
+    }
+
+    fun testTypeAliasNotExpanded() {
+        doOverrideFileTest("test")
+    }
+
+    fun testDataClassEquals() {
+        doOverrideFileTest("equals")
+    }
+
+    fun testCopyExperimental() {
+        configureLanguageAndApiVersion(project, module, "1.3", "1.3")
+        doOverrideFileTest("targetFun")
+    }
+
+    fun testUnresolvedType() {
+        doOverrideFileTest()
     }
 }

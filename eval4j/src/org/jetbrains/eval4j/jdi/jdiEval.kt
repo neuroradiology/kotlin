@@ -19,14 +19,16 @@ package org.jetbrains.eval4j.jdi
 import com.sun.jdi.*
 import org.jetbrains.eval4j.*
 import org.jetbrains.eval4j.Value
+import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper.InternalNameMapper.canBeMangledInternalName
+import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper.InternalNameMapper.internalNameWithoutModuleSuffix
 import org.jetbrains.org.objectweb.asm.Type
 import java.lang.reflect.AccessibleObject
 import com.sun.jdi.Type as jdi_Type
 import com.sun.jdi.Value as jdi_Value
 
-val CLASS = Type.getType(Class::class.java)
-val OBJECT = Type.getType(Any::class.java)
-val BOOTSTRAP_CLASS_DESCRIPTORS = setOf("Ljava/lang/String;", "Ljava/lang/ClassLoader;", "Ljava/lang/Class;")
+private val CLASS = Type.getType(Class::class.java)
+private val OBJECT = Type.getType(Any::class.java)
+private val BOOTSTRAP_CLASS_DESCRIPTORS = setOf("Ljava/lang/String;", "Ljava/lang/ClassLoader;", "Ljava/lang/Class;")
 
 class JDIEval(
         private val vm: VirtualMachine,
@@ -39,7 +41,7 @@ class JDIEval(
             Type.BOOLEAN_TYPE.className to vm.mirrorOf(true).type(),
             Type.BYTE_TYPE.className to vm.mirrorOf(1.toByte()).type(),
             Type.SHORT_TYPE.className to vm.mirrorOf(1.toShort()).type(),
-            Type.INT_TYPE.className to vm.mirrorOf(1.toInt()).type(),
+            Type.INT_TYPE.className to vm.mirrorOf(1).type(),
             Type.CHAR_TYPE.className to vm.mirrorOf('1').type(),
             Type.LONG_TYPE.className to vm.mirrorOf(1L).type(),
             Type.FLOAT_TYPE.className to vm.mirrorOf(1.0f).type(),
@@ -53,9 +55,10 @@ class JDIEval(
     fun loadClass(classType: Type, classLoader: ClassLoaderReference?): Value {
         val loadedClasses = vm.classesByName(classType.internalName)
         if (!loadedClasses.isEmpty()) {
-            val loadedClass = loadedClasses[0]
-            if (classType.descriptor in BOOTSTRAP_CLASS_DESCRIPTORS || loadedClass.classLoader() == classLoader) {
-                return loadedClass.classObject().asValue()
+            for (loadedClass in loadedClasses) {
+                if (loadedClass.isPrepared && (classType.descriptor in BOOTSTRAP_CLASS_DESCRIPTORS || loadedClass.classLoader() == classLoader)) {
+                    return loadedClass.classObject().asValue()
+                }
             }
         }
         if (classLoader == null) {
@@ -84,6 +87,18 @@ class JDIEval(
                     )
             )
         }
+    }
+
+    fun loadClassByName(name: String, classLoader: ClassLoaderReference): jdi_Type {
+        val dimensions = name.count { it == '[' }
+        val baseTypeName = if (dimensions > 0) name.substring(0, name.indexOf('[')) else name
+
+        val baseType = primitiveTypes[baseTypeName] ?: Type.getType("L$baseTypeName;").asReferenceType(classLoader)
+
+        return if (dimensions == 0)
+            baseType
+        else
+            Type.getType("[".repeat(dimensions) + baseType.asType().descriptor).asReferenceType(classLoader)
     }
 
     override fun loadString(str: String): Value = vm.mirrorOf(str).asValue()
@@ -151,7 +166,7 @@ class JDIEval(
             return array.array().getValue(index.int).asValue()
         }
         catch (e: IndexOutOfBoundsException) {
-            throwEvalException(ArrayIndexOutOfBoundsException(e.message))
+            throwInterpretingException(ArrayIndexOutOfBoundsException(e.message))
         }
     }
 
@@ -160,17 +175,16 @@ class JDIEval(
             return array.array().setValue(index.int, newValue.asJdiValue(vm, array.asmType.arrayElementType))
         }
         catch (e: IndexOutOfBoundsException) {
-            throwEvalException(ArrayIndexOutOfBoundsException(e.message))
+            throwInterpretingException(ArrayIndexOutOfBoundsException(e.message))
         }
     }
 
-    private fun findField(fieldDesc: FieldDescription): Field {
-        val _class = fieldDesc.ownerType.asReferenceType()
-        val field = _class.fieldByName(fieldDesc.name)
-        if (field == null) {
-            throwBrokenCodeException(NoSuchFieldError("Field not found: $fieldDesc"))
+    private fun findField(fieldDesc: FieldDescription, receiver: ReferenceType? = null): Field {
+        for (owner in listOfNotNull(receiver, fieldDesc.ownerType.asReferenceType())) {
+            owner.fieldByName(fieldDesc.name)?.let { return it }
         }
-        return field
+
+        throwBrokenCodeException(NoSuchFieldError("Field not found: $fieldDesc"))
     }
 
     private fun findStaticField(fieldDesc: FieldDescription): Field {
@@ -183,7 +197,7 @@ class JDIEval(
 
     override fun getStaticField(fieldDesc: FieldDescription): Value {
         val field = findStaticField(fieldDesc)
-        return mayThrow { field.declaringType().getValue(field) }.asValue()
+        return mayThrow { field.declaringType().getValue(field) }.ifFail(field).asValue()
     }
 
     override fun setStaticField(fieldDesc: FieldDescription, newValue: Value) {
@@ -199,21 +213,37 @@ class JDIEval(
         }
 
         val jdiValue = newValue.asJdiValue(vm, field.type().asType())
-        mayThrow { _class.setValue(field, jdiValue) }
+        mayThrow { _class.setValue(field, jdiValue) }.ifFail(field)
     }
 
     private fun findMethod(methodDesc: MethodDescription, _class: ReferenceType = methodDesc.ownerType.asReferenceType()): Method {
+        val methodName = methodDesc.name
         val method = when (_class) {
-            is ClassType -> {
-                val m = _class.concreteMethodByName(methodDesc.name, methodDesc.desc)
-                if (m == null) listOf() else listOf(m)
+            is ClassType ->
+                _class.concreteMethodByName(methodName, methodDesc.desc)
+            else ->
+                _class.methodsByName(methodName, methodDesc.desc).firstOrNull()
+        }
+
+        if (method != null) {
+            return method
+        }
+
+        // Module name can be different for internal functions during evaluation and compilation
+        val internalNameWithoutSuffix = internalNameWithoutModuleSuffix(methodName)
+        if (internalNameWithoutSuffix != null) {
+            val internalMethods = _class.visibleMethods().filter {
+                val name = it.name()
+                name.startsWith(internalNameWithoutSuffix) && canBeMangledInternalName(name) && it.signature() == methodDesc.desc
             }
-            else -> _class.methodsByName(methodDesc.name, methodDesc.desc)
+
+            if (!internalMethods.isEmpty()) {
+                return internalMethods.singleOrNull() ?:
+                       throwBrokenCodeException(IllegalArgumentException("Several internal methods found for $methodDesc"))
+            }
         }
-        if (method.isEmpty()) {
-            throwBrokenCodeException(NoSuchMethodError("Method not found: $methodDesc"))
-        }
-        return method[0]
+
+        throwBrokenCodeException(NoSuchMethodError("Method not found: $methodDesc"))
     }
 
     override fun invokeStaticMethod(methodDesc: MethodDescription, arguments: List<Value>): Value {
@@ -231,24 +261,32 @@ class JDIEval(
         }
 
         args.disableCollection()
-        val result = mayThrow { _class.invokeMethod(thread, method, args, invokePolicy) }
+        val result = mayThrow { _class.invokeMethod(thread, method, args, invokePolicy) }.ifFail(method)
         args.enableCollection()
         return result.asValue()
     }
 
     override fun getField(instance: Value, fieldDesc: FieldDescription): Value {
-        val field = findField(fieldDesc)
-        val obj = instance.jdiObj.checkNull()
+        val receiver = instance.jdiObj.checkNull()
+        val field = findField(fieldDesc, receiver.referenceType())
 
-        return mayThrow { obj.getValue(field) }.asValue()
+        return mayThrow {
+            try {
+                receiver.getValue(field)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("Possibly incompatible types: " +
+                                               "field declaring type = ${field.declaringType()}, " +
+                                               "instance type = ${receiver.referenceType()}")
+            }
+        }.ifFail(field, receiver).asValue()
     }
 
     override fun setField(instance: Value, fieldDesc: FieldDescription, newValue: Value) {
-        val field = findField(fieldDesc)
-        val obj = instance.jdiObj.checkNull()
+        val receiver = instance.jdiObj.checkNull()
+        val field = findField(fieldDesc, receiver.referenceType())
 
         val jdiValue = newValue.asJdiValue(vm, field.type().asType())
-        mayThrow { obj.setValue(field, jdiValue) }
+        mayThrow { receiver.setValue(field, jdiValue) }
     }
 
     fun unboxType(boxedValue: Value, type: Type): Value {
@@ -276,7 +314,7 @@ class JDIEval(
             Type.CHAR_TYPE -> MethodDescription("java/lang/Character", "valueOf", "(C)Ljava/lang/Character;", false)
             Type.FLOAT_TYPE -> MethodDescription("java/lang/Float", "valueOf", "(F)Ljava/lang/Float;", false)
             Type.DOUBLE_TYPE -> MethodDescription("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;", false)
-            else -> throw UnsupportedOperationException("Couldn't box non primitive type ${value.asmType.internalName}")
+            else -> throw UnsupportedOperationException("Couldn't box non-primitive type ${value.asmType.internalName}")
         }
         return invokeStaticMethod(method, listOf(value))
     }
@@ -288,7 +326,7 @@ class JDIEval(
             val _class = (instance as NewObjectValue).asmType.asReferenceType() as ClassType
             val args = mapArguments(arguments, ctor.safeArgumentTypes())
             args.disableCollection()
-            val result = mayThrow { _class.newInstance(thread, ctor, args, invokePolicy) }
+            val result = mayThrow { _class.newInstance(thread, ctor, args, invokePolicy) }.ifFail(ctor)
             args.enableCollection()
             instance.value = result
             return result.asValue()
@@ -302,24 +340,34 @@ class JDIEval(
             }
 
             args.disableCollection()
-            val result = mayThrow { obj.invokeMethod(thread, method, args, policy) }
+            val result = mayThrow { obj.invokeMethod(thread, method, args, policy) }.ifFail(method, obj)
             args.enableCollection()
             return result.asValue()
         }
 
         val obj = instance.jdiObj.checkNull()
-        if (invokespecial) {
+        return if (invokespecial) {
             val method = findMethod(methodDesc)
-            return doInvokeMethod(obj, method, invokePolicy or ObjectReference.INVOKE_NONVIRTUAL)
+            doInvokeMethod(obj, method, invokePolicy or ObjectReference.INVOKE_NONVIRTUAL)
         }
         else {
             val method = findMethod(methodDesc, obj.referenceType() ?: methodDesc.ownerType.asReferenceType())
-            return doInvokeMethod(obj, method, invokePolicy)
+            doInvokeMethod(obj, method, invokePolicy)
         }
     }
 
     private fun shouldInvokeMethodWithReflection(method: Method, args: List<com.sun.jdi.Value?>): Boolean {
-        return !method.isVarArgs && args.zip(method.argumentTypes()).any { isArrayOfInterfaces(it.first?.type(), it.second) }
+        if (method.isVarArgs) {
+            return false
+        }
+
+        val argumentTypes = try {
+            method.argumentTypes()
+        } catch (e: ClassNotLoadedException) {
+            return false
+        }
+
+        return args.zip(argumentTypes).any { isArrayOfInterfaces(it.first?.type(), it.second) }
     }
 
     private fun isArrayOfInterfaces(valueType: jdi_Type?, expectedType: jdi_Type?): Boolean {
@@ -375,8 +423,8 @@ class JDIEval(
     }
 
 
-    private fun mapArguments(arguments: List<Value>, expecetedTypes: List<jdi_Type>): List<jdi_Value?> {
-        return arguments.zip(expecetedTypes).map {
+    private fun mapArguments(arguments: List<Value>, expectedTypes: List<jdi_Type>): List<jdi_Value?> {
+        return arguments.zip(expectedTypes).map {
             val (arg, expectedType) = it
             arg.asJdiValue(vm, expectedType.asType())
         }
@@ -385,29 +433,67 @@ class JDIEval(
     private fun Method.safeArgumentTypes(): List<jdi_Type> {
         try {
             return argumentTypes()
-        }
-        catch (e: ClassNotLoadedException) {
-            return argumentTypeNames()!!.map {
-                name ->
-                val dimensions = name.count { it == '[' }
-                val baseTypeName = if (dimensions > 0) name.substring(0, name.indexOf('[')) else name
+        } catch (e: ClassNotLoadedException) {
+            return argumentTypeNames()!!.map { name ->
+                val classLoader = declaringType()?.classLoader()
+                if (classLoader != null) {
+                    return@map loadClassByName(name, classLoader)
+                }
 
-                val baseType = primitiveTypes[baseTypeName] ?: Type.getType("L$baseTypeName;").asReferenceType(declaringType().classLoader())
-
-                if (dimensions == 0)
-                    baseType
-                else
-                    Type.getType("[".repeat(dimensions) + baseType.asType().descriptor).asReferenceType(declaringType().classLoader())
+                when (name) {
+                    "void" -> virtualMachine().mirrorOfVoid().type()
+                    "boolean" -> primitiveTypes.getValue(Type.BOOLEAN_TYPE.className)
+                    "byte" -> primitiveTypes.getValue(Type.BYTE_TYPE.className)
+                    "char" -> primitiveTypes.getValue(Type.CHAR_TYPE.className)
+                    "short" -> primitiveTypes.getValue(Type.SHORT_TYPE.className)
+                    "int" -> primitiveTypes.getValue(Type.INT_TYPE.className)
+                    "long" -> primitiveTypes.getValue(Type.LONG_TYPE.className)
+                    "float" -> primitiveTypes.getValue(Type.FLOAT_TYPE.className)
+                    "double" -> primitiveTypes.getValue(Type.DOUBLE_TYPE.className)
+                    else -> virtualMachine().classesByName(name).firstOrNull()
+                            ?: throw IllegalStateException("Unknown class $name")
+                }
             }
         }
     }
 }
 
-fun <T> mayThrow(f: () -> T): T {
+@Suppress("unused")
+private sealed class JdiOperationResult<T> {
+    class Fail<T>(val cause: Exception): JdiOperationResult<T>()
+    class OK<T>(val value: T): JdiOperationResult<T>()
+}
+
+private fun <T> mayThrow(f: () -> T): JdiOperationResult<T> {
     try {
-        return f()
+        return JdiOperationResult.OK(f())
+    }
+    catch (e: IllegalArgumentException) {
+        return JdiOperationResult.Fail<T>(e)
     }
     catch (e: InvocationException) {
         throw ThrownFromEvaluatedCodeException(e.exception().asValue())
+    }
+}
+
+private fun memberInfo(member: TypeComponent, thisObj: ObjectReference?): String {
+    return "\nmember = $member\nobjectRef = $thisObj"
+}
+
+private fun <T> JdiOperationResult<T>.ifFail(member: TypeComponent, thisObj: ObjectReference? = null): T {
+    return ifFail { memberInfo(member, thisObj) }
+}
+
+private fun <T> JdiOperationResult<T>.ifFail(lazyMessage: () -> String): T {
+    return when(this) {
+        is JdiOperationResult.OK -> this.value
+        is JdiOperationResult.Fail -> {
+            if (cause is IllegalArgumentException) {
+                throwBrokenCodeException(IllegalArgumentException(lazyMessage(), this.cause))
+            }
+            else {
+                throwBrokenCodeException(IllegalStateException(lazyMessage(), this.cause))
+            }
+        }
     }
 }

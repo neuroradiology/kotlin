@@ -24,12 +24,12 @@ import org.jetbrains.kotlin.idea.KotlinIcons
 import org.jetbrains.kotlin.idea.completion.handlers.WithTailInsertHandler
 import org.jetbrains.kotlin.idea.core.ArgumentPositionData
 import org.jetbrains.kotlin.idea.core.ExpectedInfo
+import org.jetbrains.kotlin.idea.util.CallType
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtCallElement
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtValueArgument
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.renderer.render
 import org.jetbrains.kotlin.types.KotlinType
 import java.util.*
@@ -46,7 +46,9 @@ object NamedArgumentCompletion {
                 .any { it.isNamed() }
     }
 
-    fun complete(collector: LookupElementsCollector, expectedInfos: Collection<ExpectedInfo>) {
+    fun complete(collector: LookupElementsCollector, expectedInfos: Collection<ExpectedInfo>, callType: CallType<*>) {
+        if (callType != CallType.DEFAULT) return
+
         val nameToParameterType = HashMap<Name, MutableSet<KotlinType>>()
         for (expectedInfo in expectedInfos) {
             val argumentData = expectedInfo.additionalData as? ArgumentPositionData.Positional ?: continue
@@ -56,14 +58,14 @@ object NamedArgumentCompletion {
         }
 
         for ((name, types) in nameToParameterType) {
-            val typeText = types.singleOrNull()?.let { DescriptorRenderer.SHORT_NAMES_IN_TYPES.renderType(it) } ?: "..."
+            val typeText = types.singleOrNull()?.let { BasicLookupElementFactory.SHORT_NAMES_RENDERER.renderType(it) } ?: "..."
             val nameString = name.asString()
-            val lookupElement = LookupElementBuilder.create(nameString)
+            val lookupElement = LookupElementBuilder.create("$nameString =")
                     .withPresentableText("$nameString =")
                     .withTailText(" $typeText")
                     .withIcon(KotlinIcons.PARAMETER)
                     .withInsertHandler(NamedArgumentInsertHandler(name))
-                    .assignPriority(ItemPriority.NAMED_PARAMETER)
+            lookupElement.putUserData(SmartCompletionInBasicWeigher.NAMED_ARGUMENT_KEY, Unit)
             collector.addElement(lookupElement)
         }
     }

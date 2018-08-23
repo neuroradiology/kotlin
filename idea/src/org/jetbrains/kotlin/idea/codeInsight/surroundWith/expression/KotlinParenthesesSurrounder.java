@@ -33,32 +33,20 @@ public class KotlinParenthesesSurrounder extends KotlinExpressionSurrounder {
         return CodeInsightBundle.message("surround.with.parenthesis.template");
     }
 
-    @Override
-    public boolean isApplicable(@NotNull KtExpression expression) {
-        return true;
-    }
-
     @Nullable
     @Override
-    public TextRange surroundExpression(@NotNull Project project, @NotNull Editor editor, @NotNull KtExpression expression) {
-        expression = surroundWithParentheses(expression);
-
-        CodeInsightUtilBase.forcePsiPostprocessAndRestoreElement(expression);
-
-        int offset = expression.getTextRange().getEndOffset();
-        return new TextRange(offset, offset);
-    }
-
-    @NotNull
-    public static KtExpression surroundWithParentheses(@NotNull KtExpression expression) {
-        KtParenthesizedExpression parenthesizedExpression =
-                (KtParenthesizedExpression) KtPsiFactoryKt.KtPsiFactory(expression).createExpression("(a)");
-
+    public TextRange surroundExpression( @NotNull Project project, @NotNull Editor editor, @NotNull KtExpression expression) {
+        KtParenthesizedExpression parenthesizedExpression = (KtParenthesizedExpression) KtPsiFactoryKt
+                .KtPsiFactory(expression).createExpression("(a)");
         KtExpression expressionWithoutParentheses = parenthesizedExpression.getExpression();
         assert expressionWithoutParentheses != null : "JetExpression should exists for " + parenthesizedExpression.getText() + " expression";
         expressionWithoutParentheses.replace(expression);
 
         expression = (KtExpression) expression.replace(parenthesizedExpression);
-        return expression;
+
+        CodeInsightUtilBase.forcePsiPostprocessAndRestoreElement(expression);
+
+        int offset = expression.getTextRange().getEndOffset();
+        return new TextRange(offset, offset);
     }
 }

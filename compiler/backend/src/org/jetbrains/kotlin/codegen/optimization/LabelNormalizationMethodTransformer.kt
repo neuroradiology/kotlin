@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.codegen.optimization
 
+import org.jetbrains.kotlin.codegen.optimization.common.removeEmptyCatchBlocks
 import org.jetbrains.kotlin.codegen.optimization.transformer.MethodTransformer
 import org.jetbrains.org.objectweb.asm.Label
 import org.jetbrains.org.objectweb.asm.tree.*
@@ -34,6 +35,7 @@ class LabelNormalizationMethodTransformer : MethodTransformer() {
                 rewriteNonLabelInstructions()
                 rewriteTryCatchBlocks()
                 rewriteLocalVars()
+                methodNode.removeEmptyCatchBlocks()
             }
         }
 
@@ -47,13 +49,11 @@ class LabelNormalizationMethodTransformer : MethodTransformer() {
                         newLabelNodes[thisNode.label] = prevNode
                         removedAnyLabels = true
                         thisNode = instructions.removeNodeGetNext(thisNode)
-                    }
-                    else {
+                    } else {
                         newLabelNodes[thisNode.label] = thisNode
                         thisNode = thisNode.next
                     }
-                }
-                else {
+                } else {
                     thisNode = thisNode.next
                 }
             }
@@ -81,19 +81,19 @@ class LabelNormalizationMethodTransformer : MethodTransformer() {
         }
 
         private fun rewriteLineNumberNode(oldLineNode: LineNumberNode): AbstractInsnNode? =
-                instructions.replaceNodeGetNext(oldLineNode, oldLineNode.rewriteLabels())
+            instructions.replaceNodeGetNext(oldLineNode, oldLineNode.rewriteLabels())
 
         private fun rewriteJumpInsn(oldJumpNode: JumpInsnNode): AbstractInsnNode? =
-                instructions.replaceNodeGetNext(oldJumpNode, oldJumpNode.rewriteLabels())
+            instructions.replaceNodeGetNext(oldJumpNode, oldJumpNode.rewriteLabels())
 
         private fun rewriteLookupSwitchInsn(oldSwitchNode: LookupSwitchInsnNode): AbstractInsnNode? =
-                instructions.replaceNodeGetNext(oldSwitchNode, oldSwitchNode.rewriteLabels())
+            instructions.replaceNodeGetNext(oldSwitchNode, oldSwitchNode.rewriteLabels())
 
         private fun rewriteTableSwitchInsn(oldSwitchNode: TableSwitchInsnNode): AbstractInsnNode? =
-                instructions.replaceNodeGetNext(oldSwitchNode, oldSwitchNode.rewriteLabels())
+            instructions.replaceNodeGetNext(oldSwitchNode, oldSwitchNode.rewriteLabels())
 
         private fun rewriteFrameNode(oldFrameNode: FrameNode): AbstractInsnNode? =
-                instructions.replaceNodeGetNext(oldFrameNode, oldFrameNode.rewriteLabels())
+            instructions.replaceNodeGetNext(oldFrameNode, oldFrameNode.rewriteLabels())
 
         private fun rewriteTryCatchBlocks() {
             methodNode.tryCatchBlocks = methodNode.tryCatchBlocks.map { oldTcb ->
@@ -107,21 +107,21 @@ class LabelNormalizationMethodTransformer : MethodTransformer() {
         private fun rewriteLocalVars() {
             methodNode.localVariables = methodNode.localVariables.map { oldVar ->
                 LocalVariableNode(
-                        oldVar.name,
-                        oldVar.desc,
-                        oldVar.signature,
-                        getNew(oldVar.start),
-                        getNew(oldVar.end),
-                        oldVar.index
+                    oldVar.name,
+                    oldVar.desc,
+                    oldVar.signature,
+                    getNew(oldVar.start),
+                    getNew(oldVar.end),
+                    oldVar.index
                 )
             }
         }
 
         private fun LineNumberNode.rewriteLabels(): AbstractInsnNode =
-                LineNumberNode(line, getNewOrOld(start))
+            LineNumberNode(line, getNewOrOld(start))
 
         private fun JumpInsnNode.rewriteLabels(): AbstractInsnNode =
-                JumpInsnNode(opcode, getNew(label))
+            JumpInsnNode(opcode, getNew(label))
 
         private fun LookupSwitchInsnNode.rewriteLabels(): AbstractInsnNode {
             val switchNode = LookupSwitchInsnNode(getNew(dflt), keys.toIntArray(), emptyArray())
@@ -143,20 +143,20 @@ class LabelNormalizationMethodTransformer : MethodTransformer() {
         }
 
         private fun getNew(oldLabelNode: LabelNode): LabelNode =
-                newLabelNodes[oldLabelNode.label]!!
+            newLabelNodes[oldLabelNode.label]!!
 
         private fun getNewOrOld(oldLabelNode: LabelNode): LabelNode =
-                newLabelNodes[oldLabelNode.label] ?: oldLabelNode
+            newLabelNodes[oldLabelNode.label] ?: oldLabelNode
     }
 }
 
-private fun InsnList.replaceNodeGetNext(oldNode: AbstractInsnNode, newNode: AbstractInsnNode): AbstractInsnNode? {
+fun InsnList.replaceNodeGetNext(oldNode: AbstractInsnNode, newNode: AbstractInsnNode): AbstractInsnNode? {
     insertBefore(oldNode, newNode)
     remove(oldNode)
     return newNode.next
 }
 
-private fun InsnList.removeNodeGetNext(oldNode: AbstractInsnNode): AbstractInsnNode? {
+fun InsnList.removeNodeGetNext(oldNode: AbstractInsnNode): AbstractInsnNode? {
     val next = oldNode.next
     remove(oldNode)
     return next

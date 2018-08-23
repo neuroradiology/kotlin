@@ -23,10 +23,16 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.refactoring.util.CommonRefactoringUtil
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.TestActionEvent
+import junit.framework.ComparisonFailure
 import junit.framework.TestCase
+import org.jetbrains.kotlin.idea.project.forcedTargetPlatform
 import org.jetbrains.kotlin.idea.test.ConfigLibraryUtil
 import org.jetbrains.kotlin.idea.test.KotlinLightCodeInsightFixtureTestCase
 import org.jetbrains.kotlin.idea.test.KotlinWithJdkAndRuntimeLightProjectDescriptor
+import org.jetbrains.kotlin.js.resolve.JsPlatform
+import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.resolve.TargetPlatform
+import org.jetbrains.kotlin.resolve.jvm.platform.JvmPlatform
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import java.io.File
@@ -35,6 +41,14 @@ abstract class AbstractCodeInsightActionTest : KotlinLightCodeInsightFixtureTest
     protected open fun createAction(fileText: String): CodeInsightAction {
         val actionClassName = InTextDirectivesUtils.findStringWithPrefixes(fileText, "// ACTION_CLASS: ")
         return Class.forName(actionClassName).newInstance() as CodeInsightAction
+    }
+
+    protected open fun configure(mainFilePath: String, mainFileText: String) {
+        myFixture.configureByFile(mainFilePath) as KtFile
+    }
+
+    protected open fun checkExtra() {
+
     }
 
     protected open fun testAction(action: AnAction, forced: Boolean): Presentation {
@@ -50,6 +64,9 @@ abstract class AbstractCodeInsightActionTest : KotlinLightCodeInsightFixtureTest
         val fileText = FileUtil.loadFile(File(path), true)
 
         val conflictFile = File("$path.messages")
+        val afterFile = File("$path.after")
+
+        var mainPsiFile: KtFile? = null
 
         try {
             ConfigLibraryUtil.configureLibrariesByDirective(myModule, PlatformTestUtil.getCommunityPath(), fileText)
@@ -59,13 +76,26 @@ abstract class AbstractCodeInsightActionTest : KotlinLightCodeInsightFixtureTest
             val fileNameBase = mainFile.nameWithoutExtension + "."
             val rootDir = mainFile.parentFile
             rootDir
-                    .list { file, name ->
+                    .list { _, name ->
                         name.startsWith(fileNameBase) && name != mainFileName && (name.endsWith(".kt") || name.endsWith(".java"))
                     }
                     .forEach {
                         myFixture.configureByFile(File(rootDir, it).path.replace(File.separator, "/"))
                     }
-            myFixture.configureByFile(path)
+
+            configure(path, fileText)
+            mainPsiFile = myFixture.file as KtFile
+
+            val targetPlatformName = InTextDirectivesUtils.findStringWithPrefixes(fileText, "// PLATFORM: ")
+            if (targetPlatformName != null) {
+                val targetPlatform = when (targetPlatformName) {
+                    "JVM" -> JvmPlatform
+                    "JavaScript" -> JsPlatform
+                    "Common" -> TargetPlatform.Common
+                    else -> error("Unexpected platform name: $targetPlatformName")
+                }
+                mainPsiFile.forcedTargetPlatform = targetPlatform
+            }
 
             val action = createAction(fileText)
 
@@ -80,15 +110,19 @@ abstract class AbstractCodeInsightActionTest : KotlinLightCodeInsightFixtureTest
             assert(!conflictFile.exists()) { "Conflict file $conflictFile should not exist" }
 
             if (isForced || isApplicableExpected) {
-                val afterFile = File("$path.after")
                 TestCase.assertTrue(afterFile.exists())
                 myFixture.checkResult(FileUtil.loadFile(afterFile, true))
+                checkExtra()
             }
+        }
+        catch (e: ComparisonFailure) {
+            KotlinTestUtils.assertEqualsToFile(afterFile, myFixture.editor)
         }
         catch (e: CommonRefactoringUtil.RefactoringErrorHintException) {
             KotlinTestUtils.assertEqualsToFile(conflictFile, e.message!!)
         }
         finally {
+            mainPsiFile?.forcedTargetPlatform = null
             ConfigLibraryUtil.unconfigureLibrariesByDirective(myModule, fileText)
         }
     }

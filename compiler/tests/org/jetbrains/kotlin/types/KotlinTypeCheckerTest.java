@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,10 @@
 
 package org.jetbrains.kotlin.types;
 
-import com.google.common.collect.Sets;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.kotlin.analyzer.AnalysisResult;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
-import org.jetbrains.kotlin.cli.jvm.compiler.CliLightClassGenerationSupport;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
 import org.jetbrains.kotlin.descriptors.PackageFragmentProvider;
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl;
@@ -29,18 +28,17 @@ import org.jetbrains.kotlin.psi.KtExpression;
 import org.jetbrains.kotlin.psi.KtFile;
 import org.jetbrains.kotlin.psi.KtPsiFactoryKt;
 import org.jetbrains.kotlin.resolve.BindingContext;
-import org.jetbrains.kotlin.resolve.BindingTrace;
 import org.jetbrains.kotlin.resolve.BindingTraceContext;
 import org.jetbrains.kotlin.resolve.TypeResolver;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfoFactory;
-import org.jetbrains.kotlin.resolve.lazy.LazyResolveTestUtil;
+import org.jetbrains.kotlin.resolve.lazy.JvmResolveUtil;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScopeImpl;
 import org.jetbrains.kotlin.resolve.scopes.LexicalScopeKind;
 import org.jetbrains.kotlin.resolve.scopes.receivers.TransientReceiver;
 import org.jetbrains.kotlin.test.ConfigurationKind;
-import org.jetbrains.kotlin.test.KotlinLiteFixture;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 import org.jetbrains.kotlin.tests.di.ContainerForTests;
 import org.jetbrains.kotlin.tests.di.InjectionKt;
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker;
@@ -50,17 +48,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 
-public class KotlinTypeCheckerTest extends KotlinLiteFixture {
-
+public class KotlinTypeCheckerTest extends KotlinTestWithEnvironment {
     private KotlinBuiltIns builtIns;
     private LexicalScope scopeWithImports;
     private TypeResolver typeResolver;
     private ExpressionTypingServices expressionTypingServices;
-
-
-    public KotlinTypeCheckerTest() {
-        super("");
-    }
 
     @Override
     protected KotlinCoreEnvironment createEnvironment() {
@@ -70,7 +62,6 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
     @Override
     public void setUp() throws Exception {
         super.setUp();
-
 
         ModuleDescriptorImpl module = KotlinTestUtils.createEmptyModule();
         builtIns = module.getBuiltIns();
@@ -190,13 +181,13 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
         assertCommonSupertype("Base_T<in Int>", "Base_T<Int>", "Base_T<in Int>");
         assertCommonSupertype("Base_T<in Int>", "Derived_T<Int>", "Base_T<in Int>");
         assertCommonSupertype("Base_T<in Int>", "Derived_T<in Int>", "Base_T<Int>");
-        assertCommonSupertype("Base_T<*>", "Base_T<Int>", "Base_T<*>");
+        assertCommonSupertype("Base_T<out Any?>", "Base_T<Int>", "Base_T<*>");
 
         assertCommonSupertype("Base_T<out Parent>", "Base_T<A>", "Base_T<B>");
     }
 
     public void testCommonSupertypesForRecursive() throws Exception {
-        assertCommonSupertype("Rec<out Rec<out Rec<out Rec<out Rec<out Any?>>>>>", "ARec", "BRec");
+        assertCommonSupertype("Rec<out Rec<out Rec<out Rec<out Rec<*>>>>>", "ARec", "BRec");
     }
 
     public void testIntersect() throws Exception {
@@ -496,7 +487,7 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
 
     private void assertSupertypes(String typeStr, String... supertypeStrs) {
         Set<KotlinType> allSupertypes = TypeUtils.getAllSupertypes(makeType(scopeWithImports, typeStr));
-        Set<KotlinType> expected = Sets.newHashSet();
+        Set<KotlinType> expected = new HashSet<>();
         for (String supertypeStr : supertypeStrs) {
             KotlinType supertype = makeType(scopeWithImports, supertypeStr);
             expected.add(supertype);
@@ -513,17 +504,17 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
     }
 
     private void assertIntersection(String expected, String... types) {
-        Set<KotlinType> typesToIntersect = new LinkedHashSet<KotlinType>();
+        Set<KotlinType> typesToIntersect = new LinkedHashSet<>();
         for (String type : types) {
             typesToIntersect.add(makeType(type));
         }
-        KotlinType result = TypeIntersector.intersectTypes(KotlinTypeChecker.DEFAULT, typesToIntersect);
+        KotlinType result = TypeIntersector.intersectTypes(typesToIntersect);
 //        assertNotNull("Intersection is null for " + typesToIntersect, result);
         assertEquals(makeType(expected), result);
     }
 
     private void assertCommonSupertype(String expected, String... types) {
-        Collection<KotlinType> subtypes = new ArrayList<KotlinType>();
+        Collection<KotlinType> subtypes = new ArrayList<>();
         for (String type : types) {
             subtypes.add(makeType(type));
         }
@@ -545,14 +536,8 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
         Project project = getProject();
         KtExpression ktExpression = KtPsiFactoryKt.KtPsiFactory(project).createExpression(expression);
         KotlinType type = expressionTypingServices.getType(scopeWithImports, ktExpression, TypeUtils.NO_EXPECTED_TYPE, DataFlowInfoFactory.EMPTY, KotlinTestUtils.DUMMY_TRACE);
+        assertNotNull(type);
         assertTrue(type + " != " + expectedType, type.equals(expectedType));
-    }
-
-    private void assertErrorType(String expression) {
-        Project project = getProject();
-        KtExpression ktExpression = KtPsiFactoryKt.KtPsiFactory(project).createExpression(expression);
-        KotlinType type = expressionTypingServices.safeGetType(scopeWithImports, ktExpression, TypeUtils.NO_EXPECTED_TYPE, DataFlowInfoFactory.EMPTY, KotlinTestUtils.DUMMY_TRACE);
-        assertTrue("Error type expected but " + type + " returned", type.isError());
     }
 
     private void assertType(String contextType, String expression, String expectedType) {
@@ -582,15 +567,9 @@ public class KotlinTypeCheckerTest extends KotlinLiteFixture {
     @NotNull
     private LexicalScope getDeclarationsScope(String path) throws IOException {
         KtFile ktFile = KotlinTestUtils.loadJetFile(getProject(), new File(path));
-        BindingTrace trace = new CliLightClassGenerationSupport.CliBindingTrace();
-        LazyResolveTestUtil.resolve(
-                getProject(),
-                trace,
-                Collections.singletonList(ktFile),
-                getEnvironment()
-        );
-
-        return trace.get(BindingContext.LEXICAL_SCOPE, ktFile);
+        AnalysisResult result = JvmResolveUtil.analyze(ktFile, getEnvironment());
+        //noinspection ConstantConditions
+        return result.getBindingContext().get(BindingContext.LEXICAL_SCOPE, ktFile);
     }
 
     private KotlinType makeType(String typeStr) {

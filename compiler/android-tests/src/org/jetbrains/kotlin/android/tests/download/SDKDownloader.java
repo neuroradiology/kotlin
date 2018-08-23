@@ -29,81 +29,114 @@ import java.util.zip.ZipInputStream;
 
 public class SDKDownloader {
     private final String platformZipPath;
-    private final String systemImages;
+    private final String armImage;
+    private final String x86Image;
     private final String platformToolsZipPath;
-    private final String toolsZipPath;
+    private final String skdToolsZipPath;
+    private final String buildToolsZipPath;
+    private final String gradleZipPath;
 
     private final PathManager pathManager;
 
+    private static final String PLATFORM_TOOLS = "27.0.1";
+    private static final String SDK_TOOLS = "25.1.6";
+    public static final String BUILD_TOOLS = "27.0.3";
+    private static final int ANDROID_VERSION = 19;
+    public static final String GRADLE_VERSION = "4.5.1";
+
+
     public SDKDownloader(PathManager pathManager) {
         this.pathManager = pathManager;
-        this.platformZipPath = pathManager.getRootForDownload() + "/platforms.zip";
-        this.systemImages = pathManager.getRootForDownload() + "/system-images.zip";
-        this.platformToolsZipPath = pathManager.getRootForDownload() + "/platform-tools.zip";
-        this.toolsZipPath = pathManager.getRootForDownload() + "/tools.zip";
+        platformZipPath = pathManager.getRootForDownload() + "/platform" + ANDROID_VERSION + ".zip";
+        armImage = pathManager.getRootForDownload() + "/arm-image.zip";
+        x86Image = pathManager.getRootForDownload() + "/x86-image.zip";
+        platformToolsZipPath = pathManager.getRootForDownload() + "/platform-tools" + PLATFORM_TOOLS + ".zip";
+        skdToolsZipPath = pathManager.getRootForDownload() + "/tools" + SDK_TOOLS + ".zip";
+        buildToolsZipPath = pathManager.getRootForDownload() + "/build-tools" + BUILD_TOOLS + ".zip";
+        gradleZipPath = pathManager.getRootForDownload() + "/gradle" + GRADLE_VERSION + ".zip";
     }
 
     public void downloadPlatform() {
-        download("http://dl-ssl.google.com/android/repository/android-16_r04.zip", platformZipPath);  //Same for all platforms
+        download("https://dl-ssl.google.com/android/repository/android-" + ANDROID_VERSION + "_r04.zip", platformZipPath);  //Same for all platforms
     }
 
     private void downloadAbi() {
-        download("http://dl.google.com/android/repository/sysimg_armv7a-16_r03.zip", systemImages);  //Same for all platforms
+        download("https://dl.google.com/android/repository/sys-img/android/armeabi-v7a-" + ANDROID_VERSION + "_r05.zip", armImage);  //Same for all platforms
+        download("https://dl.google.com/android/repository/sys-img/android/x86-" + ANDROID_VERSION + "_r06.zip", x86Image);  //Same for all platforms
     }
 
     public void downloadPlatformTools() {
-        String downloadURL;
-        if (SystemInfo.isWindows) {
-            downloadURL = "http://dl-ssl.google.com/android/repository/platform-tools_r16-windows.zip";
-        }
-        else if (SystemInfo.isMac) {
-            downloadURL = "http://dl-ssl.google.com/android/repository/platform-tools_r16-macosx.zip";
-        }
-        else if (SystemInfo.isUnix) {
-            downloadURL = "http://dl-ssl.google.com/android/repository/platform-tools_r16-linux.zip";
-        }
-        else {
-            throw new IllegalStateException("Your operating system doesn't supported yet.");
-        }
-        download(downloadURL, platformToolsZipPath);
+        download(getDownloadUrl("https://dl-ssl.google.com/android/repository/platform-tools_r" + PLATFORM_TOOLS), platformToolsZipPath);
     }
 
-    public void downloadTools() {
-        String downloadURL;
+    public void downloadSdkTools() {
+        download(getDownloadUrl("https://dl.google.com/android/repository/tools_r" + SDK_TOOLS), skdToolsZipPath);
+    }
+
+    public void downloadBuildTools() {
+        download(getDownloadUrl("https://dl.google.com/android/repository/build-tools_r" + BUILD_TOOLS), buildToolsZipPath);
+    }
+
+    public void downloadGradle() {
+        download("https://services.gradle.org/distributions/gradle-" + GRADLE_VERSION + "-bin.zip", gradleZipPath);
+    }
+
+    private static String getDownloadUrl(String prefix) {
+        String suffix;
         if (SystemInfo.isWindows) {
-            downloadURL = "http://dl.google.com/android/repository/tools_r16-windows.zip";
+            suffix = "-windows.zip";
         }
         else if (SystemInfo.isMac) {
-            downloadURL = "http://dl.google.com/android/repository/tools_r16-macosx.zip";
+            suffix = "-macosx.zip";
         }
         else if (SystemInfo.isUnix) {
-            downloadURL = "http://dl.google.com/android/repository/tools_r16-linux.zip";
+            suffix = "-linux.zip";
         }
         else {
             throw new IllegalStateException("Your operating system doesn't supported yet.");
         }
-        download(downloadURL, toolsZipPath);
+        return prefix + suffix;
     }
 
     public void downloadAll() {
-        downloadTools();
+        downloadSdkTools();
         downloadAbi();
         downloadPlatform();
         downloadPlatformTools();
+        downloadBuildTools();
+        downloadGradle();
     }
 
 
     public void unzipAll() {
+        String androidSdkRoot = pathManager.getAndroidSdkRoot();
         unzip(platformZipPath, pathManager.getPlatformFolderInAndroidSdk());
-        unzip(systemImages, pathManager.getAndroidSdkRoot() + "/system-images/android-16/");
-        unzip(platformToolsZipPath, pathManager.getAndroidSdkRoot());
-        unzip(toolsZipPath, pathManager.getAndroidSdkRoot());
+        new File(pathManager.getPlatformFolderInAndroidSdk() + "/android-4.4.2").renameTo(new File(pathManager.getPlatformFolderInAndroidSdk() + "/android-" + ANDROID_VERSION));
+
+        unzip(armImage, androidSdkRoot + "/system-images/android-" + ANDROID_VERSION + "/default/");
+        unzip(x86Image, androidSdkRoot + "/system-images/android-" + ANDROID_VERSION + "/default/");
+
+        unzip(platformToolsZipPath, androidSdkRoot);
+        unzip(skdToolsZipPath, androidSdkRoot);
+
+        unzip(gradleZipPath, pathManager.getDependenciesRoot());
+
+        //BUILD TOOLS
+        String buildTools = androidSdkRoot + "/build-tools/";
+        String buildToolsFolder = buildTools + BUILD_TOOLS + "/";
+        new File(buildToolsFolder).delete();
+        unzip(buildToolsZipPath, buildTools);
+        new File(buildTools + "/android-8.1.0").renameTo(new File(buildToolsFolder));
     }
 
     public void deleteAll() {
         delete(platformZipPath);
         delete(platformToolsZipPath);
-        delete(toolsZipPath);
+        delete(skdToolsZipPath);
+        delete(buildToolsZipPath);
+        delete(armImage);
+        delete(x86Image);
+        delete(gradleZipPath);
     }
 
     private static void download(String urlString, String output) {
@@ -161,21 +194,18 @@ public class SDKDownloader {
         }
         try {
             byte[] buf = new byte[1024];
-            ZipInputStream zipinputstream;
-            ZipEntry zipentry;
-            zipinputstream = new ZipInputStream(new FileInputStream(pathToFile));
-
-            zipentry = zipinputstream.getNextEntry();
-            try {
-                while (zipentry != null) {
-                    String entryName = zipentry.getName();
+            ZipEntry zipEntry = null;
+            try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(pathToFile))) {
+                zipEntry = zipInputStream.getNextEntry();
+                while (zipEntry != null) {
+                    String entryName = zipEntry.getName();
                     int n;
                     File outputFile = new File(outputFolder + "/" + entryName);
 
-                    if (zipentry.isDirectory()) {
+                    if (zipEntry.isDirectory()) {
                         outputFile.mkdirs();
-                        zipinputstream.closeEntry();
-                        zipentry = zipinputstream.getNextEntry();
+                        zipInputStream.closeEntry();
+                        zipEntry = zipInputStream.getNextEntry();
                         continue;
                     }
                     else {
@@ -186,23 +216,19 @@ public class SDKDownloader {
                         outputFile.createNewFile();
                     }
 
-                    FileOutputStream fileoutputstream = new FileOutputStream(outputFile);
-                    try {
-                        while ((n = zipinputstream.read(buf, 0, 1024)) > -1) {
-                            fileoutputstream.write(buf, 0, n);
+                    try (FileOutputStream fileOutputStream = new FileOutputStream(outputFile)) {
+                        while ((n = zipInputStream.read(buf, 0, 1024)) > -1) {
+                            fileOutputStream.write(buf, 0, n);
                         }
                     }
-                    finally {
-                        fileoutputstream.close();
-                    }
-                    zipinputstream.closeEntry();
-                    zipentry = zipinputstream.getNextEntry();
+                    zipInputStream.closeEntry();
+                    zipEntry = zipInputStream.getNextEntry();
                 }
-
-                zipinputstream.close();
             }
             catch (IOException e) {
-                System.err.println("Entry name: " + zipentry.getName());
+                if (zipEntry != null) {
+                    System.err.println("Entry name: " + zipEntry.getName());
+                }
                 e.printStackTrace();
             }
         }

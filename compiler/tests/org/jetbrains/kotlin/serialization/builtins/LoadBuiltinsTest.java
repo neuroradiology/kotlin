@@ -18,67 +18,45 @@ package org.jetbrains.kotlin.serialization.builtins;
 
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.util.containers.ContainerUtil;
-import kotlin.Unit;
 import kotlin.collections.CollectionsKt;
-import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.kotlin.builtins.DefaultBuiltIns;
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.builtins.functions.BuiltInFictitiousFunctionClassFactory;
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment;
 import org.jetbrains.kotlin.codegen.forTestCompile.ForTestCompileRuntime;
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor;
-import org.jetbrains.kotlin.descriptors.ModuleParameters;
 import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor;
 import org.jetbrains.kotlin.descriptors.PackageFragmentProvider;
+import org.jetbrains.kotlin.descriptors.deserialization.AdditionalClassPartsProvider;
+import org.jetbrains.kotlin.descriptors.deserialization.PlatformDependentDeclarationFilter;
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl;
 import org.jetbrains.kotlin.name.FqName;
-import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtFile;
-import org.jetbrains.kotlin.renderer.DescriptorRenderer;
-import org.jetbrains.kotlin.renderer.DescriptorRendererModifier;
-import org.jetbrains.kotlin.renderer.DescriptorRendererOptions;
-import org.jetbrains.kotlin.renderer.OverrideRenderingPolicy;
-import org.jetbrains.kotlin.resolve.lazy.KotlinTestWithEnvironment;
-import org.jetbrains.kotlin.resolve.lazy.LazyResolveTestUtil;
+import org.jetbrains.kotlin.resolve.lazy.LazyResolveTestUtilsKt;
 import org.jetbrains.kotlin.resolve.lazy.descriptors.LazyPackageDescriptor;
-import org.jetbrains.kotlin.serialization.deserialization.AdditionalSupertypes;
+import org.jetbrains.kotlin.serialization.deserialization.builtins.BuiltInsLoaderImpl;
 import org.jetbrains.kotlin.storage.LockBasedStorageManager;
 import org.jetbrains.kotlin.test.ConfigurationKind;
 import org.jetbrains.kotlin.test.KotlinTestUtils;
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment;
 import org.jetbrains.kotlin.test.TestJdkKind;
 import org.jetbrains.kotlin.test.util.RecursiveDescriptorComparator;
 
 import java.io.File;
-import java.io.InputStream;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import static org.jetbrains.kotlin.builtins.BuiltInsPackageFragmentProviderKt.createBuiltInPackageFragmentProvider;
 import static org.jetbrains.kotlin.builtins.KotlinBuiltIns.*;
 
 public class LoadBuiltinsTest extends KotlinTestWithEnvironment {
     @Override
     protected KotlinCoreEnvironment createEnvironment() {
-        return createEnvironmentWithJdk(ConfigurationKind.JDK_ONLY, TestJdkKind.MOCK_JDK);
+        return createEnvironmentWithJdk(ConfigurationKind.JDK_NO_RUNTIME, TestJdkKind.MOCK_JDK);
     }
 
     public void testBuiltIns() throws Exception {
-        RecursiveDescriptorComparator.Configuration configuration =
-                RecursiveDescriptorComparator.RECURSIVE_ALL.includeMethodsOfKotlinAny(false).withRenderer(
-                        DescriptorRenderer.Companion.withOptions(
-                                new Function1<DescriptorRendererOptions, Unit>() {
-                                    @Override
-                                    public Unit invoke(DescriptorRendererOptions options) {
-                                        options.setWithDefinedIn(false);
-                                        options.setOverrideRenderingPolicy(OverrideRenderingPolicy.RENDER_OPEN_OVERRIDE);
-                                        options.setVerbose(true);
-                                        options.setModifiers(DescriptorRendererModifier.ALL);
-                                        return Unit.INSTANCE;
-                                    }
-                                }
-                        )
-                );
-
         PackageFragmentProvider packageFragmentProvider = createBuiltInsPackageFragmentProvider();
 
         List<KtFile> files = KotlinTestUtils.loadToJetFiles(getEnvironment(), ContainerUtil.concat(
@@ -86,7 +64,8 @@ public class LoadBuiltinsTest extends KotlinTestWithEnvironment {
                 allFilesUnder("core/builtins/src")
         ));
 
-        final ModuleDescriptor module = LazyResolveTestUtil.resolveLazily(files, getEnvironment(), false);
+        ModuleDescriptor module =
+                LazyResolveTestUtilsKt.createResolveSessionForFiles(getEnvironment().getProject(), files, false).getModuleDescriptor();
 
         for (FqName packageFqName : CollectionsKt.listOf(BUILT_INS_PACKAGE_FQ_NAME, COLLECTIONS_PACKAGE_FQ_NAME, RANGES_PACKAGE_FQ_NAME)) {
             PackageFragmentDescriptor fromLazyResolve =
@@ -95,8 +74,8 @@ public class LoadBuiltinsTest extends KotlinTestWithEnvironment {
                 PackageFragmentDescriptor deserialized =
                         CollectionsKt.single(packageFragmentProvider.getPackageFragments(packageFqName));
                 RecursiveDescriptorComparator.validateAndCompareDescriptors(
-                        fromLazyResolve, deserialized, configuration,
-                        new File("compiler/testData/builtin-classes-" + packageFqName.asString().replace('.', '-') + ".txt")
+                        fromLazyResolve, deserialized, AbstractBuiltInsWithJDKMembersTest.createComparatorConfiguration(),
+                        new File("compiler/testData/builtin-classes/default/" + packageFqName.asString().replace('.', '-') + ".txt")
                 );
             }
         }
@@ -105,20 +84,15 @@ public class LoadBuiltinsTest extends KotlinTestWithEnvironment {
     @NotNull
     private static PackageFragmentProvider createBuiltInsPackageFragmentProvider() {
         LockBasedStorageManager storageManager = new LockBasedStorageManager();
-        ModuleDescriptorImpl builtInsModule = new ModuleDescriptorImpl(
-                Name.special("<built-ins module>"), storageManager, ModuleParameters.Empty.INSTANCE, DefaultBuiltIns.getInstance()
-        );
+        ModuleDescriptorImpl builtInsModule =
+                new ModuleDescriptorImpl(KotlinBuiltIns.BUILTINS_MODULE_NAME, storageManager, DefaultBuiltIns.getInstance());
 
-        PackageFragmentProvider packageFragmentProvider = createBuiltInPackageFragmentProvider(
+        PackageFragmentProvider packageFragmentProvider = new BuiltInsLoaderImpl().createBuiltInPackageFragmentProvider(
                 storageManager, builtInsModule, BUILT_INS_PACKAGE_FQ_NAMES,
-                new BuiltInFictitiousFunctionClassFactory(storageManager, builtInsModule),
-                AdditionalSupertypes.None.INSTANCE,
-                new Function1<String, InputStream>() {
-                    @Override
-                    public InputStream invoke(String path) {
-                        return ForTestCompileRuntime.runtimeJarClassLoader().getResourceAsStream(path);
-                    }
-                }
+                Collections.singletonList(new BuiltInFictitiousFunctionClassFactory(storageManager, builtInsModule)),
+                PlatformDependentDeclarationFilter.All.INSTANCE,
+                AdditionalClassPartsProvider.None.INSTANCE,
+                ForTestCompileRuntime.runtimeJarClassLoader()::getResourceAsStream
         );
 
         builtInsModule.initialize(packageFragmentProvider);

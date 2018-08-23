@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,24 +18,42 @@ package org.jetbrains.kotlin.idea.highlighter
 
 import com.intellij.codeInsight.TestFrameworks
 import com.intellij.execution.TestStateStorage
+import com.intellij.execution.actions.RunConfigurationProducer
 import com.intellij.execution.lineMarker.ExecutorAction
 import com.intellij.execution.lineMarker.RunLineMarkerContributor
 import com.intellij.execution.testframework.TestIconMapper
 import com.intellij.execution.testframework.sm.runner.states.TestStateInfo
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.asJava.KtLightClass
+import org.jetbrains.kotlin.asJava.classes.KtLightClass
 import org.jetbrains.kotlin.asJava.toLightClass
 import org.jetbrains.kotlin.asJava.toLightMethods
+import org.jetbrains.kotlin.config.TargetPlatformKind
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassDescriptorWithResolutionScopes
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptorIfAny
+import org.jetbrains.kotlin.idea.js.KotlinJSRunConfigurationDataProvider
+import org.jetbrains.kotlin.idea.project.targetPlatform
+import org.jetbrains.kotlin.idea.util.projectStructure.module
+import org.jetbrains.kotlin.idea.util.string.joinWithEscape
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.psi.psiUtil.containingClassOrObject
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
+import org.jetbrains.kotlin.psi.psiUtil.parentsWithSelf
 import javax.swing.Icon
 
 class KotlinTestRunLineMarkerContributor : RunLineMarkerContributor() {
+    companion object {
+        private val TEST_FQ_NAME = FqName("kotlin.test.Test")
+        private val IGNORE_FQ_NAME = FqName("kotlin.test.Ignore")
+    }
+
     private fun getTestStateIcon(url: String, project: Project): Icon? {
         val defaultIcon = AllIcons.RunConfigurations.TestState.Run
         val state = TestStateStorage.getInstance(project).getState(url) ?: return defaultIcon
@@ -49,22 +67,15 @@ class KotlinTestRunLineMarkerContributor : RunLineMarkerContributor() {
         }
     }
 
-    override fun getInfo(element: PsiElement): RunLineMarkerContributor.Info? {
-        val declaration = element.getStrictParentOfType<KtNamedDeclaration>() ?: return null
-        if (declaration.nameIdentifier != element) return null
-
-        // To prevent IDEA failing on red code
-        if (declaration.resolveToDescriptorIfAny() == null) return null
-
-        val project = element.project
-
+    private fun getJavaTestIcon(declaration: KtNamedDeclaration): Icon? {
         val (url, framework) = when (declaration) {
             is KtClassOrObject -> {
                 val lightClass = declaration.toLightClass() ?: return null
                 val framework = TestFrameworks.detectFramework(lightClass) ?: return null
                 if (!framework.isTestClass(lightClass)) return null
+                val qualifiedName = lightClass.qualifiedName ?: return null
 
-                "java:suite://${lightClass.qualifiedName!!}" to framework
+                "java:suite://$qualifiedName" to framework
             }
 
             is KtNamedFunction -> {
@@ -78,8 +89,84 @@ class KotlinTestRunLineMarkerContributor : RunLineMarkerContributor() {
 
             else -> return null
         }
+        return getTestStateIcon(url, declaration.project) ?: framework.icon
+    }
 
-        val icon = getTestStateIcon(url, project) ?: framework.icon
-        return RunLineMarkerContributor.Info(icon, { "Run Test" }, ExecutorAction.getActions(1))
+    private fun DeclarationDescriptor.isIgnored(): Boolean =
+        annotations.any { it.fqName == IGNORE_FQ_NAME } || ((containingDeclaration as? ClassDescriptor)?.isIgnored() ?: false)
+
+    private fun DeclarationDescriptor.isTest(): Boolean {
+        if (isIgnored()) return false
+
+        if (annotations.any { it.fqName == TEST_FQ_NAME }) return true
+        if (this is ClassDescriptorWithResolutionScopes) {
+            return declaredCallableMembers.any { it.isTest() }
+        }
+        return false
+    }
+
+    private fun getJavaScriptTestIcon(declaration: KtNamedDeclaration, descriptor: DeclarationDescriptor): Icon? {
+        if (!descriptor.isTest()) return null
+
+        val runConfigData = RunConfigurationProducer
+            .getProducers(declaration.project)
+            .asSequence()
+            .filterIsInstance<KotlinJSRunConfigurationDataProvider<*>>()
+            .filter { it.isForTests }
+            .mapNotNull { it.getConfigurationData(declaration) }
+            .firstOrNull() ?: return null
+
+        val locations = ArrayList<String>()
+
+        locations += FileUtil.toSystemDependentName(runConfigData.jsOutputFilePath)
+
+        val klass = when (declaration) {
+            is KtClassOrObject -> declaration
+            is KtNamedFunction -> declaration.containingClassOrObject ?: return null
+            else -> return null
+        }
+        locations += klass.parentsWithSelf.filterIsInstance<KtNamedDeclaration>().mapNotNull { it.name }.toList().asReversed()
+
+        val testName = (declaration as? KtNamedFunction)?.name
+        if (testName != null) {
+            locations += "$testName"
+        }
+
+        val prefix = if (testName != null) "test://" else "suite://"
+
+        val url = prefix + locations.joinWithEscape('.')
+
+        return getTestStateIcon(url, declaration.project)
+    }
+
+    override fun getInfo(element: PsiElement): RunLineMarkerContributor.Info? {
+        val declaration = element.getStrictParentOfType<KtNamedDeclaration>() ?: return null
+        if (declaration.nameIdentifier != element) return null
+
+        if (declaration !is KtClassOrObject && declaration !is KtNamedFunction) return null
+
+        if (declaration is KtNamedFunction && declaration.containingClassOrObject == null) return null
+
+        // To prevent IDEA failing on red code
+        val descriptor = declaration.resolveToDescriptorIfAny() ?: return null
+
+        val icon = getTestIcon(declaration, descriptor) ?: return null
+        return RunLineMarkerContributor.Info(icon, { "Run Test" }, ExecutorAction.getActions())
+    }
+
+    private fun getTestIcon(declaration: KtNamedDeclaration, descriptor: DeclarationDescriptor): Icon? {
+        val module = declaration.module ?: return null
+        val targetPlatformKind = module.targetPlatform ?: return null
+        return when (targetPlatformKind) {
+            is TargetPlatformKind.JavaScript -> getJavaScriptTestIcon(declaration, descriptor)
+            is TargetPlatformKind.Jvm -> getJavaTestIcon(declaration)
+            is TargetPlatformKind.Common -> {
+                val icons = listOfNotNull(getJavaScriptTestIcon(declaration, descriptor), getJavaTestIcon(declaration))
+                when (icons.size) {
+                    0 -> null
+                    else -> icons.distinct().singleOrNull() ?: AllIcons.RunConfigurations.TestState.Run
+                }
+            }
+        }
     }
 }

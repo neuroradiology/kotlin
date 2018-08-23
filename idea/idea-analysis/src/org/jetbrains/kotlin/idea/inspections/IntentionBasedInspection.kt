@@ -16,11 +16,11 @@
 
 package org.jetbrains.kotlin.idea.inspections
 
+import com.intellij.codeInsight.FileModificationService
+import com.intellij.codeInsight.intention.HighPriorityAction
 import com.intellij.codeInsight.intention.IntentionAction
-import com.intellij.codeInspection.LocalInspectionToolSession
-import com.intellij.codeInspection.LocalQuickFixOnPsiElement
-import com.intellij.codeInspection.ProblemHighlightType
-import com.intellij.codeInspection.ProblemsHolder
+import com.intellij.codeInsight.intention.LowPriorityAction
+import com.intellij.codeInspection.*
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -32,23 +32,65 @@ import com.intellij.psi.PsiElementVisitor
 import com.intellij.psi.PsiFile
 import com.intellij.util.SmartList
 import org.jetbrains.kotlin.idea.intentions.SelfTargetingRangeIntention
-import org.jetbrains.kotlin.psi.KtElement
+import org.jetbrains.kotlin.psi.psiUtil.endOffset
+import org.jetbrains.kotlin.psi.psiUtil.getStartOffsetIn
+import org.jetbrains.kotlin.psi.psiUtil.startOffset
+import kotlin.reflect.KClass
 
-abstract class IntentionBasedInspection<TElement : KtElement>(
-        val intentions: List<IntentionBasedInspection.IntentionData<TElement>>,
-        protected val problemText: String?,
-        protected val elementType: Class<TElement>
+// This class was originally created to make possible switching inspection off and using intention instead.
+// Since IDEA 2017.1, it's possible to have inspection severity "No highlighting, only fix"
+// thus making the original purpose useless.
+// The class still can be used, if you want to create a pair for existing intention with additional checker
+abstract class IntentionBasedInspection<TElement : PsiElement> private constructor(
+        private val intentionInfo: IntentionBasedInspection.IntentionData<TElement>,
+        protected open val problemText: String?
 ) : AbstractKotlinInspection() {
 
-    constructor(intention: SelfTargetingRangeIntention<TElement>, additionalChecker: (TElement) -> Boolean = { true })
-    : this(listOf(IntentionData(intention, additionalChecker)), null, intention.elementType)
+    val intention: SelfTargetingRangeIntention<TElement> by lazy {
+        val intentionClass = intentionInfo.intention
+        intentionClass.constructors.single { it.parameters.isEmpty() }.call().apply {
+            inspection = this@IntentionBasedInspection
+        }
+    }
 
-    data class IntentionData<TElement : KtElement>(
-            val intention: SelfTargetingRangeIntention<TElement>,
-            val additionalChecker: (TElement) -> Boolean = { true }
+    @Suppress("DEPRECATION")
+    @Deprecated("Please do not use for new inspections. Use AbstractKotlinInspection as base class for them")
+    constructor(
+            intention: KClass<out SelfTargetingRangeIntention<TElement>>,
+            problemText: String? = null
+    ) : this(IntentionData(intention), problemText)
+
+    constructor(
+            intention: KClass<out SelfTargetingRangeIntention<TElement>>,
+            additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean,
+            problemText: String? = null
+    ) : this(IntentionData(intention, additionalChecker), problemText)
+
+    constructor(
+            intention: KClass<out SelfTargetingRangeIntention<TElement>>,
+            additionalChecker: (TElement) -> Boolean,
+            problemText: String? = null
+    ) : this(IntentionData(intention, { element, _ -> additionalChecker(element) } ), problemText)
+
+
+
+    data class IntentionData<TElement : PsiElement>(
+            val intention: KClass<out SelfTargetingRangeIntention<TElement>>,
+            val additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean = { _, _ -> true }
     )
 
+    open fun additionalFixes(element: TElement): List<LocalQuickFix>? = null
+
+    open fun inspectionTarget(element: TElement): PsiElement? = null
+
+    private fun PsiElement.toRange(baseElement: PsiElement): TextRange {
+        val start = getStartOffsetIn(baseElement)
+        return TextRange(start, start + endOffset - startOffset)
+    }
+
     override fun buildVisitor(holder: ProblemsHolder, isOnTheFly: Boolean, session: LocalInspectionToolSession): PsiElementVisitor {
+
+        val elementType = intention.elementType
         return object : PsiElementVisitor() {
             override fun visitElement(element: PsiElement) {
                 if (!elementType.isInstance(element) || element.textLength == 0) return
@@ -57,56 +99,80 @@ abstract class IntentionBasedInspection<TElement : KtElement>(
                 val targetElement = element as TElement
 
                 var problemRange: TextRange? = null
-                var fixes: SmartList<IntentionBasedQuickFix<*>>? = null
+                var fixes: SmartList<LocalQuickFix>? = null
 
-                for ((intention, additionalChecker) in intentions) {
-                    synchronized(intention) {
-                        val range = intention.applicabilityRange(targetElement)?.let { range ->
-                            val elementRange = targetElement.textRange
-                            assert(range in elementRange) { "Wrong applicabilityRange() result for $intention - should be within element's range" }
-                            range.shiftRight(-elementRange.startOffset)
-                        }
+                val additionalChecker = intentionInfo.additionalChecker
+                run {
+                    val range = intention.applicabilityRange(targetElement)?.let { range ->
+                        val elementRange = targetElement.textRange
+                        assert(range in elementRange) { "Wrong applicabilityRange() result for $intention - should be within element's range" }
+                        range.shiftRight(-elementRange.startOffset)
+                    }
 
-                        if (range != null && additionalChecker(targetElement)) {
-                            problemRange = problemRange?.union(range) ?: range
-                            if (fixes == null) {
-                                fixes = SmartList<IntentionBasedQuickFix<*>>()
-                            }
-                            fixes!!.add(IntentionBasedQuickFix(intention, intention.text, additionalChecker, targetElement))
+                    if (range != null && additionalChecker(targetElement, this@IntentionBasedInspection)) {
+                        problemRange = problemRange?.union(range) ?: range
+                        if (fixes == null) {
+                            fixes = SmartList()
                         }
+                        fixes!!.add(createQuickFix(intention, additionalChecker, targetElement))
                     }
                 }
 
-                if (problemRange != null) {
-                    holder.registerProblem(targetElement, problemText ?: fixes!!.first().name, problemHighlightType, problemRange, *fixes!!.toTypedArray())
+                val range = inspectionTarget(targetElement)?.toRange(element) ?: problemRange
+                if (range != null) {
+                    val allFixes = fixes ?: SmartList()
+                    additionalFixes(targetElement)?.let { allFixes.addAll(it) }
+                    if (!allFixes.isEmpty()) {
+                        holder.registerProblemWithoutOfflineInformation(
+                                targetElement,
+                                problemText ?: allFixes.first().name,
+                                isOnTheFly,
+                                problemHighlightType(targetElement),
+                                range,
+                                *allFixes.toTypedArray()
+                        )
+                    }
                 }
             }
         }
     }
 
-    protected open val problemHighlightType: ProblemHighlightType
-        get() = ProblemHighlightType.GENERIC_ERROR_OR_WARNING
+    protected open fun problemHighlightType(element: TElement): ProblemHighlightType =
+            ProblemHighlightType.GENERIC_ERROR_OR_WARNING
+
+    private fun createQuickFix(
+            intention: SelfTargetingRangeIntention<TElement>,
+            additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean,
+            targetElement: TElement
+    ): IntentionBasedQuickFix {
+        return when (intention) {
+            is LowPriorityAction -> LowPriorityIntentionBasedQuickFix(intention, additionalChecker, targetElement)
+            is HighPriorityAction -> HighPriorityIntentionBasedQuickFix(intention, additionalChecker, targetElement)
+            else -> IntentionBasedQuickFix(intention, additionalChecker, targetElement)
+        }
+    }
 
     /* we implement IntentionAction to provide isAvailable which will be used to hide outdated items and make sure we never call 'invoke' for such item */
-    private class IntentionBasedQuickFix<TElement : KtElement>(
-            private val intention: SelfTargetingRangeIntention<TElement>,
-            private val text: String,
-            private val additionalChecker: (TElement) -> Boolean,
+    internal open inner class IntentionBasedQuickFix(
+            val intention: SelfTargetingRangeIntention<TElement>,
+            private val additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean,
             targetElement: TElement
     ) : LocalQuickFixOnPsiElement(targetElement), IntentionAction {
+
+        private val text = intention.text
 
         // store text into variable because intention instance is shared and may change its text later
         override fun getFamilyName() = intention.familyName
 
         override fun getText(): String = text
 
-        override fun startInWriteAction() = true
+        override fun startInWriteAction() = intention.startInWriteAction()
 
         override fun isAvailable(project: Project, editor: Editor?, file: PsiFile?) = isAvailable()
 
         override fun isAvailable(project: Project, file: PsiFile, startElement: PsiElement, endElement: PsiElement): Boolean {
             assert(startElement == endElement)
-            return intention.applicabilityRange(startElement as TElement) != null && additionalChecker(startElement)
+            return intention.applicabilityRange(startElement as TElement) != null && additionalChecker(startElement, this@IntentionBasedInspection)
         }
 
         override fun invoke(project: Project, editor: Editor?, file: PsiFile?) {
@@ -117,20 +183,33 @@ abstract class IntentionBasedInspection<TElement : KtElement>(
         override fun invoke(project: Project, file: PsiFile, startElement: PsiElement, endElement: PsiElement) {
             assert(startElement == endElement)
             if (!isAvailable(project, file, startElement, endElement)) return
+            if (!FileModificationService.getInstance().prepareFileForWrite(file)) return
 
             val editor = startElement.findExistingEditor()
             editor?.caretModel?.moveToOffset(startElement.textOffset)
             intention.applyTo(startElement as TElement, editor)
         }
-
-        private fun PsiElement.findExistingEditor(): Editor? {
-            val file = containingFile?.virtualFile ?: return null
-            val document = FileDocumentManager.getInstance().getDocument(file) ?: return null
-
-            val editorFactory = EditorFactory.getInstance()
-
-            val editors = editorFactory.getEditors(document)
-            return if (editors.isEmpty()) null else editors[0]
-        }
     }
+
+    private inner class LowPriorityIntentionBasedQuickFix(
+            intention: SelfTargetingRangeIntention<TElement>,
+            additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean,
+            targetElement: TElement
+    ) : IntentionBasedQuickFix(intention, additionalChecker, targetElement), LowPriorityAction
+
+    private inner class HighPriorityIntentionBasedQuickFix(
+            intention: SelfTargetingRangeIntention<TElement>,
+            additionalChecker: (TElement, IntentionBasedInspection<TElement>) -> Boolean,
+            targetElement: TElement
+    ) : IntentionBasedQuickFix(intention, additionalChecker, targetElement), HighPriorityAction
+}
+
+fun PsiElement.findExistingEditor(): Editor? {
+    val file = containingFile?.virtualFile ?: return null
+    val document = FileDocumentManager.getInstance().getDocument(file) ?: return null
+
+    val editorFactory = EditorFactory.getInstance()
+
+    val editors = editorFactory.getEditors(document)
+    return if (editors.isEmpty()) null else editors[0]
 }

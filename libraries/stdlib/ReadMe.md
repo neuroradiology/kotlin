@@ -1,14 +1,21 @@
 ## The Kotlin Standard Library
 
-This module creates the [standard library for kotlin](http://jetbrains.github.com/kotlin/versions/snapshot/apidocs/index.html).
+This module creates the [standard library for Kotlin](http://kotlinlang.org/api/latest/jvm/stdlib/index.html).
 
 ### Notes for contributors
 
-We use some code generation to apply the various collection-like methods to various different types like arrays, strings, kotlin.Iterable and java.lang.Iterable etc.
+We use some code generation to generate the various utility extension function for the various collection-like types like arrays, strings, `Collection<T>`, `Sequence<T>`, `Map<K, V>` etc.
 
-To run the code generator from a kotlin checkout
+These sources are placed into `generated` folder and their names are prefixed with the underscore, for example `generated/_Collections.kt`
 
-    cd libraries/tools/kotlin-stdlib-gen
-    mvn compile exec:java
+To run the code generator use the following command in the root directory of the project:
 
-This then runs the [GenerateStandardLib.kt](https://github.com/JetBrains/kotlin/blob/master/libraries/tools/kotlin-stdlib-gen/src/generators/GenerateStandardLib.kt) script to create the source from the files for java.lang.Iterable<T> and java.util.Collection etc.
+    ./gradlew :tools:kotlin-stdlib-gen:run
+
+> Note: on Windows type `gradlew` without the leading `./`
+
+This then runs the script which generates a significant part of stdlib sources from the [templates](../tools/kotlin-stdlib-gen/src/templates) authored with a special kotlin based DSL.
+
+### Usage samples
+
+If you want to author samples for the standard library, please head to [the samples readme](samples/ReadMe.md).

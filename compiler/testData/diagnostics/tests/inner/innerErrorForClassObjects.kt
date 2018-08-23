@@ -5,12 +5,12 @@ class TestSome<P> {
 }
 
 class Test {
-    companion object : <!UNRESOLVED_REFERENCE, DEBUG_INFO_UNRESOLVED_WITH_TARGET!>InnerClass<!>() {
+    companion <!CYCLIC_SCOPES_WITH_COMPANION!>object<!> : <!UNRESOLVED_REFERENCE, DEBUG_INFO_UNRESOLVED_WITH_TARGET!>InnerClass<!>() {
         val a = object: <!UNRESOLVED_REFERENCE, DEBUG_INFO_UNRESOLVED_WITH_TARGET!>InnerClass<!>() {
         }
 
         fun more(): InnerClass {
-            val b = <!UNRESOLVED_REFERENCE!>InnerClass<!>()
+            val b = <!RESOLUTION_TO_CLASSIFIER!>InnerClass<!>()
 
             val <!UNUSED_VARIABLE!>testVal<!> = <!UNRESOLVED_REFERENCE!>inClass<!>
             <!UNRESOLVED_REFERENCE!>foo<!>()
@@ -22,5 +22,5 @@ class Test {
     val inClass = 12
     fun foo() {}
 
-    open inner class InnerClass
+    open inner class <!CYCLIC_SCOPES_WITH_COMPANION!>InnerClass<!>
 }

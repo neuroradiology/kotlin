@@ -1,6 +1,10 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package kotlin.collections
 
-import java.util.NoSuchElementException
 
 private enum class State {
     Ready,
@@ -13,7 +17,7 @@ private enum class State {
  * A base class to simplify implementing iterators so that implementations only have to implement [computeNext]
  * to implement the iterator, calling [done] when the iteration is complete.
  */
-public abstract class AbstractIterator<T>: Iterator<T> {
+public abstract class AbstractIterator<T> : Iterator<T> {
     private var state = State.NotReady
     private var nextValue: T? = null
 
@@ -29,12 +33,13 @@ public abstract class AbstractIterator<T>: Iterator<T> {
     override fun next(): T {
         if (!hasNext()) throw NoSuchElementException()
         state = State.NotReady
+        @Suppress("UNCHECKED_CAST")
         return nextValue as T
     }
 
     private fun tryToComputeNext(): Boolean {
         state = State.Failed
-        computeNext();
+        computeNext()
         return state == State.Ready
     }
 

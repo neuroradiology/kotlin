@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,18 +16,16 @@
 
 package org.jetbrains.kotlin.idea.util
 
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
-import org.jetbrains.kotlin.renderer.DescriptorRendererModifier
-import org.jetbrains.kotlin.renderer.NameShortness
-import org.jetbrains.kotlin.renderer.OverrideRenderingPolicy
+import org.jetbrains.kotlin.descriptors.annotations.BuiltInAnnotationDescriptor
+import org.jetbrains.kotlin.renderer.*
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.isDynamic
 import org.jetbrains.kotlin.types.typeUtil.builtIns
 
 object IdeDescriptorRenderers {
-    @JvmField val APPROXIMATE_FLEXIBLE_TYPES: (KotlinType) -> KotlinType = { approximateFlexibleTypes(it, true) }
+    @JvmField val APPROXIMATE_FLEXIBLE_TYPES: (KotlinType) -> KotlinType = { it.approximateFlexibleTypes(preferNotNull = false) }
 
-    @JvmField val APPROXIMATE_FLEXIBLE_TYPES_IN_ARGUMENTS: (KotlinType) -> KotlinType = { approximateFlexibleTypes(it, false) }
+    @JvmField val APPROXIMATE_FLEXIBLE_TYPES_NOT_NULL: (KotlinType) -> KotlinType = { it.approximateFlexibleTypes(preferNotNull = true) }
 
     private fun unwrapAnonymousType(type: KotlinType): KotlinType {
         if (type.isDynamic()) return type
@@ -47,24 +45,42 @@ object IdeDescriptorRenderers {
     private val BASE: DescriptorRenderer = DescriptorRenderer.withOptions {
         normalizedVisibilities = true
         withDefinedIn = false
-        showInternalKeyword = false
+        renderDefaultVisibility = false
         overrideRenderingPolicy = OverrideRenderingPolicy.RENDER_OVERRIDE
         unitReturnType = false
+        enhancedTypes = true
         modifiers = DescriptorRendererModifier.ALL
+        renderUnabbreviatedType = false
+        annotationArgumentsRenderingPolicy = AnnotationArgumentsRenderingPolicy.UNLESS_EMPTY
     }
 
     @JvmField val SOURCE_CODE: DescriptorRenderer = BASE.withOptions {
-        nameShortness = NameShortness.SOURCE_CODE_QUALIFIED
+        classifierNamePolicy = ClassifierNamePolicy.SOURCE_CODE_QUALIFIED
         typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES(unwrapAnonymousType(it)) }
     }
 
-    @JvmField val SOURCE_CODE_FOR_TYPE_ARGUMENTS: DescriptorRenderer = BASE.withOptions {
-        nameShortness = NameShortness.SOURCE_CODE_QUALIFIED
-        typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES_IN_ARGUMENTS(unwrapAnonymousType(it)) }
+    @JvmField val SOURCE_CODE_TYPES: DescriptorRenderer = BASE.withOptions {
+        classifierNamePolicy = ClassifierNamePolicy.SOURCE_CODE_QUALIFIED
+        typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES(unwrapAnonymousType(it)) }
+        annotationFilter = { it !is BuiltInAnnotationDescriptor }
+        parameterNamesInFunctionalTypes = false
     }
 
-    @JvmField val SOURCE_CODE_SHORT_NAMES_IN_TYPES: DescriptorRenderer = BASE.withOptions {
-        nameShortness = NameShortness.SHORT
+    @JvmField val SOURCE_CODE_TYPES_WITH_SHORT_NAMES: DescriptorRenderer = BASE.withOptions {
+        classifierNamePolicy = ClassifierNamePolicy.SHORT
         typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES(unwrapAnonymousType(it)) }
+        modifiers -= DescriptorRendererModifier.ANNOTATIONS
+        parameterNamesInFunctionalTypes = false
+    }
+
+    @JvmField val SOURCE_CODE_NOT_NULL_TYPE_APPROXIMATION: DescriptorRenderer = BASE.withOptions {
+        classifierNamePolicy = ClassifierNamePolicy.SOURCE_CODE_QUALIFIED
+        typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES_NOT_NULL(unwrapAnonymousType(it)) }
+    }
+
+    @JvmField val SOURCE_CODE_SHORT_NAMES_NO_ANNOTATIONS: DescriptorRenderer = BASE.withOptions {
+        classifierNamePolicy = ClassifierNamePolicy.SHORT
+        typeNormalizer = { APPROXIMATE_FLEXIBLE_TYPES(unwrapAnonymousType(it)) }
+        modifiers -= DescriptorRendererModifier.ANNOTATIONS
     }
 }

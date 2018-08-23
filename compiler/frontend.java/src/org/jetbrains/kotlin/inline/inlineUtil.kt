@@ -16,33 +16,33 @@
 
 package org.jetbrains.kotlin.inline
 
-import org.jetbrains.kotlin.load.kotlin.FileBasedKotlinClass
 import org.jetbrains.kotlin.load.kotlin.header.KotlinClassHeader
-import org.jetbrains.kotlin.serialization.Flags
-import org.jetbrains.kotlin.serialization.ProtoBuf
-import org.jetbrains.kotlin.serialization.deserialization.NameResolver
-import org.jetbrains.kotlin.serialization.deserialization.TypeTable
-import org.jetbrains.kotlin.serialization.jvm.BitEncoding
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBufUtil
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.deserialization.Flags
+import org.jetbrains.kotlin.metadata.deserialization.NameResolver
+import org.jetbrains.kotlin.metadata.deserialization.TypeTable
+import org.jetbrains.kotlin.metadata.deserialization.getExtensionOrNull
+import org.jetbrains.kotlin.metadata.jvm.JvmProtoBuf
+import org.jetbrains.kotlin.metadata.jvm.JvmProtoBuf.JvmMethodSignature
+import org.jetbrains.kotlin.metadata.jvm.deserialization.JvmProtoBufUtil
 
-fun inlineFunctionsJvmNames(bytes: ByteArray): Set<String> {
-    val header = readKotlinHeader(bytes)
-    val annotationData = header.data
-    val strings = header.strings
-
-    if (annotationData == null || strings == null) return emptySet()
+fun inlineFunctionsJvmNames(header: KotlinClassHeader): Set<String> {
+    val annotationData = header.data ?: return emptySet()
+    val strings = header.strings ?: return emptySet()
 
     return when (header.kind) {
         KotlinClassHeader.Kind.CLASS -> {
-            val classData = JvmProtoBufUtil.readClassDataFrom(BitEncoding.decodeBytes(annotationData), strings)
-            inlineFunctionsJvmNames(classData.classProto.functionList, classData.nameResolver, classData.classProto.typeTable)
+            val (nameResolver, classProto) = JvmProtoBufUtil.readClassDataFrom(annotationData, strings)
+            inlineFunctionsJvmNames(classProto.functionList, nameResolver, classProto.typeTable) +
+            inlineAccessorsJvmNames(classProto.propertyList, nameResolver)
         }
         KotlinClassHeader.Kind.FILE_FACADE,
         KotlinClassHeader.Kind.MULTIFILE_CLASS_PART -> {
-            val packageData = JvmProtoBufUtil.readPackageDataFrom(BitEncoding.decodeBytes(annotationData), strings)
-            inlineFunctionsJvmNames(packageData.packageProto.functionList, packageData.nameResolver, packageData.packageProto.typeTable)
+            val (nameResolver, packageProto) = JvmProtoBufUtil.readPackageDataFrom(annotationData, strings)
+            inlineFunctionsJvmNames(packageProto.functionList, nameResolver, packageProto.typeTable) +
+            inlineAccessorsJvmNames(packageProto.propertyList, nameResolver)
         }
-        else -> emptySet<String>()
+        else -> emptySet()
     }
 }
 
@@ -50,20 +50,31 @@ private fun inlineFunctionsJvmNames(functions: List<ProtoBuf.Function>, nameReso
     val typeTable = TypeTable(protoTypeTable)
     val inlineFunctions = functions.filter { Flags.IS_INLINE.get(it.flags) }
     val jvmNames = inlineFunctions.mapNotNull {
-        JvmProtoBufUtil.getJvmMethodSignature(it, nameResolver, typeTable)
+        JvmProtoBufUtil.getJvmMethodSignature(it, nameResolver, typeTable)?.asString()
     }
     return jvmNames.toSet()
 }
 
-private fun readKotlinHeader(bytes: ByteArray): KotlinClassHeader {
-    var header: KotlinClassHeader? = null
+private fun inlineAccessorsJvmNames(properties: List<ProtoBuf.Property>, nameResolver: NameResolver): Set<String> {
+    val propertiesWithInlineAccessors = properties.filter { proto ->
+        proto.hasGetterFlags() && Flags.IS_INLINE_ACCESSOR.get(proto.getterFlags) ||
+        proto.hasSetterFlags() && Flags.IS_INLINE_ACCESSOR.get(proto.setterFlags)
+    }
+    val inlineAccessors = arrayListOf<JvmMethodSignature>()
+    propertiesWithInlineAccessors.forEach { proto ->
+        val signature = proto.getExtensionOrNull(JvmProtoBuf.propertySignature)
+        if (signature != null) {
+            if (proto.hasGetterFlags() && Flags.IS_INLINE_ACCESSOR.get(proto.getterFlags)) {
+                inlineAccessors.add(signature.getter)
+            }
 
-    FileBasedKotlinClass.create(bytes) { className, classHeader, innerClasses ->
-        header = classHeader
-        null
+            if (proto.hasSetterFlags() && Flags.IS_INLINE_ACCESSOR.get(proto.setterFlags)) {
+                inlineAccessors.add(signature.setter)
+            }
+        }
     }
 
-    if (header == null) throw AssertionError("Could not read kotlin header from byte array")
-
-    return header!!
+    return inlineAccessors.map {
+        nameResolver.getString(it.name) + nameResolver.getString(it.desc)
+    }.toSet()
 }

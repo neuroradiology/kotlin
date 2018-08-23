@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import com.intellij.codeInsight.highlighting.JavaReadWriteAccessDetector
 import com.intellij.codeInsight.highlighting.ReadWriteAccessDetector
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiReference
-import org.jetbrains.kotlin.asJava.KtLightMethod
+import org.jetbrains.kotlin.asJava.elements.KtLightMethod
 import org.jetbrains.kotlin.idea.references.ReferenceAccess
 import org.jetbrains.kotlin.idea.references.readWriteAccess
 import org.jetbrains.kotlin.load.java.JvmAbi
@@ -28,6 +28,10 @@ import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getNonStrictParentOfType
 
 class KotlinReadWriteAccessDetector : ReadWriteAccessDetector() {
+    companion object {
+        val INSTANCE = KotlinReadWriteAccessDetector()
+    }
+
     override fun isReadWriteAccessible(element: PsiElement) = element is KtVariableDeclaration || element is KtParameter
 
     override fun isDeclarationWriteAccess(element: PsiElement) = isReadWriteAccessible(element)
@@ -39,7 +43,7 @@ class KotlinReadWriteAccessDetector : ReadWriteAccessDetector() {
 
         val refTarget = reference.resolve()
         if (refTarget is KtLightMethod) {
-            val origin = refTarget.getOrigin()
+            val origin = refTarget.kotlinOrigin
             val declaration: KtNamedDeclaration = when (origin) {
                 is KtPropertyAccessor -> origin.getNonStrictParentOfType<KtProperty>()
                 is KtProperty, is KtParameter -> origin as KtNamedDeclaration

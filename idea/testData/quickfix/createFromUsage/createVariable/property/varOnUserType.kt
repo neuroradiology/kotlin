@@ -1,5 +1,4 @@
-// "Create member property 'foo'" "true"
-// ERROR: Property must be initialized or be abstract
+// "Create member property 'A.foo'" "true"
 
 class A<T>(val n: T)
 

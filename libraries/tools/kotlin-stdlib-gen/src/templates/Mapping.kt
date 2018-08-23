@@ -1,13 +1,34 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package templates
 
 import templates.Family.*
+import templates.SequenceClass.*
 
-fun mapping(): List<GenericFunction> {
-    val templates = arrayListOf<GenericFunction>()
+object Mapping : TemplateGroupBase() {
 
-    templates add f("withIndex()") {
+    init {
+        val terminalOperationPattern = Regex("^\\w+To")
+        defaultBuilder {
+            if (sequenceClassification.isEmpty()) {
+                if (terminalOperationPattern in signature)
+                    sequenceClassification(terminal)
+                else
+                    sequenceClassification(intermediate, stateless)
+            }
+        }
+    }
+
+    val f_withIndex = fn("withIndex()") {
+        includeDefault()
         include(CharSequences)
-        doc {  f -> "Returns a ${if (f == Sequences) f.mapResult else "lazy [Iterable]"} of [IndexedValue] for each ${f.element} of the original ${f.collection}." }
+    } builder {
+        doc {
+            "Returns a ${if (f == Sequences) f.mapResult else "lazy [Iterable]"} of [IndexedValue] for each ${f.element} of the original ${f.collection}."
+        }
         returns("Iterable<IndexedValue<T>>")
         body {
             """
@@ -15,26 +36,26 @@ fun mapping(): List<GenericFunction> {
             """
         }
 
-        returns(Sequences) { "Sequence<IndexedValue<T>>" }
-        body(Sequences) {
-            """
-            return IndexingSequence(this)
-            """
-        }
+        specialFor(Sequences) { returns("Sequence<IndexedValue<T>>") }
+        body(Sequences) { """return IndexingSequence(this)""" }
     }
 
-    templates add f("mapIndexed(transform: (Int, T) -> R)") {
-        inline(true)
+    val f_mapIndexed = fn("mapIndexed(transform: (index: Int, T) -> R)") {
+        includeDefault()
+        include(CharSequences)
+    } builder {
+        inline()
 
-        doc { f ->
+        doc {
             """
             Returns a ${f.mapResult} containing the results of applying the given [transform] function
             to each ${f.element} and its index in the original ${f.collection}.
+            @param [transform] function that takes the index of ${f.element.prefixWithArticle()} and the ${f.element} itself
+            and returns the result of the transform applied to the ${f.element}.
             """
         }
         typeParam("R")
         returns("List<R>")
-        annotations(Iterables) { """@Suppress("NON_PUBLIC_CALL_FROM_PUBLIC_INLINE")""" }
         body(Iterables) {
             "return mapIndexedTo(ArrayList<R>(collectionSizeOrDefault(10)), transform)"
         }
@@ -44,17 +65,22 @@ fun mapping(): List<GenericFunction> {
         body(CharSequences) {
             "return mapIndexedTo(ArrayList<R>(length), transform)"
         }
-        inline(false, Sequences)
-        returns(Sequences) { "Sequence<R>" }
+        specialFor(Sequences) {
+            inline(Inline.No)
+            returns("Sequence<R>")
+        }
         body(Sequences) {
             "return TransformingIndexedSequence(this, transform)"
         }
     }
 
-    templates add f("map(transform: (T) -> R)") {
-        inline(true)
+    val f_map = fn("map(transform: (T) -> R)") {
+        includeDefault()
+        include(Maps, CharSequences)
+    } builder {
+        inline()
 
-        doc { f ->
+        doc {
             """
             Returns a ${f.mapResult} containing the results of applying the given [transform] function
             to each ${f.element} in the original ${f.collection}.
@@ -62,7 +88,6 @@ fun mapping(): List<GenericFunction> {
         }
         typeParam("R")
         returns("List<R>")
-        annotations(Iterables) { """@Suppress("NON_PUBLIC_CALL_FROM_PUBLIC_INLINE")""" }
         body(Iterables) {
             "return mapTo(ArrayList<R>(collectionSizeOrDefault(10)), transform)"
         }
@@ -73,21 +98,22 @@ fun mapping(): List<GenericFunction> {
             "return mapTo(ArrayList<R>(length), transform)"
         }
 
-        inline(false, Sequences)
-        returns(Sequences) { "Sequence<R>" }
+        specialFor(Sequences) {
+            inline(Inline.No)
+            returns("Sequence<R>")
+        }
         body(Sequences) {
             "return TransformingSequence(this, transform)"
         }
-        include(Maps)
     }
 
-    templates add f("mapNotNull(transform: (T) -> R?)") {
-        inline(true)
-        include(Maps, CharSequences)
-        exclude(ArraysOfPrimitives)
+    val f_mapNotNull = fn("mapNotNull(transform: (T) -> R?)") {
+        include(Iterables, ArraysOfObjects, Sequences, Maps, CharSequences)
+    } builder {
+        inline()
         typeParam("R : Any")
         returns("List<R>")
-        doc { f ->
+        doc {
             """
             Returns a ${f.mapResult} containing only the non-null results of applying the given [transform] function
             to each ${f.element} in the original ${f.collection}.
@@ -97,41 +123,50 @@ fun mapping(): List<GenericFunction> {
             "return mapNotNullTo(ArrayList<R>(), transform)"
         }
 
-        inline(false, Sequences)
-        returns(Sequences) { "Sequence<R>" }
+        specialFor(Sequences) {
+            inline(Inline.No)
+            returns("Sequence<R>")
+        }
         body(Sequences) {
             "return TransformingSequence(this, transform).filterNotNull()"
         }
 
     }
 
-    templates add f("mapIndexedNotNull(transform: (Int, T) -> R?)") {
-        inline(true)
-        include(CharSequences)
-        exclude(ArraysOfPrimitives)
+    val f_mapIndexedNotNull = fn("mapIndexedNotNull(transform: (index: Int, T) -> R?)") {
+        include(Iterables, ArraysOfObjects, Sequences, CharSequences)
+    } builder {
+        inline()
         typeParam("R : Any")
         returns("List<R>")
-        doc { f ->
+        doc {
             """
             Returns a ${f.mapResult} containing only the non-null results of applying the given [transform] function
             to each ${f.element} and its index in the original ${f.collection}.
+            @param [transform] function that takes the index of ${f.element.prefixWithArticle()} and the ${f.element} itself
+            and returns the result of the transform applied to the ${f.element}.
             """
         }
         body {
             "return mapIndexedNotNullTo(ArrayList<R>(), transform)"
         }
 
-        inline(false, Sequences)
-        returns(Sequences) { "Sequence<R>" }
+        specialFor(Sequences) {
+            inline(Inline.No)
+            returns("Sequence<R>")
+        }
         body(Sequences) {
             "return TransformingIndexedSequence(this, transform).filterNotNull()"
         }
     }
 
-    templates add f("mapTo(destination: C, transform: (T) -> R)") {
-        inline(true)
+    val f_mapTo = fn("mapTo(destination: C, transform: (T) -> R)") {
+        includeDefault()
+        include(Maps, CharSequences)
+    } builder {
+        inline()
 
-        doc { f ->
+        doc {
             """
             Applies the given [transform] function to each ${f.element} of the original ${f.collection}
             and appends the results to the given [destination].
@@ -148,16 +183,20 @@ fun mapping(): List<GenericFunction> {
                 return destination
             """
         }
-        include(Maps, CharSequences)
     }
 
-    templates add f("mapIndexedTo(destination: C, transform: (Int, T) -> R)") {
-        inline(true)
+    val f_mapIndexedTo = fn("mapIndexedTo(destination: C, transform: (index: Int, T) -> R)") {
+        includeDefault()
+        include(CharSequences)
+    } builder {
+        inline()
 
-        doc { f ->
+        doc {
             """
             Applies the given [transform] function to each ${f.element} and its index in the original ${f.collection}
             and appends the results to the given [destination].
+            @param [transform] function that takes the index of ${f.element.prefixWithArticle()} and the ${f.element} itself
+            and returns the result of the transform applied to the ${f.element}.
             """
         }
         typeParam("R")
@@ -172,17 +211,16 @@ fun mapping(): List<GenericFunction> {
                 return destination
             """
         }
-        include(CharSequences)
     }
 
-    templates add f("mapNotNullTo(destination: C, transform: (T) -> R?)") {
-        inline(true)
-        include(Maps, CharSequences)
-        exclude(ArraysOfPrimitives)
+    val f_mapNotNullTo = fn("mapNotNullTo(destination: C, transform: (T) -> R?)") {
+        include(Iterables, ArraysOfObjects, Sequences, Maps, CharSequences)
+    } builder {
+        inline()
         typeParam("R : Any")
         typeParam("C : MutableCollection<in R>")
         returns("C")
-        doc { f ->
+        doc {
             """
             Applies the given [transform] function to each ${f.element} in the original ${f.collection}
             and appends only the non-null results to the given [destination].
@@ -196,17 +234,19 @@ fun mapping(): List<GenericFunction> {
         }
     }
 
-    templates add f("mapIndexedNotNullTo(destination: C, transform: (Int, T) -> R?)") {
-        inline(true)
-        include(CharSequences)
-        exclude(ArraysOfPrimitives)
+    val f_mapIndexedNotNullTo = fn("mapIndexedNotNullTo(destination: C, transform: (index: Int, T) -> R?)") {
+        include(Iterables, ArraysOfObjects, Sequences, CharSequences)
+    } builder {
+        inline()
         typeParam("R : Any")
         typeParam("C : MutableCollection<in R>")
         returns("C")
-        doc { f ->
+        doc {
             """
             Applies the given [transform] function to each ${f.element} and its index in the original ${f.collection}
             and appends only the non-null results to the given [destination].
+            @param [transform] function that takes the index of ${f.element.prefixWithArticle()} and the ${f.element} itself
+            and returns the result of the transform applied to the ${f.element}.
             """
         }
         body {
@@ -217,53 +257,38 @@ fun mapping(): List<GenericFunction> {
         }
     }
 
-    templates add f("flatMap(transform: (T) -> Iterable<R>)") {
-        inline(true)
+    val f_flatMap = fn("flatMap(transform: (T) -> Iterable<R>)") {
+        includeDefault()
+        include(Maps, CharSequences)
+    } builder {
+        inline()
 
-        exclude(Sequences)
-        doc { f -> "Returns a single list of all elements yielded from results of [transform] function being invoked on each ${f.element} of original ${f.collection}." }
+        doc { "Returns a single list of all elements yielded from results of [transform] function being invoked on each ${f.element} of original ${f.collection}." }
         typeParam("R")
         returns("List<R>")
         body {
             "return flatMapTo(ArrayList<R>(), transform)"
         }
-        include(Maps, CharSequences)
-    }
-
-    templates add f("flatMap(transform: (T) -> Sequence<R>)") {
-        only(Sequences)
-        doc { "Returns a single sequence of all elements from results of [transform] function being invoked on each element of original sequence." }
-        typeParam("R")
-        returns("Sequence<R>")
-        body {
-            "return FlatteningSequence(this, transform, { it.iterator() })"
+        specialFor(Sequences) {
+            inline(Inline.No)
+            signature("flatMap(transform: (T) -> Sequence<R>)")
+            doc { "Returns a single sequence of all elements from results of [transform] function being invoked on each element of original sequence." }
+            returns("Sequence<R>")
+            body {
+                "return FlatteningSequence(this, transform, { it.iterator() })"
+            }
         }
     }
 
-    templates add f("flatMapTo(destination: C, transform: (T) -> Iterable<R>)") {
-        inline(true)
-        exclude(Sequences)
-        doc { f -> "Appends all elements yielded from results of [transform] function being invoked on each ${f.element} of original ${f.collection}, to the given [destination]." }
-        typeParam("R")
-        typeParam("C : MutableCollection<in R>")
-        returns("C")
-        body {
-            """
-                for (element in this) {
-                    val list = transform(element)
-                    destination.addAll(list)
-                }
-                return destination
-            """
-        }
+    val f_flatMapTo = fn("flatMapTo(destination: C, transform: (T) -> Iterable<R>)") {
+        includeDefault()
         include(Maps, CharSequences)
-    }
-
-    templates add f("flatMapTo(destination: C, transform: (T) -> Sequence<R>)") {
-        inline(true)
-
-        only(Sequences)
-        doc { "Appends all elements yielded from results of [transform] function being invoked on each element of original sequence, to the given [destination]." }
+    } builder {
+        inline()
+        doc { "Appends all elements yielded from results of [transform] function being invoked on each ${f.element} of original ${f.collection}, to the given [destination]." }
+        specialFor(Sequences) {
+            signature("flatMapTo(destination: C, transform: (T) -> Sequence<R>)")
+        }
         typeParam("R")
         typeParam("C : MutableCollection<in R>")
         returns("C")
@@ -278,37 +303,45 @@ fun mapping(): List<GenericFunction> {
         }
     }
 
-    templates add f("groupBy(keySelector: (T) -> K)") {
-        inline(true)
-
+    val f_groupBy_key = fn("groupBy(keySelector: (T) -> K)") {
+        includeDefault()
         include(CharSequences)
-        doc { f ->
+    } builder {
+        inline()
+
+        doc {
             """
             Groups ${f.element.pluralize()} of the original ${f.collection} by the key returned by the given [keySelector] function
             applied to each ${f.element} and returns a map where each group key is associated with a list of corresponding ${f.element.pluralize()}.
-            @sample test.collections.CollectionTest.groupBy
+
+            The returned map preserves the entry iteration order of the keys produced from the original ${f.collection}.
             """
         }
+        sample("samples.collections.Collections.Transformations.groupBy")
+        sequenceClassification(terminal)
         typeParam("K")
         returns("Map<K, List<T>>")
         body { "return groupByTo(LinkedHashMap<K, MutableList<T>>(), keySelector)" }
     }
 
-    templates add f("groupByTo(destination: M, keySelector: (T) -> K)") {
-        inline(true)
-
+    val f_groupByTo_key = fn("groupByTo(destination: M, keySelector: (T) -> K)") {
+        includeDefault()
         include(CharSequences)
+    } builder {
+        inline()
+
         typeParam("K")
         typeParam("M : MutableMap<in K, MutableList<T>>")
-        doc { f ->
+        doc {
             """
             Groups ${f.element.pluralize()} of the original ${f.collection} by the key returned by the given [keySelector] function
             applied to each ${f.element} and puts to the [destination] map each group key associated with a list of corresponding ${f.element.pluralize()}.
 
             @return The [destination] map.
-            @sample test.collections.CollectionTest.groupBy
             """
         }
+        sample("samples.collections.Collections.Transformations.groupBy")
+        sequenceClassification(terminal)
         returns("M")
         body {
             """
@@ -322,18 +355,22 @@ fun mapping(): List<GenericFunction> {
         }
     }
 
-    templates add f("groupBy(keySelector: (T) -> K, valueTransform: (T) -> V)") {
-        inline(true)
-
+    val f_groupBy_key_value = fn("groupBy(keySelector: (T) -> K, valueTransform: (T) -> V)") {
+        includeDefault()
         include(CharSequences)
-        doc { f ->
+    } builder {
+        inline()
+        doc {
             """
             Groups values returned by the [valueTransform] function applied to each ${f.element} of the original ${f.collection}
             by the key returned by the given [keySelector] function applied to the ${f.element}
             and returns a map where each group key is associated with a list of corresponding values.
-            @sample test.collections.CollectionTest.groupByKeysAndValues
+
+            The returned map preserves the entry iteration order of the keys produced from the original ${f.collection}.
             """
         }
+        sample("samples.collections.Collections.Transformations.groupByKeysAndValues")
+        sequenceClassification(terminal)
         typeParam("K")
         typeParam("V")
         returns("Map<K, List<V>>")
@@ -341,23 +378,26 @@ fun mapping(): List<GenericFunction> {
     }
 
 
-    templates add f("groupByTo(destination: M, keySelector: (T) -> K, valueTransform: (T) -> V)") {
-        inline(true)
-
+    val f_groupByTo_key_value = fn("groupByTo(destination: M, keySelector: (T) -> K, valueTransform: (T) -> V)") {
+        includeDefault()
         include(CharSequences)
+    } builder {
+        inline()
         typeParam("K")
         typeParam("V")
         typeParam("M : MutableMap<in K, MutableList<V>>")
 
-        doc { f ->
+        doc {
             """
             Groups values returned by the [valueTransform] function applied to each ${f.element} of the original ${f.collection}
             by the key returned by the given [keySelector] function applied to the ${f.element}
             and puts to the [destination] map each group key associated with a list of corresponding values.
+
             @return The [destination] map.
-            @sample test.collections.CollectionTest.groupByKeysAndValues
             """
         }
+        sample("samples.collections.Collections.Transformations.groupByKeysAndValues")
+        sequenceClassification(terminal)
         returns("M")
         body {
             """
@@ -371,5 +411,33 @@ fun mapping(): List<GenericFunction> {
         }
     }
 
-    return templates
+    val f_groupingBy = fn("groupingBy(crossinline keySelector: (T) -> K)") {
+        include(Iterables, Sequences, ArraysOfObjects, CharSequences)
+    } builder {
+        since("1.1")
+        inline()
+
+        typeParam("T")
+        typeParam("K")
+
+        returns("Grouping<T, K>")
+
+        doc {
+            """
+            Creates a [Grouping] source from ${f.collection.prefixWithArticle()} to be used later with one of group-and-fold operations
+            using the specified [keySelector] function to extract a key from each ${f.element}.
+            """
+        }
+        sample("samples.collections.Collections.Transformations.groupingByEachCount")
+
+        body {
+            """
+            return object : Grouping<T, K> {
+                override fun sourceIterator(): Iterator<T> = this@groupingBy.iterator()
+                override fun keyOf(element: T): K = keySelector(element)
+            }
+            """
+        }
+    }
+
 }

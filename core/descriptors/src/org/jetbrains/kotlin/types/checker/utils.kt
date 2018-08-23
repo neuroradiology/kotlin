@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,10 @@
 
 package org.jetbrains.kotlin.types.checker
 
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.resolve.calls.inference.wrapWithCapturingSubstitution
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.TypeConstructorSubstitution
-import org.jetbrains.kotlin.types.TypeUtils
-import org.jetbrains.kotlin.types.Variance
+import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.typesApproximation.approximateCapturedTypes
 import java.util.*
 
@@ -28,7 +27,7 @@ private class SubtypePathNode(val type: KotlinType, val previous: SubtypePathNod
 
 fun findCorrespondingSupertype(
         subtype: KotlinType, supertype: KotlinType,
-        typeCheckingProcedureCallbacks: TypeCheckingProcedureCallbacks
+        typeCheckingProcedureCallbacks: TypeCheckingProcedureCallbacks = TypeCheckerProcedureCallbacksImpl()
 ): KotlinType? {
     val queue = ArrayDeque<SubtypePathNode>()
     queue.add(SubtypePathNode(subtype, null))
@@ -48,21 +47,29 @@ fun findCorrespondingSupertype(
 
             while (currentPathNode != null) {
                 val currentType = currentPathNode.type
-                if (currentType.arguments.any { it.projectionKind != Variance.INVARIANT }) {
-                    substituted = TypeConstructorSubstitution.create(currentType)
-                                        .wrapWithCapturingSubstitution().buildSubstitutor()
-                                        .safeSubstitute(substituted, Variance.INVARIANT)
-                                        .approximate()
+                substituted = if (currentType.arguments.any { it.projectionKind != Variance.INVARIANT }) {
+                    TypeConstructorSubstitution.create(currentType)
+                            .wrapWithCapturingSubstitution().buildSubstitutor()
+                            .safeSubstitute(substituted, Variance.INVARIANT)
+                            .approximate()
                 }
                 else {
-                    substituted = TypeConstructorSubstitution.create(currentType)
-                                        .buildSubstitutor()
-                                        .safeSubstitute(substituted, Variance.INVARIANT)
+                    TypeConstructorSubstitution.create(currentType)
+                            .buildSubstitutor()
+                            .safeSubstitute(substituted, Variance.INVARIANT)
                 }
 
                 isAnyMarkedNullable = isAnyMarkedNullable || currentType.isMarkedNullable
 
                 currentPathNode = currentPathNode.previous
+            }
+
+            val substitutedConstructor = substituted.constructor
+            if (!typeCheckingProcedureCallbacks.assertEqualTypeConstructors(substitutedConstructor, supertypeConstructor)) {
+                throw AssertionError("Type constructors should be equals!\n" +
+                                     "substitutedSuperType: ${substitutedConstructor.debugInfo()}, \n\n" +
+                                     "supertype: ${supertypeConstructor.debugInfo()} \n" +
+                                     typeCheckingProcedureCallbacks.assertEqualTypeConstructors(substitutedConstructor, supertypeConstructor))
             }
 
             return TypeUtils.makeNullableAsSpecified(substituted, isAnyMarkedNullable)
@@ -77,3 +84,21 @@ fun findCorrespondingSupertype(
 }
 
 private fun KotlinType.approximate() = approximateCapturedTypes(this).upper
+
+private fun TypeConstructor.debugInfo() = buildString {
+    operator fun String.unaryPlus() = appendln(this)
+
+    + "type: ${this@debugInfo}"
+    + "hashCode: ${this@debugInfo.hashCode()}"
+    + "javaClass: ${this@debugInfo::class.java.canonicalName}"
+    var declarationDescriptor: DeclarationDescriptor? = declarationDescriptor
+    while (declarationDescriptor != null) {
+
+        + "fqName: ${DescriptorRenderer.FQ_NAMES_IN_TYPES.render(declarationDescriptor)}"
+        + "javaClass: ${declarationDescriptor::class.java.canonicalName}"
+
+        declarationDescriptor = declarationDescriptor.containingDeclaration
+    }
+}
+
+interface NewTypeVariableConstructor

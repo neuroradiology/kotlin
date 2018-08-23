@@ -1,3 +1,7 @@
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// IGNORE_BACKEND: JS, NATIVE
+
 fun box(): String {
     val l = java.util.ArrayList<Int>()
     l.add(1000)

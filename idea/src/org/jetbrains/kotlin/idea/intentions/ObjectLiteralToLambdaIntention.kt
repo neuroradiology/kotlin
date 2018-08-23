@@ -18,32 +18,37 @@ package org.jetbrains.kotlin.idea.intentions
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.TextRange
+import com.intellij.psi.PsiComment
 import com.intellij.psi.search.LocalSearchScope
 import com.intellij.psi.search.searches.ReferencesSearch
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
-import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToDescriptorIfAny
+import org.jetbrains.kotlin.idea.core.ShortenReferences
+import org.jetbrains.kotlin.idea.core.canMoveLambdaOutsideParentheses
 import org.jetbrains.kotlin.idea.core.moveFunctionLiteralOutsideParentheses
 import org.jetbrains.kotlin.idea.core.replaced
 import org.jetbrains.kotlin.idea.inspections.IntentionBasedInspection
 import org.jetbrains.kotlin.idea.inspections.RedundantSamConstructorInspection
 import org.jetbrains.kotlin.idea.util.CommentSaver
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
-import org.jetbrains.kotlin.idea.util.ShortenReferences
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.load.java.sam.SingleAbstractMethodUtils
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
+import org.jetbrains.kotlin.psi.psiUtil.anyDescendantOfType
 import org.jetbrains.kotlin.psi.psiUtil.contentRange
 import org.jetbrains.kotlin.psi.psiUtil.endOffset
 import org.jetbrains.kotlin.psi.psiUtil.startOffset
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.callUtil.getCalleeExpressionIfAny
+import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
+import org.jetbrains.kotlin.resolve.scopes.receivers.ImplicitClassReceiver
+import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.types.KotlinType
 
-class ObjectLiteralToLambdaInspection : IntentionBasedInspection<KtObjectLiteralExpression>(ObjectLiteralToLambdaIntention())
+class ObjectLiteralToLambdaInspection : IntentionBasedInspection<KtObjectLiteralExpression>(ObjectLiteralToLambdaIntention::class)
 
 class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiteralExpression>(
         KtObjectLiteralExpression::class.java,
@@ -55,7 +60,7 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
 
         if (!SingleAbstractMethodUtils.isSamType(baseType)) return null
 
-        val functionDescriptor = singleFunction.resolveToDescriptor() as? FunctionDescriptor ?: return null
+        val functionDescriptor = singleFunction.resolveToDescriptorIfAny(BodyResolveMode.FULL) ?: return null
         val overridden = functionDescriptor.overriddenDescriptors.singleOrNull() ?: return null
         if (overridden.modality != Modality.ABSTRACT) return null
 
@@ -63,29 +68,37 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
         if (singleFunction.valueParameters.any { it.name == null }) return null
 
         val bodyExpression = singleFunction.bodyExpression!!
+        val context = bodyExpression.analyze()
+        val containingDeclaration = functionDescriptor.containingDeclaration
 
         // this-reference
-        val thisReferences = bodyExpression.collectDescendantsOfType<KtThisExpression> { it !is KtClassOrObject }
-        for (thisReference in thisReferences) {
-            val context = thisReference.analyze(BodyResolveMode.PARTIAL)
-            val thisDescriptor = context[BindingContext.REFERENCE_TARGET, thisReference.instanceReference]
-            if (thisDescriptor == functionDescriptor.containingDeclaration) {
-                return null
-            }
-        }
+        if (bodyExpression.anyDescendantOfType<KtThisExpression> { thisReference ->
+            context[BindingContext.REFERENCE_TARGET, thisReference.instanceReference] == containingDeclaration
+        }) return null
 
         // Recursive call, skip labels
         if (ReferencesSearch.search(singleFunction, LocalSearchScope(bodyExpression)).any { it.element !is KtLabelReferenceExpression }) {
             return null
         }
 
-        return TextRange(element.objectDeclaration.getObjectKeyword().startOffset, baseTypeRef.endOffset)
+        fun ReceiverValue?.isImplicitClassFor(descriptor: DeclarationDescriptor) =
+                this is ImplicitClassReceiver && classDescriptor == descriptor
+
+        if (bodyExpression.anyDescendantOfType<KtExpression> { expression ->
+            val resolvedCall = expression.getResolvedCall(context)
+            resolvedCall?.let {
+                it.dispatchReceiver.isImplicitClassFor(containingDeclaration) ||
+                it.extensionReceiver.isImplicitClassFor(containingDeclaration)
+            } ?: false
+        }) return null
+
+        return TextRange(element.objectDeclaration.getObjectKeyword()!!.startOffset, baseTypeRef.endOffset)
     }
 
     override fun applyTo(element: KtObjectLiteralExpression, editor: Editor?) {
         val commentSaver = CommentSaver(element)
 
-        val (@Suppress("UNUSED_VARIABLE") baseTypeRef, baseType, singleFunction) = extractData(element)!!
+        val (_, baseType, singleFunction) = extractData(element)!!
 
         val returnSaver = ReturnSaver(singleFunction)
 
@@ -111,13 +124,19 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
                 appendFixedText("->")
             }
 
-            if (singleFunction.hasBlockBody()) {
-                appendChildRange((body as KtBlockExpression).contentRange())
+            val lastCommentOwner = if (singleFunction.hasBlockBody()) {
+                val contentRange = (body as KtBlockExpression).contentRange()
+                appendChildRange(contentRange)
+                contentRange.last
             }
             else {
                 appendExpression(body)
+                body
             }
 
+            if (lastCommentOwner?.anyDescendantOfType<PsiComment> { it.tokenType == KtTokens.EOL_COMMENT } ?: false) {
+                appendFixedText("\n")
+            }
             appendFixedText("}")
         }
 
@@ -126,7 +145,7 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
 
         val callee = replaced.getCalleeExpressionIfAny()!! as KtNameReferenceExpression
         val callExpression = callee.parent as KtCallExpression
-        val functionLiteral = callExpression.lambdaArguments.single().getLambdaExpression()
+        val functionLiteral = callExpression.lambdaArguments.single().getLambdaExpression()!!
 
         val returnLabel = callee.getReferencedNameAsName()
         returnSaver.restore(functionLiteral, returnLabel)
@@ -136,12 +155,13 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
                                  ?.parent as? KtCallExpression
         if (parentCall != null && RedundantSamConstructorInspection.samConstructorCallsToBeConverted(parentCall).singleOrNull() == callExpression) {
             RedundantSamConstructorInspection.replaceSamConstructorCall(callExpression)
-            if (MoveLambdaOutsideParenthesesIntention.canMove(parentCall)) {
+            if (parentCall.canMoveLambdaOutsideParentheses()) {
                 parentCall.moveFunctionLiteralOutsideParentheses()
             }
         }
         else {
-            ShortenReferences.DEFAULT.process(replaced.getContainingKtFile(), replaced.startOffset, callee.endOffset)
+            val endOffset = (callee.parent as? KtCallExpression)?.typeArgumentList?.endOffset ?: callee.endOffset
+            ShortenReferences.DEFAULT.process(replaced.containingKtFile, replaced.startOffset, endOffset)
         }
     }
 
@@ -157,7 +177,7 @@ class ObjectLiteralToLambdaIntention : SelfTargetingRangeIntention<KtObjectLiter
         val singleFunction = objectDeclaration.declarations.singleOrNull() as? KtNamedFunction ?: return null
         if (!singleFunction.hasModifier(KtTokens.OVERRIDE_KEYWORD)) return null
 
-        val delegationSpecifier = objectDeclaration.getSuperTypeListEntries().singleOrNull() ?: return null
+        val delegationSpecifier = objectDeclaration.superTypeListEntries.singleOrNull() ?: return null
         val typeRef = delegationSpecifier.typeReference ?: return null
         val bindingContext = typeRef.analyze(BodyResolveMode.PARTIAL)
         val baseType = bindingContext[BindingContext.TYPE, typeRef] ?: return null

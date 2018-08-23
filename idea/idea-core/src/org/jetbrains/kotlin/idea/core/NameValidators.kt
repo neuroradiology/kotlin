@@ -18,6 +18,7 @@ package org.jetbrains.kotlin.idea.core
 
 import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptorWithSource
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptorWithVisibility
 import org.jetbrains.kotlin.idea.caches.resolve.analyze
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
@@ -35,6 +36,8 @@ import org.jetbrains.kotlin.resolve.descriptorUtil.isExtension
 import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope
 import org.jetbrains.kotlin.resolve.scopes.utils.findClassifier
+import org.jetbrains.kotlin.resolve.source.getPsi
+import org.jetbrains.kotlin.types.ErrorUtils
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 import java.util.*
 
@@ -60,14 +63,18 @@ class CollectingNameValidator @JvmOverloads constructor(
 class NewDeclarationNameValidator(
         private val visibleDeclarationsContext: KtElement?,
         private val checkDeclarationsIn: Sequence<PsiElement>,
-        private val target: NewDeclarationNameValidator.Target
+        private val target: NewDeclarationNameValidator.Target,
+        private val excludedDeclarations: List<KtDeclaration> = emptyList()
 ) : (String) -> Boolean {
-
-    constructor(container: PsiElement, anchor: PsiElement?, target: NewDeclarationNameValidator.Target)
+    constructor(container: PsiElement,
+                anchor: PsiElement?,
+                target: NewDeclarationNameValidator.Target,
+                excludedDeclarations: List<KtDeclaration> = emptyList())
         : this(
             (anchor ?: container).parentsWithSelf.firstIsInstanceOrNull<KtElement>(),
             anchor?.siblings() ?: container.allChildren,
-            target)
+            target,
+            excludedDeclarations)
 
     enum class Target {
         VARIABLES,
@@ -88,6 +95,8 @@ class NewDeclarationNameValidator(
         }
     }
 
+    private fun isExcluded(it: DeclarationDescriptorWithSource) = ErrorUtils.isError(it) || it.source.getPsi() in excludedDeclarations
+
     private fun LexicalScope.hasConflict(name: Name): Boolean {
         fun DeclarationDescriptor.isVisible(): Boolean {
             return when (this) {
@@ -98,19 +107,20 @@ class NewDeclarationNameValidator(
 
         return when(target) {
             Target.VARIABLES ->
-                getAllAccessibleVariables(name).any { !it.isExtension && it.isVisible() }
+                getAllAccessibleVariables(name).any { !it.isExtension && it.isVisible() && !isExcluded(it) }
             Target.FUNCTIONS_AND_CLASSES ->
-                getAllAccessibleFunctions(name).any { !it.isExtension && it.isVisible() } ||
-                findClassifier(name, NoLookupLocation.FROM_IDE)?.let { it.isVisible() } ?: false
+                getAllAccessibleFunctions(name).any { !it.isExtension && it.isVisible() && !isExcluded(it) } ||
+                findClassifier(name, NoLookupLocation.FROM_IDE)?.let { it.isVisible() && !isExcluded(it) } ?: false
         }
     }
 
     private fun KtNamedDeclaration.isConflicting(name: Name): Boolean {
+        if (this in excludedDeclarations) return false
         if (nameAsName != name) return false
         if (this is KtCallableDeclaration && receiverTypeReference != null) return false
         return when(target) {
-            Target.VARIABLES -> this is KtVariableDeclaration
-            Target.FUNCTIONS_AND_CLASSES -> this is KtNamedFunction || this is KtClassOrObject
+            Target.VARIABLES -> this is KtVariableDeclaration || this is KtParameter
+            Target.FUNCTIONS_AND_CLASSES -> this is KtNamedFunction || this is KtClassOrObject || this is KtTypeAlias
         }
     }
 }

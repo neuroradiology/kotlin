@@ -16,6 +16,8 @@
 
 package kotlin.annotation
 
+import kotlin.annotation.AnnotationTarget.*
+
 /**
  * Contains the list of code elements which are the possible annotation targets
  */
@@ -47,7 +49,10 @@ public enum class AnnotationTarget {
     /** Any expression */
     EXPRESSION,
     /** File */
-    FILE
+    FILE,
+    /** Type alias */
+    @SinceKotlin("1.1")
+    TYPEALIAS
 }
 
 /**
@@ -67,8 +72,8 @@ public enum class AnnotationRetention {
 /**
  * This meta-annotation indicates the kinds of code elements which are possible targets of an annotation.
  *
- * If the target meta-annotation is not present on an annotation declaration, the annotation
- * is applicable to any code element, except type parameters, type usages, expressions, and files.
+ * If the target meta-annotation is not present on an annotation declaration, the annotation is applicable to the following elements:
+ * [CLASS], [PROPERTY], [FIELD], [LOCAL_VARIABLE], [VALUE_PARAMETER], [CONSTRUCTOR], [FUNCTION], [PROPERTY_GETTER], [PROPERTY_SETTER].
  *
  * @property allowedTargets list of allowed annotation targets
  */
@@ -91,7 +96,8 @@ public annotation class Retention(val value: AnnotationRetention = AnnotationRet
 public annotation class Repeatable
 
 /**
- * This meta-annotation determines that an annotation is a part of public API and therefore must be documented
+ * This meta-annotation determines that an annotation is a part of public API and therefore should be included in the generated
+ * documentation for the element to which the annotation is applied.
  */
 @Target(AnnotationTarget.ANNOTATION_CLASS)
 public annotation class MustBeDocumented

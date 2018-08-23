@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,27 +19,44 @@ package org.jetbrains.kotlin.descriptors;
 import kotlin.collections.SetsKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.descriptors.impl.TypeAliasConstructorDescriptor;
 import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue;
+import org.jetbrains.kotlin.resolve.scopes.receivers.SuperCallReceiverValue;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ThisClassReceiver;
+import org.jetbrains.kotlin.types.DynamicTypesKt;
+import org.jetbrains.kotlin.types.KotlinType;
 import org.jetbrains.kotlin.util.ModuleVisibilityHelper;
 import org.jetbrains.kotlin.utils.CollectionsKt;
 
 import java.util.*;
 
 public class Visibilities {
+    @NotNull
     public static final Visibility PRIVATE = new Visibility("private", false) {
         @Override
         public boolean mustCheckInImports() {
             return true;
         }
 
+        private boolean hasContainingSourceFile(@NotNull DeclarationDescriptor descriptor) {
+            return DescriptorUtils.getContainingSourceFile(descriptor) != SourceFile.NO_SOURCE_FILE;
+        }
+
         @Override
         public boolean isVisible(@Nullable ReceiverValue receiver, @NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
-            if (DescriptorUtils.isTopLevelDeclaration(what)) {
-                SourceFile fromContainingFile = DescriptorUtils.getContainingSourceFile(from);
-                if (fromContainingFile != SourceFile.NO_SOURCE_FILE) {
-                    return fromContainingFile.equals(DescriptorUtils.getContainingSourceFile(what));
+            if (DescriptorUtils.isTopLevelDeclaration(what) && hasContainingSourceFile(from)) {
+                return inSameFile(what, from);
+            }
+
+            if (what instanceof ConstructorDescriptor) {
+                ClassifierDescriptorWithTypeParameters classDescriptor = ((ConstructorDescriptor) what).getContainingDeclaration();
+                if (DescriptorUtils.isSealedClass(classDescriptor)
+                    && DescriptorUtils.isTopLevelDeclaration(classDescriptor)
+                    && from instanceof ConstructorDescriptor
+                    && DescriptorUtils.isTopLevelDeclaration(from.getContainingDeclaration())
+                    && inSameFile(what, from)) {
+                    return true;
                 }
             }
 
@@ -84,10 +101,15 @@ public class Visibilities {
      *      }
      *  }
      */
+    @NotNull
     public static final Visibility PRIVATE_TO_THIS = new Visibility("private_to_this", false) {
         @Override
         public boolean isVisible(@Nullable ReceiverValue thisObject, @NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
             if (PRIVATE.isVisible(thisObject, what, from)) {
+                // See Visibility.isVisible contract
+                if (thisObject == ALWAYS_SUITABLE_RECEIVER) return true;
+                if (thisObject == IRRELEVANT_RECEIVER) return false;
+
                 DeclarationDescriptor classDescriptor = DescriptorUtils.getParentOfType(what, ClassDescriptor.class);
 
                 if (classDescriptor != null && thisObject instanceof ThisClassReceiver) {
@@ -109,6 +131,7 @@ public class Visibilities {
         }
     };
 
+    @NotNull
     public static final Visibility PROTECTED = new Visibility("protected", true) {
         @Override
         public boolean mustCheckInImports() {
@@ -116,22 +139,65 @@ public class Visibilities {
         }
 
         @Override
-        public boolean isVisible(@Nullable ReceiverValue receiver, @NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
-            ClassDescriptor classDescriptor = DescriptorUtils.getParentOfType(what, ClassDescriptor.class);
-            if (DescriptorUtils.isCompanionObject(classDescriptor)) {
-                classDescriptor = DescriptorUtils.getParentOfType(classDescriptor, ClassDescriptor.class);
-            }
-            if (classDescriptor == null) return false;
-
+        public boolean isVisible(
+                @Nullable ReceiverValue receiver,
+                @NotNull DeclarationDescriptorWithVisibility what,
+                @NotNull DeclarationDescriptor from
+        ) {
+            ClassDescriptor givenDescriptorContainingClass = DescriptorUtils.getParentOfType(what, ClassDescriptor.class);
             ClassDescriptor fromClass = DescriptorUtils.getParentOfType(from, ClassDescriptor.class, false);
             if (fromClass == null) return false;
-            if (DescriptorUtils.isSubclass(fromClass, classDescriptor)) {
+
+            if (givenDescriptorContainingClass != null && DescriptorUtils.isCompanionObject(givenDescriptorContainingClass)) {
+                // Access to protected members inside companion is allowed to all subclasses
+                // Receiver type does not matter because objects are final
+                // NB: protected fake overrides in companion from super class should also be allowed
+                ClassDescriptor companionOwner = DescriptorUtils.getParentOfType(givenDescriptorContainingClass, ClassDescriptor.class);
+                if (companionOwner != null && DescriptorUtils.isSubclass(fromClass, companionOwner)) return true;
+            }
+
+            // The rest part of method checks visibility similarly to Java does for protected (see JLS p.6.6.2)
+
+            // Protected fake overrides can have only one protected overridden (as protected is not allowed for interface members)
+            DeclarationDescriptorWithVisibility whatDeclaration = DescriptorUtils.unwrapFakeOverrideToAnyDeclaration(what);
+
+            ClassDescriptor classDescriptor = DescriptorUtils.getParentOfType(whatDeclaration, ClassDescriptor.class);
+            if (classDescriptor == null) return false;
+
+            if (DescriptorUtils.isSubclass(fromClass, classDescriptor)
+                    && doesReceiverFitForProtectedVisibility(receiver, whatDeclaration, fromClass)) {
                 return true;
             }
+
             return isVisible(receiver, what, fromClass.getContainingDeclaration());
+        }
+
+        private boolean doesReceiverFitForProtectedVisibility(
+                @Nullable ReceiverValue receiver,
+                @NotNull DeclarationDescriptorWithVisibility whatDeclaration,
+                @NotNull ClassDescriptor fromClass
+        ) {
+            //noinspection deprecation
+            if (receiver == FALSE_IF_PROTECTED) return false;
+
+            // Do not check receiver for non-callable declarations
+            if (!(whatDeclaration instanceof CallableMemberDescriptor)) return true;
+            // Constructor accessibility check is performed manually
+            if (whatDeclaration instanceof ConstructorDescriptor) return true;
+
+            // See Visibility.isVisible contract
+            if (receiver == ALWAYS_SUITABLE_RECEIVER) return true;
+            if (receiver == IRRELEVANT_RECEIVER || receiver == null) return false;
+
+            KotlinType actualReceiverType = receiver instanceof SuperCallReceiverValue
+                                            ? ((SuperCallReceiverValue) receiver).getThisType()
+                                            : receiver.getType();
+
+            return DescriptorUtils.isSubtypeOfClass(actualReceiverType, fromClass) || DynamicTypesKt.isDynamic(actualReceiverType);
         }
     };
 
+    @NotNull
     public static final Visibility INTERNAL = new Visibility("internal", false) {
         @Override
         public boolean mustCheckInImports() {
@@ -140,13 +206,20 @@ public class Visibilities {
 
         @Override
         public boolean isVisible(@Nullable ReceiverValue receiver, @NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
-            DeclarationDescriptor fromOrModule = from instanceof PackageViewDescriptor ? ((PackageViewDescriptor) from).getModule() : from;
-            if (!DescriptorUtils.getContainingModule(what).isFriend(DescriptorUtils.getContainingModule(fromOrModule))) return false;
+            ModuleDescriptor whatModule = DescriptorUtils.getContainingModule(what);
+            ModuleDescriptor fromModule = DescriptorUtils.getContainingModule(from);
+
+            // Can't invert this condition because CLI compiler analyzes sources as like all in the one module
+            // and for modules with circular dependency (chunk) JPS provides sources of all modules,
+            // so we can't be sure that references to an internal member are correct.
+            if (!fromModule.shouldSeeInternalsOf(whatModule)) return false;
+
 
             return MODULE_VISIBILITY_HELPER.isInFriendModule(what, from);
         }
     };
 
+    @NotNull
     public static final Visibility PUBLIC = new Visibility("public", true) {
         @Override
         public boolean mustCheckInImports() {
@@ -159,6 +232,7 @@ public class Visibilities {
         }
     };
 
+    @NotNull
     public static final Visibility LOCAL = new Visibility("local", false) {
         @Override
         public boolean mustCheckInImports() {
@@ -171,6 +245,7 @@ public class Visibilities {
         }
     };
 
+    @NotNull
     public static final Visibility INHERITED = new Visibility("inherited", false) {
         @Override
         public boolean mustCheckInImports() {
@@ -184,10 +259,11 @@ public class Visibilities {
     };
 
     /* Visibility for fake override invisible members (they are created for better error reporting) */
+    @NotNull
     public static final Visibility INVISIBLE_FAKE = new Visibility("invisible_fake", false) {
         @Override
         public boolean mustCheckInImports() {
-            throw new IllegalStateException("This method shouldn't be invoked for INVISIBLE_FAKE visibility");
+            return true;
         }
 
         @Override
@@ -198,6 +274,7 @@ public class Visibilities {
 
     // Currently used as default visibility of FunctionDescriptor
     // It's needed to prevent NPE when requesting non-nullable visibility of descriptor before `initialize` has been called
+    @NotNull
     public static final Visibility UNKNOWN = new Visibility("unknown", false) {
         @Override
         public boolean mustCheckInImports() {
@@ -223,11 +300,28 @@ public class Visibilities {
     }
 
     /**
-     * Receiver used only for visibility PRIVATE_TO_THIS.
-     * For all other visibilities this method give correct result.
+     * @see Visibility.isVisible contract
      */
-    public static boolean isVisibleWithIrrelevantReceiver(@NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
-        return findInvisibleMember(null, what, from) == null;
+    public static boolean isVisibleIgnoringReceiver(@NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
+        return findInvisibleMember(ALWAYS_SUITABLE_RECEIVER, what, from) == null;
+    }
+
+    /**
+     * @see Visibility.isVisible contract
+     * @see Visibilities.RECEIVER_DOES_NOT_EXIST
+     */
+    public static boolean isVisibleWithAnyReceiver(@NotNull DeclarationDescriptorWithVisibility what, @NotNull DeclarationDescriptor from) {
+        return findInvisibleMember(IRRELEVANT_RECEIVER, what, from) == null;
+    }
+
+    // Note that this method returns false if `from` declaration is `init` initializer
+    // because initializer does not have source element
+    public static boolean inSameFile(@NotNull DeclarationDescriptor what, @NotNull DeclarationDescriptor from) {
+        SourceFile fromContainingFile = DescriptorUtils.getContainingSourceFile(from);
+        if (fromContainingFile != SourceFile.NO_SOURCE_FILE) {
+            return fromContainingFile.equals(DescriptorUtils.getContainingSourceFile(what));
+        }
+        return false;
     }
 
     @Nullable
@@ -243,6 +337,13 @@ public class Visibilities {
             }
             parent = DescriptorUtils.getParentOfType(parent, DeclarationDescriptorWithVisibility.class);
         }
+
+        if (what instanceof TypeAliasConstructorDescriptor) {
+            DeclarationDescriptorWithVisibility invisibleUnderlying =
+                    findInvisibleMember(receiver, ((TypeAliasConstructorDescriptor) what).getUnderlyingConstructorDescriptor(), from);
+            if (invisibleUnderlying != null) return invisibleUnderlying;
+        }
+
         return null;
     }
 
@@ -284,6 +385,76 @@ public class Visibilities {
     }
 
     public static final Visibility DEFAULT_VISIBILITY = PUBLIC;
+
+    /**
+     * This value should be used for receiverValue parameter of Visibility.isVisible
+     * iff there is intention to determine if member is visible for any receiver.
+     */
+    private static final ReceiverValue IRRELEVANT_RECEIVER = new ReceiverValue() {
+        @NotNull
+        @Override
+        public KotlinType getType() {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue replaceType(@NotNull KotlinType newType) {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue getOriginal() {
+            return this;
+        }
+    };
+
+    /**
+     * This value should be used for receiverValue parameter of Visibility.isVisible
+     * iff there is intention to determine if member is visible without receiver related checks being performed.
+     */
+    public static final ReceiverValue ALWAYS_SUITABLE_RECEIVER = new ReceiverValue() {
+        @NotNull
+        @Override
+        public KotlinType getType() {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue replaceType(@NotNull KotlinType newType) {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue getOriginal() {
+            return this;
+        }
+    };
+
+    // This constant is not intended to use somewhere else from
+    @Deprecated
+    public static final ReceiverValue FALSE_IF_PROTECTED = new ReceiverValue() {
+        @NotNull
+        @Override
+        public KotlinType getType() {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue replaceType(@NotNull KotlinType newType) {
+            throw new IllegalStateException("This method should not be called");
+        }
+
+        @NotNull
+        @Override
+        public ReceiverValue getOriginal() {
+            return this;
+        }
+    };
 
     public static boolean isPrivate(@NotNull Visibility visibility) {
         return visibility == PRIVATE || visibility == PRIVATE_TO_THIS;

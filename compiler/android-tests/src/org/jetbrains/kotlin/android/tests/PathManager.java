@@ -16,6 +16,8 @@
 
 package org.jetbrains.kotlin.android.tests;
 
+import org.jetbrains.kotlin.android.tests.download.SDKDownloader;
+
 import java.io.File;
 
 public class PathManager {
@@ -46,8 +48,12 @@ public class PathManager {
         return getAndroidSdkRoot() + "/tools";
     }
 
-    public String getOutputForCompiledFiles() {
-        return tmpFolder + "/libs/codegen-test-output";
+    public String getBuildToolsFolderInAndroidSdk() {
+        return getAndroidSdkRoot() + "/build-tools";
+    }
+
+    public String getOutputForCompiledFiles(int index) {
+        return tmpFolder + "/libs/libtest" + index;
     }
 
     public String getLibsFolderInAndroidTestedModuleTmpFolder() {
@@ -62,6 +68,10 @@ public class PathManager {
         return tmpFolder + "/src";
     }
 
+    public String getAndroidTmpFolder() {
+        return tmpFolder;
+    }
+
     public String getAndroidSdkRoot() {
         return getDependenciesRoot() + "/android-sdk";
     }
@@ -70,12 +80,12 @@ public class PathManager {
         return rootFolder + "/android.tests.dependencies";
     }
 
-    public String getRootForDownload() {
-        return getDependenciesRoot() + "/download";
+    public String getGradleBinFolder() {
+        return getDependenciesRoot() + "/gradle-" + SDKDownloader.GRADLE_VERSION + "/bin";
     }
 
-    public String getAntBinDirectory() {
-        return rootFolder + "/dependencies/ant-1.8/bin";
+    public String getRootForDownload() {
+        return getDependenciesRoot() + "/download";
     }
 
     public String getAndroidModuleRoot() {

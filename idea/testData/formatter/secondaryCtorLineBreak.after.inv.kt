@@ -1,9 +1,6 @@
 class A {
-    constructor() {
-    }
-
-    constructor() : this() {
-    }
+    constructor() {}
+    constructor() : this() {}
 
     constructor() {
 
@@ -19,7 +16,6 @@ class A {
     }
 
     constructor()
-
     constructor() {
     }
 }

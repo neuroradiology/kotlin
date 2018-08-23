@@ -1,3 +1,8 @@
+// IGNORE_BACKEND: JS_IR
+// TODO: muted automatically, investigate should it be ran for JS or not
+// DONT_RUN_GENERATED_CODE: JS
+// IGNORE_BACKEND: JS
+
 <!NO_TAIL_CALLS_FOUND!>tailrec fun test(go: Boolean) : Unit<!> {
     if (!go) return
     try {

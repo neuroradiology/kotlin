@@ -31,7 +31,7 @@ fun KtUserType.aliasImportMap(): Multimap<String, String> {
     return (file as KtFile).aliasImportMap()
 }
 
-private fun KtFile.aliasImportMap(): Multimap<String, String> {
+fun KtFile.aliasImportMap(): Multimap<String, String> {
     val cached = getUserData(ALIAS_IMPORT_DATA_KEY)
     val modificationStamp = modificationStamp
     if (cached != null && modificationStamp == cached.fileModificationStamp) {
@@ -39,7 +39,7 @@ private fun KtFile.aliasImportMap(): Multimap<String, String> {
     }
 
     val data = CachedAliasImportData(buildAliasImportMap(), modificationStamp)
-    putUserData(ALIAS_IMPORT_DATA_KEY, cached)
+    putUserData(ALIAS_IMPORT_DATA_KEY, data)
     return data.map
 }
 
@@ -48,7 +48,7 @@ private fun KtFile.buildAliasImportMap(): Multimap<String, String> {
     val importList = importList ?: return map
     for (import in importList.imports) {
         val aliasName = import.aliasName ?: continue
-        val name = import.importPath?.fqnPart()?.shortName()?.asString() ?: continue
+        val name = import.importPath?.fqName?.shortName()?.asString() ?: continue
         map.put(aliasName, name)
     }
     return map
@@ -63,6 +63,7 @@ fun KtTypeReference?.isProbablyNothing(): Boolean {
     return userType.isProbablyNothing()
 }
 
+//TODO: support type aliases
 fun KtUserType?.isProbablyNothing(): Boolean {
     if (this == null) return false
     val referencedName = referencedName

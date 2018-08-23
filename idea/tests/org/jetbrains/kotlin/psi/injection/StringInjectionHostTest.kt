@@ -16,15 +16,15 @@
 
 package org.jetbrains.kotlin.psi.injection
 
+import com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.KtStringTemplateExpression
-import org.junit.Assert.*
-import com.intellij.openapi.util.TextRange
-import java.util.HashMap
-import org.jetbrains.kotlin.test.KotlinLiteFixture
 import org.jetbrains.kotlin.test.ConfigurationKind
+import org.jetbrains.kotlin.test.KotlinTestWithEnvironment
+import org.jetbrains.kotlin.utils.keysToMap
+import java.util.*
 
-class StringInjectionHostTest: KotlinLiteFixture() {
+class StringInjectionHostTest : KotlinTestWithEnvironment() {
     fun testRegular() {
         with (quoted("")) {
             checkInjection("", mapOf(0 to 1))
@@ -42,9 +42,14 @@ class StringInjectionHostTest: KotlinLiteFixture() {
         }
     }
 
+    fun testInterpolation1(): Unit = checkAllRanges("a \$b c")
+    fun testInterpolation2(): Unit = checkAllRanges("a \${b} c")
+    fun testInterpolation3(): Unit = checkAllRanges("a\${b}c")
+    fun testInterpolation4(): Unit = checkAllRanges("a \${b.foo()} c")
+
     fun testUnclosedSimpleLiteral() {
-        assertFalse(stringExpression("\"").isValidHost);
-        assertFalse(stringExpression("\"a").isValidHost);
+        assertFalse(stringExpression("\"").isValidHost)
+        assertFalse(stringExpression("\"a").isValidHost)
     }
 
     fun testEscapeSequences() {
@@ -125,15 +130,25 @@ class StringInjectionHostTest: KotlinLiteFixture() {
         assertFalse(createLiteralTextEscaper().isOneLine)
     }
 
-    //todo[nik] make private when KT-6382 is fixed
-    fun KtStringTemplateExpression.checkInjection(decoded: String, targetToSourceOffsets: Map<Int,Int>, rangeInHost: TextRange? = null) {
+    private fun checkAllRanges(str: String) {
+        with (quoted(str)) {
+            checkInjection(str, (0..str.length).keysToMap { it + 1 })
+            assertOneLine()
+        }
+    }
+
+    private fun KtStringTemplateExpression.checkInjection(
+            decoded: String, targetToSourceOffsets: Map<Int, Int>, rangeInHost: TextRange? = null
+    ) {
         assertTrue(isValidHost)
         for (prefix in listOf("", "prefix")) {
             val escaper = createLiteralTextEscaper()
             val chars = StringBuilder(prefix)
             val range = rangeInHost ?: escaper.relevantTextRange
+
             assertTrue(escaper.decode(range, chars))
             assertEquals(decoded, chars.substring(prefix.length))
+
             val extendedOffsets = HashMap(targetToSourceOffsets)
             val beforeStart = targetToSourceOffsets.keys.min()!! - 1
             if (beforeStart >= 0) {

@@ -29,17 +29,22 @@ import java.util.*;
 import static org.jetbrains.kotlin.codegen.JvmCodegenUtil.getDirectMember;
 
 public final class MutableClosure implements CalculatedClosure {
+    private final ClassDescriptor closureClass;
     private final ClassDescriptor enclosingClass;
     private final CallableDescriptor enclosingFunWithReceiverDescriptor;
 
     private boolean captureThis;
-    private boolean captureReceiver;
+    private boolean captureEnclosingReceiver;
 
     private Map<DeclarationDescriptor, EnclosedValueDescriptor> captureVariables;
     private Map<DeclarationDescriptor, Integer> parameterOffsetInConstructor;
     private List<Pair<String, Type>> recordedFields;
+    private KotlinType captureReceiverType;
+    private boolean isSuspend;
+    private boolean isSuspendLambda;
 
     MutableClosure(@NotNull ClassDescriptor classDescriptor, @Nullable ClassDescriptor enclosingClass) {
+        this.closureClass = classDescriptor;
         this.enclosingClass = enclosingClass;
         this.enclosingFunWithReceiverDescriptor = enclosingExtensionMemberForClass(classDescriptor);
     }
@@ -54,6 +59,12 @@ public final class MutableClosure implements CalculatedClosure {
             }
         }
         return null;
+    }
+
+    @NotNull
+    @Override
+    public ClassDescriptor getClosureClass() {
+        return closureClass;
     }
 
     @Nullable
@@ -72,7 +83,11 @@ public final class MutableClosure implements CalculatedClosure {
 
     @Override
     public KotlinType getCaptureReceiverType() {
-        if (captureReceiver) {
+        if (captureReceiverType != null) {
+            return captureReceiverType;
+        }
+
+        if (captureEnclosingReceiver) {
             ReceiverParameterDescriptor parameter = getEnclosingReceiverDescriptor();
             assert parameter != null : "Receiver parameter should exist in " + enclosingFunWithReceiverDescriptor;
             return parameter.getType();
@@ -85,38 +100,62 @@ public final class MutableClosure implements CalculatedClosure {
         if (enclosingFunWithReceiverDescriptor == null) {
             throw new IllegalStateException("Extension receiver parameter should exist");
         }
-        this.captureReceiver = true;
+        this.captureEnclosingReceiver = true;
     }
 
     @NotNull
     @Override
     public Map<DeclarationDescriptor, EnclosedValueDescriptor> getCaptureVariables() {
-        return captureVariables != null ? captureVariables : Collections.<DeclarationDescriptor, EnclosedValueDescriptor>emptyMap();
+        return captureVariables != null ? captureVariables : Collections.emptyMap();
+    }
+
+    public void setCaptureReceiverType(@NotNull KotlinType type) {
+        this.captureReceiverType = type;
     }
 
     @NotNull
     @Override
     public List<Pair<String, Type>> getRecordedFields() {
-        return recordedFields != null ? recordedFields : Collections.<Pair<String, Type>>emptyList();
+        return recordedFields != null ? recordedFields : Collections.emptyList();
     }
 
-    public void recordField(String name, Type type) {
+    @Override
+    public boolean isSuspend() {
+        return isSuspend;
+    }
+
+    public void setSuspend(boolean suspend) {
+        this.isSuspend = suspend;
+    }
+
+    @Override
+    public boolean isSuspendLambda() {
+        return isSuspendLambda;
+    }
+
+    public void setSuspendLambda() {
+        isSuspendLambda = true;
+    }
+
+    private void recordField(String name, Type type) {
         if (recordedFields == null) {
-            recordedFields = new LinkedList<Pair<String, Type>>();
+            recordedFields = new LinkedList<>();
         }
-        recordedFields.add(new Pair<String, Type>(name, type));
+        recordedFields.add(new Pair<>(name, type));
     }
 
     public void captureVariable(EnclosedValueDescriptor value) {
+        recordField(value.getFieldName(), value.getType());
+
         if (captureVariables == null) {
-            captureVariables = new LinkedHashMap<DeclarationDescriptor, EnclosedValueDescriptor>();
+            captureVariables = new LinkedHashMap<>();
         }
         captureVariables.put(value.getDescriptor(), value);
     }
 
     public void setCapturedParameterOffsetInConstructor(DeclarationDescriptor descriptor, int offset) {
         if (parameterOffsetInConstructor == null) {
-            parameterOffsetInConstructor = new LinkedHashMap<DeclarationDescriptor, Integer>();
+            parameterOffsetInConstructor = new LinkedHashMap<>();
         }
         parameterOffsetInConstructor.put(descriptor, offset);
     }

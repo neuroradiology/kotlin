@@ -20,7 +20,6 @@ import com.intellij.openapi.ui.ComboBoxTableRenderer;
 import com.intellij.psi.PsiElement;
 import com.intellij.refactoring.changeSignature.ParameterTableModelItemBase;
 import com.intellij.util.ui.ColumnInfo;
-import org.jdesktop.swingx.autocomplete.ComboBoxCellEditor;
 import org.jetbrains.kotlin.idea.KotlinFileType;
 import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringBundle;
 import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinMethodDescriptor;
@@ -32,13 +31,14 @@ import javax.swing.table.TableCellEditor;
 import javax.swing.table.TableCellRenderer;
 
 public class KotlinPrimaryConstructorParameterTableModel extends KotlinCallableParameterTableModel {
-    public KotlinPrimaryConstructorParameterTableModel(KotlinMethodDescriptor methodDescriptor, PsiElement context) {
+    public KotlinPrimaryConstructorParameterTableModel(KotlinMethodDescriptor methodDescriptor, PsiElement typeContext, PsiElement defaultValueContext) {
         super(methodDescriptor,
-              context,
+              typeContext,
+              defaultValueContext,
               new ValVarColumn(),
-              new NameColumn(context.getProject()),
-              new TypeColumn(context.getProject(), KotlinFileType.INSTANCE),
-              new DefaultValueColumn<KotlinParameterInfo, ParameterTableModelItemBase<KotlinParameterInfo>>(context.getProject(), KotlinFileType.INSTANCE));
+              new NameColumn(typeContext.getProject()),
+              new TypeColumn(typeContext.getProject(), KotlinFileType.INSTANCE),
+              new DefaultValueColumn<KotlinParameterInfo, ParameterTableModelItemBase<KotlinParameterInfo>>(typeContext.getProject(), KotlinFileType.INSTANCE));
     }
 
     public static boolean isValVarColumn(ColumnInfo column) {
@@ -72,7 +72,7 @@ public class KotlinPrimaryConstructorParameterTableModel extends KotlinCallableP
 
         @Override
         public TableCellEditor doCreateEditor(ParameterTableModelItemBase<KotlinParameterInfo> item) {
-            return new ComboBoxCellEditor(new JComboBox());
+            return new DefaultCellEditor(new JComboBox());
         }
 
         @Override

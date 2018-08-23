@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ package org.jetbrains.kotlin.types
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassifierDescriptor
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
-import org.jetbrains.kotlin.descriptors.annotations.Annotations
 
 class FunctionPlaceholders(private val builtIns: KotlinBuiltIns) {
     fun createFunctionPlaceholderType(
@@ -63,10 +62,6 @@ class FunctionPlaceholderTypeConstructor(
 
     override fun getDeclarationDescriptor(): ClassifierDescriptor? {
         return errorTypeConstructor.declarationDescriptor
-    }
-
-    override fun getAnnotations(): Annotations {
-        return errorTypeConstructor.annotations
     }
 
     override fun toString(): String {

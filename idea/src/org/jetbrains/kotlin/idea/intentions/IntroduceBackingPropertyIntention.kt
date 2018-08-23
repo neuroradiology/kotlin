@@ -19,14 +19,14 @@ package org.jetbrains.kotlin.idea.intentions
 import com.intellij.openapi.editor.Editor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.descriptors.impl.SyntheticFieldDescriptor
-import org.jetbrains.kotlin.idea.caches.resolve.analyze
 import org.jetbrains.kotlin.idea.caches.resolve.getResolutionFacade
+import org.jetbrains.kotlin.idea.caches.resolve.resolveToCall
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 import org.jetbrains.kotlin.resolve.BindingContext
 
-class IntroduceBackingPropertyIntention(): SelfTargetingIntention<KtProperty>(KtProperty::class.java, "Introduce backing property") {
+class IntroduceBackingPropertyIntention : SelfTargetingIntention<KtProperty>(KtProperty::class.java, "Introduce backing property") {
     override fun isApplicableTo(element: KtProperty, caretOffset: Int): Boolean {
         if (!canIntroduceBackingProperty(element)) return false
         return element.nameIdentifier?.textRange?.containsOffset(caretOffset) == true
@@ -40,7 +40,7 @@ class IntroduceBackingPropertyIntention(): SelfTargetingIntention<KtProperty>(Kt
         fun canIntroduceBackingProperty(property: KtProperty): Boolean {
             val name = property.name ?: return false
 
-            val bindingContext = property.getResolutionFacade().analyzeFullyAndGetResult(listOf(property)).bindingContext
+            val bindingContext = property.getResolutionFacade().analyzeWithAllCompilerChecks(listOf(property)).bindingContext
             val descriptor = bindingContext.get(BindingContext.DECLARATION_TO_DESCRIPTOR, property) as? PropertyDescriptor ?: return false
             if (bindingContext.get(BindingContext.BACKING_FIELD_REQUIRED, descriptor) == false) return false
 
@@ -74,7 +74,7 @@ class IntroduceBackingPropertyIntention(): SelfTargetingIntention<KtProperty>(Kt
                 }
             }
 
-            property.setInitializer(null)
+            property.initializer = null
         }
 
         private fun createGetter(element: KtProperty) {
@@ -115,8 +115,7 @@ class IntroduceBackingPropertyIntention(): SelfTargetingIntention<KtProperty>(Kt
         private fun replaceFieldReferences(element: KtElement, propertyName: String) {
             element.acceptChildren(object : KtTreeVisitorVoid() {
                 override fun visitSimpleNameExpression(expression: KtSimpleNameExpression) {
-                    val bindingContext = expression.analyze()
-                    val target = bindingContext.get(BindingContext.REFERENCE_TARGET, expression)
+                    val target = expression.resolveToCall()?.resultingDescriptor
                     if (target is SyntheticFieldDescriptor) {
                         expression.replace(KtPsiFactory(element).createSimpleName("_$propertyName"))
                     }

@@ -16,34 +16,41 @@
 
 package org.jetbrains.kotlin.idea.decompiler.stubBuilder
 
-import com.google.protobuf.MessageLite
 import com.intellij.psi.PsiElement
 import com.intellij.psi.stubs.StubElement
 import com.intellij.util.io.StringRef
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.descriptors.SourceElement
+import org.jetbrains.kotlin.idea.decompiler.stubBuilder.flags.FlagsToModifiers
 import org.jetbrains.kotlin.idea.stubindex.KotlinFileStubForIde
 import org.jetbrains.kotlin.lexer.KtModifierKeywordToken
-import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.load.kotlin.JvmPackagePartSource
 import org.jetbrains.kotlin.load.kotlin.KotlinJvmBinaryClass
 import org.jetbrains.kotlin.load.kotlin.header.KotlinClassHeader
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.deserialization.TypeTable
+import org.jetbrains.kotlin.metadata.jvm.deserialization.JvmProtoBufUtil
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.protobuf.MessageLite
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.stubs.KotlinUserTypeStub
 import org.jetbrains.kotlin.psi.stubs.elements.KtStubElementTypes
 import org.jetbrains.kotlin.psi.stubs.impl.*
-import org.jetbrains.kotlin.serialization.Flags
-import org.jetbrains.kotlin.serialization.ProtoBuf
+import org.jetbrains.kotlin.resolve.jvm.JvmClassName
 import org.jetbrains.kotlin.serialization.deserialization.AnnotatedCallableKind
 import org.jetbrains.kotlin.serialization.deserialization.ProtoContainer
-import org.jetbrains.kotlin.serialization.deserialization.TypeTable
-import org.jetbrains.kotlin.serialization.jvm.JvmProtoBufUtil
 
-fun createTopLevelClassStub(classId: ClassId, classProto: ProtoBuf.Class, context: ClsStubBuilderContext): KotlinFileStubImpl {
-    val fileStub = createFileStub(classId.packageFqName)
-    createClassStub(fileStub, classProto, context.nameResolver, classId, context)
+fun createTopLevelClassStub(
+        classId: ClassId,
+        classProto: ProtoBuf.Class,
+        source: SourceElement?,
+        context: ClsStubBuilderContext,
+        isScript: Boolean
+): KotlinFileStubImpl {
+    val fileStub = createFileStub(classId.packageFqName, isScript)
+    createClassStub(fileStub, classProto, context.nameResolver, classId, source, context)
     return fileStub
 }
 
@@ -52,10 +59,10 @@ fun createPackageFacadeStub(
         packageFqName: FqName,
         c: ClsStubBuilderContext
 ): KotlinFileStubImpl {
-    val fileStub = KotlinFileStubForIde.forFile(packageFqName, packageFqName.isRoot)
+    val fileStub = KotlinFileStubForIde.forFile(packageFqName, isScript = false)
     setupFileStub(fileStub, packageFqName)
-    createCallableStubs(fileStub, c, ProtoContainer.Package(packageFqName, c.nameResolver, c.typeTable, packagePartSource = null),
-                        packageProto.functionList, packageProto.propertyList)
+    createDeclarationsStubs(
+            fileStub, c, ProtoContainer.Package(packageFqName, c.nameResolver, c.typeTable, source = null), packageProto)
     return fileStub
 }
 
@@ -65,12 +72,13 @@ fun createFileFacadeStub(
         c: ClsStubBuilderContext
 ): KotlinFileStubImpl {
     val packageFqName = facadeFqName.parent()
-    val fileStub = KotlinFileStubForIde.forFileFacadeStub(facadeFqName, packageFqName.isRoot)
+    val fileStub = KotlinFileStubForIde.forFileFacadeStub(facadeFqName)
     setupFileStub(fileStub, packageFqName)
     val container = ProtoContainer.Package(
-            packageFqName, c.nameResolver, c.typeTable, JvmPackagePartSource(ClassId.topLevel(facadeFqName))
+        packageFqName, c.nameResolver, c.typeTable,
+        JvmPackagePartSource(JvmClassName.byClassId(ClassId.topLevel(facadeFqName)), null, packageProto, c.nameResolver)
     )
-    createCallableStubs(fileStub, c, container, packageProto.functionList, packageProto.propertyList)
+    createDeclarationsStubs(fileStub, c, container, packageProto)
     return fileStub
 }
 
@@ -82,23 +90,25 @@ fun createMultifileClassStub(
 ): KotlinFileStubImpl {
     val packageFqName = facadeFqName.parent()
     val partNames = header.data?.asList()?.map { it.substringAfterLast('/') }
-    val fileStub = KotlinFileStubForIde.forMultifileClassStub(facadeFqName, partNames, packageFqName.isRoot)
+    val fileStub = KotlinFileStubForIde.forMultifileClassStub(facadeFqName, partNames)
     setupFileStub(fileStub, packageFqName)
     for (partFile in partFiles) {
         val partHeader = partFile.classHeader
         val (nameResolver, packageProto) = JvmProtoBufUtil.readPackageDataFrom(partHeader.data!!, partHeader.strings!!)
         val partContext = components.createContext(nameResolver, packageFqName, TypeTable(packageProto.typeTable))
-        val container = ProtoContainer.Package(packageFqName, partContext.nameResolver, partContext.typeTable,
-                                               JvmPackagePartSource(partFile.classId))
-        createCallableStubs(fileStub, partContext, container, packageProto.functionList, packageProto.propertyList)
+        val container = ProtoContainer.Package(
+            packageFqName, partContext.nameResolver, partContext.typeTable,
+            JvmPackagePartSource(partFile, packageProto, nameResolver)
+        )
+        createDeclarationsStubs(fileStub, partContext, container, packageProto)
     }
     return fileStub
 }
 
-fun createIncompatibleAbiVersionFileStub() = createFileStub(FqName.ROOT)
+fun createIncompatibleAbiVersionFileStub() = createFileStub(FqName.ROOT, isScript = false)
 
-fun createFileStub(packageFqName: FqName): KotlinFileStubImpl {
-    val fileStub = KotlinFileStubForIde.forFile(packageFqName, packageFqName.isRoot)
+fun createFileStub(packageFqName: FqName, isScript: Boolean): KotlinFileStubImpl {
+    val fileStub = KotlinFileStubForIde.forFile(packageFqName, isScript)
     setupFileStub(fileStub, packageFqName)
     return fileStub
 }
@@ -135,110 +145,30 @@ fun createStubForPackageName(packageDirectiveStub: KotlinPlaceHolderStubImpl<KtP
 fun createStubForTypeName(
         typeClassId: ClassId,
         parent: StubElement<out PsiElement>,
-        onUserTypeLevel: (KotlinUserTypeStub, Int) -> Unit = { x, y -> }
+        bindTypeArguments: (KotlinUserTypeStub, Int) -> Unit = { _, _ -> }
 ): KotlinUserTypeStub {
+    val substituteWithAny = typeClassId.isLocal
+
     val fqName =
-            if (typeClassId.isLocal) KotlinBuiltIns.FQ_NAMES.any
+            if (substituteWithAny) KotlinBuiltIns.FQ_NAMES.any
             else typeClassId.asSingleFqName().toUnsafe()
     val segments = fqName.pathSegments().asReversed()
     assert(segments.isNotEmpty())
 
     fun recCreateStubForType(current: StubElement<out PsiElement>, level: Int): KotlinUserTypeStub {
         val lastSegment = segments[level]
-        val userTypeStub = KotlinUserTypeStubImpl(current, isAbsoluteInRootPackage = false)
+        val userTypeStub = KotlinUserTypeStubImpl(current)
         if (level + 1 < segments.size) {
             recCreateStubForType(userTypeStub, level + 1)
         }
         KotlinNameReferenceExpressionStubImpl(userTypeStub, lastSegment.ref())
-        onUserTypeLevel(userTypeStub, level)
+        if (!substituteWithAny) {
+            bindTypeArguments(userTypeStub, level)
+        }
         return userTypeStub
     }
 
     return recCreateStubForType(parent, level = 0)
-}
-
-enum class FlagsToModifiers {
-    MODALITY {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken {
-            val modality = Flags.MODALITY.get(flags)
-            return when (modality) {
-                ProtoBuf.Modality.ABSTRACT -> KtTokens.ABSTRACT_KEYWORD
-                ProtoBuf.Modality.FINAL -> KtTokens.FINAL_KEYWORD
-                ProtoBuf.Modality.OPEN -> KtTokens.OPEN_KEYWORD
-                ProtoBuf.Modality.SEALED -> KtTokens.SEALED_KEYWORD
-                null -> throw IllegalStateException("Unexpected modality: null")
-            }
-        }
-    },
-
-    VISIBILITY {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            val visibility = Flags.VISIBILITY.get(flags)
-            return when (visibility) {
-                ProtoBuf.Visibility.PRIVATE, ProtoBuf.Visibility.PRIVATE_TO_THIS -> KtTokens.PRIVATE_KEYWORD
-                ProtoBuf.Visibility.INTERNAL -> KtTokens.INTERNAL_KEYWORD
-                ProtoBuf.Visibility.PROTECTED -> KtTokens.PROTECTED_KEYWORD
-                ProtoBuf.Visibility.PUBLIC -> KtTokens.PUBLIC_KEYWORD
-                else -> throw IllegalStateException("Unexpected visibility: $visibility")
-            }
-        }
-    },
-
-    INNER {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_INNER.get(flags)) KtTokens.INNER_KEYWORD else null
-        }
-    },
-
-    CONST {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_CONST.get(flags)) KtTokens.CONST_KEYWORD else null
-        }
-    },
-
-    LATEINIT {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_LATEINIT.get(flags)) KtTokens.LATEINIT_KEYWORD else null
-        }
-    },
-
-    OPERATOR {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_OPERATOR.get(flags)) KtTokens.OPERATOR_KEYWORD else null
-        }
-    },
-
-    INFIX {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_INFIX.get(flags)) KtTokens.INFIX_KEYWORD else null
-        }
-    },
-
-    DATA {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_DATA.get(flags)) KtTokens.DATA_KEYWORD else null
-        }
-    },
-
-    EXTERNAL_FUN {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_EXTERNAL_FUNCTION.get(flags)) KtTokens.EXTERNAL_KEYWORD else null
-        }
-    },
-
-    INLINE {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_INLINE.get(flags)) KtTokens.INLINE_KEYWORD else null
-        }
-    },
-
-    TAILREC {
-        override fun getModifiers(flags: Int): KtModifierKeywordToken? {
-            return if (Flags.IS_TAILREC.get(flags)) KtTokens.TAILREC_KEYWORD else null
-        }
-    };
-
-    abstract fun getModifiers(flags: Int): KtModifierKeywordToken?
 }
 
 fun createModifierListStubForDeclaration(

@@ -25,9 +25,9 @@ enum class<!SYNTAX!><!> {
 
 }
 
-annotation class<!SYNTAX!><!> <!ANNOTATION_CLASS_WITH_BODY!>{
+annotation class<!SYNTAX!><!> {
 
-}<!>
+}
 
 class Outer {
     <!FUNCTION_DECLARATION_WITH_NO_NAME!>fun ()<!> {
@@ -52,17 +52,17 @@ class Outer {
 
     }<!>
 
-    <!REDECLARATION!>annotation class<!SYNTAX!><!> <!ANNOTATION_CLASS_WITH_BODY!>{
+    <!REDECLARATION!>annotation class<!SYNTAX!><!> {
 
-    }<!><!>
+    }<!>
 }
 
 fun outerFun() {
-    <!FUNCTION_DECLARATION_WITH_NO_NAME, CONFLICTING_OVERLOADS!>fun ()<!> {
+    <!UNUSED_EXPRESSION!>fun () {
 
-    }
-    <!FUNCTION_DECLARATION_WITH_NO_NAME, CONFLICTING_OVERLOADS!>fun ()<!> {
+    }<!>
+    <!UNUSED_EXPRESSION!>fun () {
 
-    }
+    }<!>
 }
 

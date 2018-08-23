@@ -1,5 +1,6 @@
+// IGNORE_BACKEND: JS_IR
 fun isDigit(a: Int) : String {
-    val aa = java.util.ArrayList<Int> ()
+    val aa = ArrayList<Int> ()
     aa.add(239)
 
     return when(a) {

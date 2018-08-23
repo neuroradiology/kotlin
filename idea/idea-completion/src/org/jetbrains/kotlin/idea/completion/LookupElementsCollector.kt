@@ -17,22 +17,31 @@
 package org.jetbrains.kotlin.idea.completion
 
 import com.intellij.codeInsight.completion.*
+import com.intellij.codeInsight.completion.impl.RealPrefixMatchingWeigher
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementDecorator
 import com.intellij.openapi.util.TextRange
 import com.intellij.patterns.ElementPattern
+import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.MemberDescriptor
 import org.jetbrains.kotlin.idea.completion.handlers.WithExpressionPrefixInsertHandler
 import org.jetbrains.kotlin.idea.completion.handlers.WithTailInsertHandler
 import org.jetbrains.kotlin.idea.core.completion.DeclarationLookupObject
 import java.util.*
 
 class LookupElementsCollector(
+        private val onFlush: () -> Unit,
         private val prefixMatcher: PrefixMatcher,
         private val completionParameters: CompletionParameters,
         resultSet: CompletionResultSet,
-        private val sorter: CompletionSorter
+        sorter: CompletionSorter,
+        private val filter: ((LookupElement) -> Boolean)?,
+        private val allowExpectDeclarations: Boolean
 ) {
+
+    var bestMatchingDegree = Int.MIN_VALUE
+        private set
 
     private val elements = ArrayList<LookupElement>()
 
@@ -41,38 +50,47 @@ class LookupElementsCollector(
             .withRelevanceSorter(sorter)
 
     private val postProcessors = ArrayList<(LookupElement) -> LookupElement>()
+    private val processedCallables = mutableSetOf<CallableDescriptor>()
+
+    var isResultEmpty: Boolean = true
+        private set
+
 
     fun flushToResultSet() {
         if (!elements.isEmpty()) {
+            onFlush()
+
             resultSet.addAllElements(elements)
             elements.clear()
             isResultEmpty = false
         }
     }
 
-    var isResultEmpty: Boolean = true
-        private set
-
     fun addLookupElementPostProcessor(processor: (LookupElement) -> LookupElement) {
         postProcessors.add(processor)
     }
 
-    fun addDescriptorElements(descriptors: Iterable<DeclarationDescriptor>,
-                                     lookupElementFactory: LookupElementFactory,
-                                     notImported: Boolean = false,
-                                     withReceiverCast: Boolean = false
+    fun addDescriptorElements(
+        descriptors: Iterable<DeclarationDescriptor>,
+        lookupElementFactory: AbstractLookupElementFactory,
+        notImported: Boolean = false,
+        withReceiverCast: Boolean = false,
+        prohibitDuplicates: Boolean = false
     ) {
         for (descriptor in descriptors) {
-            addDescriptorElements(descriptor, lookupElementFactory, notImported, withReceiverCast)
+            addDescriptorElements(descriptor, lookupElementFactory, notImported, withReceiverCast, prohibitDuplicates)
         }
     }
 
     fun addDescriptorElements(
-            descriptor: DeclarationDescriptor,
-            lookupElementFactory: LookupElementFactory,
-            notImported: Boolean = false,
-            withReceiverCast: Boolean = false
+        descriptor: DeclarationDescriptor,
+        lookupElementFactory: AbstractLookupElementFactory,
+        notImported: Boolean = false,
+        withReceiverCast: Boolean = false,
+        prohibitDuplicates: Boolean = false
     ) {
+        if (prohibitDuplicates && descriptor is CallableDescriptor && descriptor in processedCallables) return
+
         var lookupElements = lookupElementFactory.createStandardLookupElementsForDescriptor(descriptor, useReceiverTypes = true)
 
         if (withReceiverCast) {
@@ -80,10 +98,16 @@ class LookupElementsCollector(
         }
 
         addElements(lookupElements, notImported)
+
+        if (prohibitDuplicates && descriptor is CallableDescriptor) processedCallables.add(descriptor)
     }
 
     fun addElement(element: LookupElement, notImported: Boolean = false) {
         if (!prefixMatcher.prefixMatches(element)) return
+        if (!allowExpectDeclarations) {
+            val descriptor = (element.`object` as? DeclarationLookupObject)?.descriptor
+            if ((descriptor as? MemberDescriptor)?.isExpect == true) return
+        }
 
         if (notImported) {
             element.putUserData(NOT_IMPORTED_KEY, Unit)
@@ -121,14 +145,19 @@ class LookupElementsCollector(
             result = postProcessor(result)
         }
 
-        val psiElement = (result.`object` as? DeclarationLookupObject)?.psiElement
-        if (psiElement != null) {
+        val declarationLookupObject = result.`object` as? DeclarationLookupObject
+        if (declarationLookupObject != null) {
             result = object : LookupElementDecorator<LookupElement>(result) {
-                override fun getPsiElement() = psiElement
+                override fun getPsiElement() = declarationLookupObject.psiElement
             }
         }
 
-        elements.add(result)
+        if (filter?.invoke(result) ?: true) {
+            elements.add(result)
+        }
+
+        val matchingDegree = RealPrefixMatchingWeigher.getBestMatchingDegree(result, prefixMatcher)
+        bestMatchingDegree = Math.max(bestMatchingDegree, matchingDegree)
     }
 
     // used to avoid insertion of spaces before/after ',', '=' on just typing
@@ -140,10 +169,6 @@ class LookupElementsCollector(
 
     fun addElements(elements: Iterable<LookupElement>, notImported: Boolean = false) {
         elements.forEach { addElement(it, notImported) }
-    }
-
-    fun advertiseSecondCompletion() {
-        JavaCompletionContributor.advertiseSecondCompletion(completionParameters.originalFile.project, resultSet)
     }
 
     fun restartCompletionOnPrefixChange(prefixCondition: ElementPattern<String>) {

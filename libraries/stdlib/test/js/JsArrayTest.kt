@@ -1,12 +1,15 @@
-package test.collections
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
 
-import org.junit.Test as test
+package test.collections.js
+
 import kotlin.test.*
-import java.util.ArrayList;
 
 class JsArrayTest {
 
-    @test fun arraySizeAndToList() {
+    @Test fun arraySizeAndToList() {
         val a1 = arrayOf<String>()
         val a2 = arrayOf("foo")
         val a3 = arrayOf("foo", "bar")
@@ -21,7 +24,7 @@ class JsArrayTest {
 
     }
 
-    @test fun arrayListFromCollection() {
+    @Test fun arrayListFromCollection() {
         var c: Collection<String>  = arrayOf("A", "B", "C").toList()
         var a = ArrayList(c)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,12 +27,12 @@ import org.jetbrains.org.objectweb.asm.FieldVisitor
 import org.jetbrains.org.objectweb.asm.MethodVisitor
 
 abstract class SignatureCollectingClassBuilderFactory(
-        delegate: ClassBuilderFactory
+        delegate: ClassBuilderFactory, val shouldGenerate: (JvmDeclarationOrigin) -> Boolean
 ) : DelegatingClassBuilderFactory(delegate) {
 
     protected abstract fun handleClashingSignatures(data: ConflictingJvmDeclarationsData)
     protected abstract fun onClassDone(classOrigin: JvmDeclarationOrigin,
-                                       classInternalName: String?,
+                                       classInternalName: String,
                                        signatures: MultiMap<RawSignature, JvmDeclarationOrigin>)
 
     override fun newClassBuilder(origin: JvmDeclarationOrigin): DelegatingClassBuilder {
@@ -46,7 +46,7 @@ abstract class SignatureCollectingClassBuilderFactory(
 
         override fun getDelegate() = _delegate
 
-        private var classInternalName: String? = null
+        private lateinit var classInternalName: String
 
         private val signatures = LinkedMultiMap<RawSignature, JvmDeclarationOrigin>()
 
@@ -57,11 +57,17 @@ abstract class SignatureCollectingClassBuilderFactory(
 
         override fun newField(origin: JvmDeclarationOrigin, access: Int, name: String, desc: String, signature: String?, value: Any?): FieldVisitor {
             signatures.putValue(RawSignature(name, desc, MemberKind.FIELD), origin)
+            if (!shouldGenerate(origin)) {
+                return AbstractClassBuilder.EMPTY_FIELD_VISITOR
+            }
             return super.newField(origin, access, name, desc, signature, value)
         }
 
         override fun newMethod(origin: JvmDeclarationOrigin, access: Int, name: String, desc: String, signature: String?, exceptions: Array<out String>?): MethodVisitor {
             signatures.putValue(RawSignature(name, desc, MemberKind.METHOD), origin)
+            if (!shouldGenerate(origin)) {
+                return AbstractClassBuilder.EMPTY_METHOD_VISITOR
+            }
             return super.newMethod(origin, access, name, desc, signature, exceptions)
         }
 

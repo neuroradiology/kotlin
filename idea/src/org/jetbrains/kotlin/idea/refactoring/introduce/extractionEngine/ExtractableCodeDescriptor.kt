@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
-import org.jetbrains.kotlin.idea.core.KotlinNameSuggester
 import org.jetbrains.kotlin.idea.core.replaced
 import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringBundle
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractionEngine.OutputValue.*
@@ -33,22 +32,21 @@ import org.jetbrains.kotlin.idea.references.KtSimpleNameReference.ShorteningMode
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.idea.util.IdeDescriptorRenderers
 import org.jetbrains.kotlin.idea.util.approximateFlexibleTypes
-import org.jetbrains.kotlin.idea.util.isAnnotatedNotNull
-import org.jetbrains.kotlin.idea.util.isAnnotatedNullable
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.KotlinPsiRange
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
+import org.jetbrains.kotlin.lexer.KtKeywordToken
+import org.jetbrains.kotlin.lexer.KtModifierKeywordToken
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.psi.psiUtil.getQualifiedElement
-import org.jetbrains.kotlin.psi.psiUtil.getQualifiedElementSelector
-import org.jetbrains.kotlin.psi.psiUtil.getQualifiedExpressionForSelector
-import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
+import org.jetbrains.kotlin.psi.psiUtil.*
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.descriptorUtil.resolveTopLevelClass
 import org.jetbrains.kotlin.types.*
+import org.jetbrains.kotlin.types.typeUtil.TypeNullability
 import org.jetbrains.kotlin.types.typeUtil.builtIns
 import org.jetbrains.kotlin.types.typeUtil.isUnit
+import org.jetbrains.kotlin.types.typeUtil.nullability
 import java.util.*
 
 interface Parameter {
@@ -86,7 +84,7 @@ class RenameReplacement(override val parameter: Parameter): ParameterReplacement
         var expressionToReplace = (e.parent as? KtThisExpression ?: e).let { it.getQualifiedExpressionForSelector() ?: it }
         val parameterName = KtPsiUtil.unquoteIdentifier(parameter.nameForRef)
         val replacingName =
-                if (e.text.startsWith('`') || !KotlinNameSuggester.isIdentifier(parameterName)) "`$parameterName`" else parameterName
+                if (e.text.startsWith('`') || !parameterName.isIdentifier()) "`$parameterName`" else parameterName
         val psiFactory = KtPsiFactory(e)
         val replacement = when {
             parameter == descriptor.receiverParameter -> psiFactory.createExpression("this")
@@ -104,7 +102,7 @@ abstract class WrapInWithReplacement : Replacement {
         val call = (e as? KtSimpleNameExpression)?.getQualifiedElement() ?: return e
         val replacingExpression = KtPsiFactory(e).createExpressionByPattern("with($0) { $1 }", argumentText, call)
         val replace = call.replace(replacingExpression)
-        return (replace as KtCallExpression).lambdaArguments.first().getLambdaExpression().bodyExpression!!.statements.first()
+        return (replace as KtCallExpression).lambdaArguments.first().getLambdaExpression()!!.bodyExpression!!.statements.first()
     }
 }
 
@@ -115,7 +113,7 @@ class WrapParameterInWithReplacement(override val parameter: Parameter): WrapInW
     override fun copy(parameter: Parameter) = WrapParameterInWithReplacement(parameter)
 }
 
-class WrapCompanionInWithReplacement(val descriptor: ClassDescriptor): WrapInWithReplacement() {
+class WrapObjectInWithReplacement(val descriptor: ClassDescriptor): WrapInWithReplacement() {
     override val argumentText: String
         get() = IdeDescriptorRenderers.SOURCE_CODE.renderClassifierName(descriptor)
 }
@@ -159,7 +157,7 @@ interface OutputValue {
             val elementsToReplace: List<KtExpression>,
             val elementToInsertAfterCall: KtElement?,
             val conditional: Boolean,
-            private val builtIns: KotlinBuiltIns
+            builtIns: KotlinBuiltIns
     ): OutputValue {
         override val originalExpressions: List<KtExpression> get() = elementsToReplace
         override val valueType: KotlinType = with(builtIns) { if (conditional) booleanType else unitType }
@@ -331,10 +329,10 @@ val ControlFlow.possibleReturnTypes: List<KotlinType>
         return when {
             !returnType.isNullabilityFlexible() ->
                 listOf(returnType)
-            returnType.isAnnotatedNotNull() || returnType.isAnnotatedNullable() ->
-                listOf(approximateFlexibleTypes(returnType))
+            returnType.nullability() != TypeNullability.FLEXIBLE ->
+                listOf(returnType.approximateFlexibleTypes())
             else ->
-                returnType.getCapability(Flexibility::class.java).let { listOf(it!!.upperBound, it.lowerBound) }
+                (returnType.unwrap() as FlexibleType).let { listOf(it.upperBound, it.lowerBound) }
         }
     }
 
@@ -352,13 +350,14 @@ data class ExtractableCodeDescriptor(
         val extractionData: ExtractionData,
         val originalContext: BindingContext,
         val suggestedNames: List<String>,
-        val visibility: String,
+        val visibility: KtModifierKeywordToken?,
         val parameters: List<Parameter>,
         val receiverParameter: Parameter?,
         val typeParameters: List<TypeParameter>,
         val replacementMap: MultiMap<KtSimpleNameExpression, Replacement>,
         val controlFlow: ControlFlow,
-        val returnType: KotlinType
+        val returnType: KotlinType,
+        val modifiers: List<KtKeywordToken> = emptyList()
 ) {
     val name: String get() = suggestedNames.firstOrNull() ?: ""
     val duplicates: List<DuplicateInfo> by lazy { findDuplicates() }
@@ -366,7 +365,7 @@ data class ExtractableCodeDescriptor(
 
 fun ExtractableCodeDescriptor.copy(
         newName: String,
-        newVisibility: String,
+        newVisibility: KtModifierKeywordToken?,
         oldToNewParameters: Map<Parameter, Parameter>,
         newReceiver: Parameter?,
         returnType: KotlinType?
@@ -394,7 +393,8 @@ fun ExtractableCodeDescriptor.copy(
             typeParameters,
             newReplacementMap,
             controlFlow.copy(oldToNewParameters),
-            returnType ?: this.returnType)
+            returnType ?: this.returnType,
+            modifiers)
 }
 
 enum class ExtractionTarget(val targetName: String) {
@@ -468,7 +468,6 @@ val propertyTargets: List<ExtractionTarget> = listOf(ExtractionTarget.PROPERTY_W
 data class ExtractionGeneratorOptions(
         val inTempFile: Boolean = false,
         val target: ExtractionTarget = ExtractionTarget.FUNCTION,
-        val flexibleTypesAllowed: Boolean = false,
         val dummyName: String? = null,
         val allowExpressionBody: Boolean = true,
         val delayInitialOccurrenceReplacement: Boolean = false
@@ -539,7 +538,7 @@ class AnalysisResult (
                     }
             )
 
-            return additionalInfo?.let { "$message\n\n${it.map { StringUtil.htmlEmphasize(it) }.joinToString("\n")}" } ?: message
+            return additionalInfo?.let { "$message\n\n${it.joinToString("\n") { StringUtil.htmlEmphasize(it) }}" } ?: message
         }
     }
 }

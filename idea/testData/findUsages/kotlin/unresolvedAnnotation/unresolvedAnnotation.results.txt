@@ -1,1 +1,2 @@
-Usage in extends/implements clause (1: 29) public class Client extends Foo {}
+Unclassified usage 1 public class Client extends Foo {}
+Usage in extends/implements clause 1 public class Client extends Foo {}

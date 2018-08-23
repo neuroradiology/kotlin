@@ -36,12 +36,12 @@ public abstract class MethodTransformer {
     }
 
     @NotNull
-    protected static <V extends Value> Frame<V>[] analyze(
+    public static <V extends Value> Frame<V>[] analyze(
             @NotNull String internalClassName,
             @NotNull MethodNode node,
             @NotNull Interpreter<V> interpreter
     ) {
-        return runAnalyzer(new Analyzer<V>(interpreter), internalClassName, node);
+        return runAnalyzer(new Analyzer<>(interpreter), internalClassName, node);
     }
 
     public abstract void transform(@NotNull String internalClassName, @NotNull MethodNode methodNode);

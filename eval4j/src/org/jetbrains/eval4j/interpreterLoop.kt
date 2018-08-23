@@ -64,8 +64,10 @@ abstract class ThrownFromEvalExceptionBase(cause: Throwable): RuntimeException(c
     override fun toString(): String = "Thrown by evaluator: ${cause}"
 }
 
-class BrokenCode(cause: Throwable): ThrownFromEvalExceptionBase(cause)
-class ThrownFromEvalException(cause: Throwable): ThrownFromEvalExceptionBase(cause)
+class BrokenCode(cause: Throwable) : ThrownFromEvalExceptionBase(cause)
+
+// Interpreting exceptions should not be sent to EA
+class Eval4JInterpretingException(override val cause: Throwable) : RuntimeException(cause)
 
 class ThrownFromEvaluatedCodeException(val exception: ObjectValue): RuntimeException() {
     override fun toString(): String = "Thrown from evaluated code: $exception"
@@ -120,7 +122,7 @@ fun interpreterLoop(
         return exceptionCaught(exceptionValue) {
             exceptionType ->
             try {
-                val exceptionClass = exception.javaClass
+                val exceptionClass = exception::class.java
                 val _class = Class.forName(
                         exceptionType.internalName.replace('/', '.'),
                         true,
@@ -222,7 +224,7 @@ fun interpreterLoop(
                     }
                     catch (e: ThrownFromEvalExceptionBase) {
                         val exception = e.cause!!
-                        val exceptionValue = ObjectValue(exception, Type.getType(exception.javaClass))
+                        val exceptionValue = ObjectValue(exception, Type.getType(exception::class.java))
                         val handled = handler.exceptionThrown(frame, currentInsn,
                                 exceptionValue)
                         if (handled != null) return handled

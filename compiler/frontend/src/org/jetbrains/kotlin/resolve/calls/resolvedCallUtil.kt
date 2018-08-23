@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,17 +16,21 @@
 
 package org.jetbrains.kotlin.resolve.calls.resolvedCallUtil
 
-import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.psi.KtCallElement
 import org.jetbrains.kotlin.psi.KtPsiUtil
 import org.jetbrains.kotlin.psi.KtThisExpression
+import org.jetbrains.kotlin.psi.ValueArgument
 import org.jetbrains.kotlin.resolve.BindingContext
-import org.jetbrains.kotlin.resolve.calls.context.BasicCallResolutionContext
+import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCall
+import org.jetbrains.kotlin.resolve.calls.callUtil.isSafeCall
 import org.jetbrains.kotlin.resolve.calls.context.CallResolutionContext
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactory
+import org.jetbrains.kotlin.resolve.calls.smartcasts.getReceiverValueWithSmartCast
 import org.jetbrains.kotlin.resolve.calls.tasks.ExplicitReceiverKind
 import org.jetbrains.kotlin.resolve.descriptorUtil.getOwnerForEffectiveDispatchReceiverParameter
+import org.jetbrains.kotlin.resolve.scopes.receivers.ClassValueReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ImplicitReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
@@ -40,21 +44,24 @@ import org.jetbrains.kotlin.types.TypeUtils
 //   val y = other.x // return false for `other.x` as it's receiver is not `this`
 // }
 fun ResolvedCall<*>.hasThisOrNoDispatchReceiver(
-        context: BindingContext
+    context: BindingContext
 ): Boolean {
     val dispatchReceiverValue = dispatchReceiver
     if (resultingDescriptor.dispatchReceiverParameter == null || dispatchReceiverValue == null) return true
 
     var dispatchReceiverDescriptor: DeclarationDescriptor? = null
-    if (dispatchReceiverValue is ImplicitReceiver) {
-        // foo() -- implicit receiver
-        dispatchReceiverDescriptor = dispatchReceiverValue.declarationDescriptor
-    }
-    else if (dispatchReceiverValue is ExpressionReceiver) {
-        val expression = KtPsiUtil.deparenthesize(dispatchReceiverValue.expression)
-        if (expression is KtThisExpression) {
-            // this.foo() -- explicit receiver
-            dispatchReceiverDescriptor = context.get(BindingContext.REFERENCE_TARGET, expression.instanceReference)
+    when (dispatchReceiverValue) {
+        is ImplicitReceiver -> // foo() -- implicit receiver
+            dispatchReceiverDescriptor = dispatchReceiverValue.declarationDescriptor
+        is ClassValueReceiver -> {
+            dispatchReceiverDescriptor = dispatchReceiverValue.classQualifier.descriptor
+        }
+        is ExpressionReceiver -> {
+            val expression = KtPsiUtil.deparenthesize(dispatchReceiverValue.expression)
+            if (expression is KtThisExpression) {
+                // this.foo() -- explicit receiver
+                dispatchReceiverDescriptor = context.get(BindingContext.REFERENCE_TARGET, expression.instanceReference)
+            }
         }
     }
 
@@ -64,28 +71,39 @@ fun ResolvedCall<*>.hasThisOrNoDispatchReceiver(
 fun ResolvedCall<*>.getExplicitReceiverValue(): ReceiverValue? {
     return when (explicitReceiverKind) {
         ExplicitReceiverKind.DISPATCH_RECEIVER -> dispatchReceiver!!
-        ExplicitReceiverKind.EXTENSION_RECEIVER, ExplicitReceiverKind.BOTH_RECEIVERS -> extensionReceiver as ReceiverValue
+        ExplicitReceiverKind.EXTENSION_RECEIVER, ExplicitReceiverKind.BOTH_RECEIVERS -> extensionReceiver!!
         else -> null
     }
 }
 
-fun ResolvedCall<*>.getImplicitReceiverValue(): ReceiverValue? {
-    return when (explicitReceiverKind) {
-        ExplicitReceiverKind.NO_EXPLICIT_RECEIVER -> if (extensionReceiver != null) extensionReceiver as ReceiverValue else dispatchReceiver
-        ExplicitReceiverKind.DISPATCH_RECEIVER -> extensionReceiver as ReceiverValue?
-        ExplicitReceiverKind.EXTENSION_RECEIVER -> dispatchReceiver
-        else -> null
+fun ResolvedCall<*>.getImplicitReceiverValue(): ImplicitReceiver? =
+    getImplicitReceivers().firstOrNull() as? ImplicitReceiver
+
+fun ResolvedCall<*>.getImplicitReceivers(): Collection<ReceiverValue> =
+    when (explicitReceiverKind) {
+        ExplicitReceiverKind.NO_EXPLICIT_RECEIVER -> listOfNotNull(extensionReceiver, dispatchReceiver)
+        ExplicitReceiverKind.DISPATCH_RECEIVER -> listOfNotNull(extensionReceiver)
+        ExplicitReceiverKind.EXTENSION_RECEIVER -> listOfNotNull(dispatchReceiver)
+        ExplicitReceiverKind.BOTH_RECEIVERS -> emptyList()
     }
-}
 
 private fun ResolvedCall<*>.hasSafeNullableReceiver(context: CallResolutionContext<*>): Boolean {
-    if (!isSafeCall) return false
-    val receiverValue = getExplicitReceiverValue()?.let { DataFlowValueFactory.createDataFlowValue(it, context) }
-                        ?: return false
-    return context.dataFlowInfo.getPredictableNullability(receiverValue).canBeNull()
+    if (!call.isSafeCall()) return false
+    val receiverValue = getExplicitReceiverValue()?.let { context.dataFlowValueFactory.createDataFlowValue(it, context) }
+            ?: return false
+    return context.dataFlowInfo.getStableNullability(receiverValue).canBeNull()
 }
 
 fun ResolvedCall<*>.makeNullableTypeIfSafeReceiver(type: KotlinType?, context: CallResolutionContext<*>) =
-        type?.let { TypeUtils.makeNullableIfNeeded(type, hasSafeNullableReceiver(context)) }
+    type?.let { TypeUtils.makeNullableIfNeeded(type, hasSafeNullableReceiver(context)) }
 
 fun ResolvedCall<*>.hasBothReceivers() = dispatchReceiver != null && extensionReceiver != null
+
+fun ResolvedCall<*>.getDispatchReceiverWithSmartCast(): ReceiverValue? =
+    getReceiverValueWithSmartCast(dispatchReceiver, smartCastDispatchReceiverType)
+
+fun KtCallElement.getArgumentByParameterIndex(index: Int, context: BindingContext): List<ValueArgument> {
+    val resolvedCall = getResolvedCall(context) ?: return emptyList()
+    val parameterToProcess = resolvedCall.resultingDescriptor.valueParameters.getOrNull(index) ?: return emptyList()
+    return resolvedCall.valueArguments[parameterToProcess]?.arguments ?: emptyList()
+}

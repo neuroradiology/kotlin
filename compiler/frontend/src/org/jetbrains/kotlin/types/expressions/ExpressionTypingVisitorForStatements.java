@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2017 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 package org.jetbrains.kotlin.types.expressions;
 
-import com.google.common.collect.Sets;
 import com.intellij.psi.tree.IElementType;
 import kotlin.Pair;
 import org.jetbrains.annotations.NotNull;
@@ -39,14 +38,18 @@ import org.jetbrains.kotlin.resolve.calls.results.OverloadResolutionResultsUtil;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowInfo;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValue;
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactory;
+import org.jetbrains.kotlin.resolve.lazy.ForceResolveUtil;
 import org.jetbrains.kotlin.resolve.scopes.LexicalWritableScope;
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver;
 import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.KotlinTypeKt;
 import org.jetbrains.kotlin.types.TypeUtils;
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker;
 import org.jetbrains.kotlin.types.expressions.typeInfoFactory.TypeInfoFactoryKt;
+import org.jetbrains.kotlin.util.OperatorNameConventions;
 
 import java.util.Collection;
+import java.util.HashSet;
 
 import static org.jetbrains.kotlin.diagnostics.Errors.*;
 import static org.jetbrains.kotlin.psi.KtPsiUtil.deparenthesize;
@@ -87,7 +90,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
             @NotNull ExpressionTypingContext context
     ) {
         if (assignmentType != null && !KotlinBuiltIns.isUnit(assignmentType) && !noExpectedType(context.expectedType) &&
-            !context.expectedType.isError() && TypeUtils.equalTypes(context.expectedType, assignmentType)) {
+            !KotlinTypeKt.isError(context.expectedType) && TypeUtils.equalTypes(context.expectedType, assignmentType)) {
             context.trace.report(Errors.ASSIGNMENT_TYPE_MISMATCH.on(expression, context.expectedType));
             return null;
         }
@@ -111,6 +114,18 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
     }
 
     @Override
+    public KotlinTypeInfo visitTypeAlias(@NotNull KtTypeAlias typeAlias, ExpressionTypingContext context) {
+        TypeAliasDescriptor typeAliasDescriptor = components.descriptorResolver.resolveTypeAliasDescriptor(
+                context.scope.getOwnerDescriptor(), context.scope, typeAlias, context.trace);
+        scope.addClassifierDescriptor(typeAliasDescriptor);
+        ForceResolveUtil.forceResolveAllContents(typeAliasDescriptor);
+
+        facade.getComponents().declarationsCheckerBuilder.withTrace(context.trace).checkLocalTypeAliasDeclaration(typeAlias, typeAliasDescriptor);
+
+        return TypeInfoFactoryKt.createTypeInfo(components.dataFlowAnalyzer.checkStatementType(typeAlias, context), context);
+    }
+
+    @Override
     public KotlinTypeInfo visitDestructuringDeclaration(@NotNull KtDestructuringDeclaration multiDeclaration, ExpressionTypingContext context) {
         components.annotationResolver.resolveAnnotationsWithArguments(scope, multiDeclaration.getModifierList(), context.trace);
 
@@ -123,7 +138,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
                 facade, initializer, context.replaceExpectedType(NO_EXPECTED_TYPE).replaceContextDependency(INDEPENDENT)) : null;
 
         components.destructuringDeclarationResolver
-                .defineLocalVariablesFromMultiDeclaration(scope, multiDeclaration, expressionReceiver, initializer, context);
+                .defineLocalVariablesFromDestructuringDeclaration(scope, multiDeclaration, expressionReceiver, initializer, context);
         components.modifiersChecker.withTrace(context.trace).checkModifiersForDestructuringDeclaration(multiDeclaration);
         components.identifierChecker.checkDeclaration(multiDeclaration, context.trace);
 
@@ -138,7 +153,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
 
     @Override
     public KotlinTypeInfo visitNamedFunction(@NotNull KtNamedFunction function, ExpressionTypingContext context) {
-        return functions.visitNamedFunction(function, context, true, scope);
+        return functions.visitNamedFunction(function, context, /* isDeclaration = */ function.getName() != null, scope);
     }
 
     @Override
@@ -211,15 +226,14 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
                         context.replaceTraceAndCache(temporaryForAssignmentOperation).replaceScope(scope),
                         receiver, expression, name
                 );
-        KotlinType assignmentOperationType = OverloadResolutionResultsUtil.getResultingType(assignmentOperationDescriptors,
-                                                                                            context.contextDependency);
+        KotlinType assignmentOperationType = OverloadResolutionResultsUtil.getResultingType(assignmentOperationDescriptors, context);
 
         OverloadResolutionResults<FunctionDescriptor> binaryOperationDescriptors;
         KotlinType binaryOperationType;
         TemporaryTraceAndCache temporaryForBinaryOperation = TemporaryTraceAndCache.create(
                 context, "trace to check binary operation like '+' for", expression);
         TemporaryBindingTrace ignoreReportsTrace = TemporaryBindingTrace.create(context.trace, "Trace for checking assignability");
-        boolean lhsAssignable = basic.checkLValue(ignoreReportsTrace, context, left, right);
+        boolean lhsAssignable = basic.checkLValue(ignoreReportsTrace, context, left, right, expression);
         if (assignmentOperationType == null || lhsAssignable) {
             // Check for '+'
             Name counterpartName = OperatorConventions.BINARY_OPERATION_NAMES.get(OperatorConventions.ASSIGNMENT_OPERATION_COUNTERPARTS.get(operationType));
@@ -227,7 +241,8 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
                     context.replaceTraceAndCache(temporaryForBinaryOperation).replaceScope(scope),
                     receiver, expression, counterpartName
             );
-            binaryOperationType = OverloadResolutionResultsUtil.getResultingType(binaryOperationDescriptors, context.contextDependency);
+
+            binaryOperationType = OverloadResolutionResultsUtil.getResultingType(binaryOperationDescriptors, context);
         }
         else {
             binaryOperationDescriptors = OverloadResolutionResultsImpl.nameNotFound();
@@ -236,18 +251,25 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
 
         KotlinType type = assignmentOperationType != null ? assignmentOperationType : binaryOperationType;
         KotlinTypeInfo rightInfo = leftInfo;
-        if (assignmentOperationDescriptors.isSuccess() && binaryOperationDescriptors.isSuccess()) {
+
+        boolean hasRemAssignOperation = atLeastOneOperation(assignmentOperationDescriptors.getResultingCalls(), OperatorNameConventions.REM_ASSIGN);
+        boolean hasRemBinaryOperation = atLeastOneOperation(binaryOperationDescriptors.getResultingCalls(), OperatorNameConventions.REM);
+
+        boolean oneTypeOfModRemOperations = hasRemAssignOperation == hasRemBinaryOperation;
+        if (assignmentOperationDescriptors.isSuccess() && binaryOperationDescriptors.isSuccess() && oneTypeOfModRemOperations) {
             // Both 'plus()' and 'plusAssign()' available => ambiguity
             OverloadResolutionResults<FunctionDescriptor> ambiguityResolutionResults = OverloadResolutionResultsUtil.ambiguity(assignmentOperationDescriptors, binaryOperationDescriptors);
             context.trace.report(ASSIGN_OPERATOR_AMBIGUITY.on(operationSign, ambiguityResolutionResults.getResultingCalls()));
-            Collection<DeclarationDescriptor> descriptors = Sets.newHashSet();
+            Collection<DeclarationDescriptor> descriptors = new HashSet<>();
             for (ResolvedCall<?> resolvedCall : ambiguityResolutionResults.getResultingCalls()) {
                 descriptors.add(resolvedCall.getResultingDescriptor());
             }
             rightInfo = facade.getTypeInfo(right, context.replaceDataFlowInfo(leftInfo.getDataFlowInfo()));
             context.trace.record(AMBIGUOUS_REFERENCE_TARGET, operationSign, descriptors);
         }
-        else if (assignmentOperationType != null && (assignmentOperationDescriptors.isSuccess() || !binaryOperationDescriptors.isSuccess())) {
+        else if (assignmentOperationType != null &&
+                 (assignmentOperationDescriptors.isSuccess() || !binaryOperationDescriptors.isSuccess()) &&
+                 (!hasRemBinaryOperation || !binaryOperationDescriptors.isSuccess())) {
             // There's 'plusAssign()', so we do a.plusAssign(b)
             temporaryForAssignmentOperation.commit();
             if (!KotlinTypeChecker.DEFAULT.equalTypes(components.builtIns.getUnitType(), assignmentOperationType)) {
@@ -261,7 +283,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
             if (left instanceof KtArrayAccessExpression) {
                 ExpressionTypingContext contextForResolve = context.replaceScope(scope).replaceBindingTrace(TemporaryBindingTrace.create(
                         context.trace, "trace to resolve array set method for assignment", expression));
-                basic.resolveArrayAccessSetMethod((KtArrayAccessExpression) left, right, contextForResolve, context.trace);
+                basic.resolveImplicitArrayAccessSetMethod((KtArrayAccessExpression) left, right, contextForResolve, context.trace);
             }
             rightInfo = facade.getTypeInfo(right, context.replaceDataFlowInfo(leftInfo.getDataFlowInfo()));
 
@@ -269,10 +291,20 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
 
             components.dataFlowAnalyzer.checkType(binaryOperationType, expression, context.replaceExpectedType(expectedType)
                     .replaceDataFlowInfo(rightInfo.getDataFlowInfo()).replaceCallPosition(new CallPosition.PropertyAssignment(left)));
-            basic.checkLValue(context.trace, context, leftOperand, right);
+            basic.checkLValue(context.trace, context, leftOperand, right, expression);
         }
         temporary.commit();
         return rightInfo.replaceType(checkAssignmentType(type, expression, contextWithExpectedType));
+    }
+
+    private static boolean atLeastOneOperation(Collection<? extends ResolvedCall<FunctionDescriptor>> calls, Name operationName) {
+        for (ResolvedCall<FunctionDescriptor> call : calls) {
+            if (call.getCandidateDescriptor().getName().equals(operationName)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     @Nullable
@@ -297,10 +329,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
                 contextWithExpectedType.replaceExpectedType(NO_EXPECTED_TYPE).replaceScope(scope).replaceContextDependency(INDEPENDENT);
         KtExpression leftOperand = expression.getLeft();
         if (leftOperand instanceof KtAnnotatedExpression) {
-            // We will lose all annotations during deparenthesizing, so we have to resolve them right now
-            components.annotationResolver.resolveAnnotationsWithArguments(
-                    scope, ((KtAnnotatedExpression) leftOperand).getAnnotationEntries(), context.trace
-            );
+            basic.resolveAnnotationsOnExpression((KtAnnotatedExpression) leftOperand, context);
         }
         KtExpression left = deparenthesize(leftOperand);
         KtExpression right = expression.getRight();
@@ -308,7 +337,7 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
             KtArrayAccessExpression arrayAccessExpression = (KtArrayAccessExpression) left;
             if (right == null) return TypeInfoFactoryKt.noTypeInfo(context);
             KotlinTypeInfo typeInfo = basic.resolveArrayAccessSetMethod(arrayAccessExpression, right, context, context.trace);
-            basic.checkLValue(context.trace, context, arrayAccessExpression, right);
+            basic.checkLValue(context.trace, context, arrayAccessExpression, right, expression);
             return typeInfo.replaceType(checkAssignmentType(typeInfo.getType(), expression, contextWithExpectedType));
         }
         KotlinTypeInfo leftInfo = ExpressionTypingUtils.getTypeInfoOrNullType(left, context, facade);
@@ -323,17 +352,17 @@ public class ExpressionTypingVisitorForStatements extends ExpressionTypingVisito
             dataFlowInfo = resultInfo.getDataFlowInfo();
             KotlinType rightType = resultInfo.getType();
             if (left != null && expectedType != null && rightType != null) {
-                DataFlowValue leftValue = DataFlowValueFactory.createDataFlowValue(left, expectedType, context);
-                DataFlowValue rightValue = DataFlowValueFactory.createDataFlowValue(right, rightType, context);
+                DataFlowValue leftValue = components.dataFlowValueFactory.createDataFlowValue(left, expectedType, context);
+                DataFlowValue rightValue = components.dataFlowValueFactory.createDataFlowValue(right, rightType, context);
                 // We cannot say here anything new about rightValue except it has the same value as leftValue
-                resultInfo = resultInfo.replaceDataFlowInfo(dataFlowInfo.assign(leftValue, rightValue));
+                resultInfo = resultInfo.replaceDataFlowInfo(dataFlowInfo.assign(leftValue, rightValue, components.languageVersionSettings));
             }
         }
         else {
             resultInfo = leftInfo;
         }
         if (expectedType != null && leftOperand != null) { //if expectedType == null, some other error has been generated
-            basic.checkLValue(context.trace, context, leftOperand, right);
+            basic.checkLValue(context.trace, context, leftOperand, right, expression);
         }
         return resultInfo.replaceType(components.dataFlowAnalyzer.checkStatementType(expression, contextWithExpectedType));
     }

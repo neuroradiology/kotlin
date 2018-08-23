@@ -22,17 +22,18 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.refactoring.RefactoringActionHandler
-import org.jetbrains.kotlin.idea.refactoring.getExtractionContainers
+import org.jetbrains.kotlin.idea.codeInsight.CodeInsightUtils
 import org.jetbrains.kotlin.idea.refactoring.KotlinRefactoringBundle
+import org.jetbrains.kotlin.idea.refactoring.getExtractionContainers
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractFunction.ui.KotlinExtractFunctionDialog
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractionEngine.*
 import org.jetbrains.kotlin.idea.refactoring.introduce.selectElementsWithTargetSibling
+import org.jetbrains.kotlin.idea.refactoring.introduce.validateExpressionElements
 import org.jetbrains.kotlin.idea.util.psi.patternMatching.toRange
-import org.jetbrains.kotlin.psi.KtBlockExpression
-import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.*
 
 class ExtractKotlinFunctionHandler(
-        val allContainersEnabled: Boolean = false,
+        private val allContainersEnabled: Boolean = false,
         private val helper: ExtractionEngineHelper = ExtractKotlinFunctionHandler.InteractiveExtractionHelper) : RefactoringActionHandler {
 
     object InteractiveExtractionHelper : ExtractionEngineHelper(EXTRACT_FUNCTION) {
@@ -66,6 +67,9 @@ class ExtractKotlinFunctionHandler(
                 EXTRACT_FUNCTION,
                 editor,
                 file,
+                "Select target code block",
+                listOf(CodeInsightUtils.ElementKind.EXPRESSION),
+                ::validateExpressionElements,
                 { elements, parent -> parent.getExtractionContainers(elements.size == 1, allContainersEnabled) },
                 continuation
         )

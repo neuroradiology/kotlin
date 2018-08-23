@@ -16,12 +16,14 @@
 
 package org.jetbrains.kotlin.builtins.functions
 
+import org.jetbrains.kotlin.builtins.BuiltInsPackageFragment
 import org.jetbrains.kotlin.builtins.functions.FunctionClassDescriptor.Kind
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
+import org.jetbrains.kotlin.descriptors.deserialization.ClassDescriptorFactory
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.serialization.deserialization.ClassDescriptorFactory
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.storage.StorageManager
 
 /**
@@ -36,10 +38,9 @@ class BuiltInFictitiousFunctionClassFactory(
 
     companion object {
         private fun parseClassName(className: String, packageFqName: FqName): KindWithArity? {
-            val kind = FunctionClassDescriptor.Kind.byPackage(packageFqName) ?: return null
+            val kind = FunctionClassDescriptor.Kind.byClassNamePrefix(packageFqName, className) ?: return null
 
             val prefix = kind.classNamePrefix
-            if (!className.startsWith(prefix)) return null
 
             val arity = toInt(className.substring(prefix.length)) ?: return null
 
@@ -47,8 +48,9 @@ class BuiltInFictitiousFunctionClassFactory(
             return KindWithArity(kind, arity)
         }
 
-        @JvmStatic fun isFunctionClassName(className: String, packageFqName: FqName) =
-                parseClassName(className, packageFqName) != null
+        @JvmStatic
+        fun getFunctionalClassKind(className: String, packageFqName: FqName) =
+                parseClassName(className, packageFqName)?.kind
 
         private fun toInt(s: String): Int? {
             if (s.isEmpty()) return null
@@ -63,6 +65,13 @@ class BuiltInFictitiousFunctionClassFactory(
         }
     }
 
+    override fun shouldCreateClass(packageFqName: FqName, name: Name): Boolean {
+        val string = name.asString()
+        return (string.startsWith("Function") || string.startsWith("KFunction") ||
+                string.startsWith("SuspendFunction") || string.startsWith("KSuspendFunction")) // an optimization
+               && parseClassName(string, packageFqName) != null
+    }
+
     override fun createClass(classId: ClassId): ClassDescriptor? {
         if (classId.isLocal || classId.isNestedClass) return null
 
@@ -72,8 +81,14 @@ class BuiltInFictitiousFunctionClassFactory(
         val packageFqName = classId.packageFqName
         val (kind, arity) = parseClassName(className, packageFqName) ?: return null
 
-        val containingPackageFragment = module.getPackage(packageFqName).fragments.single()
+        val containingPackageFragment = module.getPackage(packageFqName).fragments.filterIsInstance<BuiltInsPackageFragment>().first()
 
         return FunctionClassDescriptor(storageManager, containingPackageFragment, kind, arity)
+    }
+
+    override fun getAllContributedClassesIfPossible(packageFqName: FqName): Collection<ClassDescriptor> {
+        // We don't want to return 256 classes here since it would cause them to appear in every import list of every file
+        // and likely slow down compilation very much
+        return emptySet()
     }
 }

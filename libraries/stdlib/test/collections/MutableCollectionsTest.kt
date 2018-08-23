@@ -1,24 +1,26 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the license/LICENSE.txt file.
+ */
+
 package test.collections
 
 import kotlin.test.*
 
-import java.util.*
-
-import org.junit.Test as test
 
 class MutableCollectionTest {
-    fun <T, C: MutableCollection<T>> testOperation(before: List<T>, after: List<T>, expectedModified: Boolean, toMutableCollection: (List<T>) -> C)
-            = fun(operation: (C.() -> Boolean)) {
-                val list = toMutableCollection(before)
-                assertEquals(expectedModified, list.operation())
-                assertEquals(toMutableCollection(after), list)
-            }
+    fun <T, C : MutableCollection<T>> testOperation(before: List<T>, after: List<T>, expectedModified: Boolean, toMutableCollection: (List<T>) -> C) =
+        fun(operation: (C.() -> Boolean)) {
+            val list = toMutableCollection(before)
+            assertEquals(expectedModified, list.operation())
+            assertEquals(toMutableCollection(after), list)
+        }
 
-    fun <T> testOperation(before: List<T>, after: List<T>, expectedModified: Boolean)
-            = testOperation(before, after, expectedModified, { it.toArrayList() })
+    fun <T> testOperation(before: List<T>, after: List<T>, expectedModified: Boolean) =
+        testOperation(before, after, expectedModified, { it.toMutableList() })
 
 
-    @test fun addAll() {
+    @Test fun addAll() {
         val data = listOf("foo", "bar")
 
         testOperation(emptyList(), data, true).let { assertAdd ->
@@ -36,7 +38,7 @@ class MutableCollectionTest {
         }
     }
 
-    @test fun removeAll() {
+    @Test fun removeAll() {
         val content = listOf("foo", "bar", "bar")
         val data = listOf("bar")
         val expected = listOf("foo")
@@ -61,7 +63,7 @@ class MutableCollectionTest {
         }
     }
 
-    @test fun retainAll() {
+    @Test fun retainAll() {
         val content = listOf("foo", "bar", "bar")
         val expected = listOf("bar", "bar")
 
@@ -95,6 +97,21 @@ class MutableCollectionTest {
             assertRetain { retainAll { it in data } }
             assertRetain { (this as MutableIterable<String>).retainAll { it in data } }
         }
+    }
+
+    @Test fun listFill() {
+        val list = MutableList(3) { it }
+        list.fill(42)
+        assertEquals(listOf(42, 42, 42), list)
+    }
+
+    @Test fun shuffled() {
+        val list = MutableList(100) { it }
+        val shuffled = list.shuffled()
+
+        assertNotEquals(list, shuffled)
+        assertEquals(list.toSet(), shuffled.toSet())
+        assertEquals(list.size, shuffled.distinct().size)
     }
 
 }

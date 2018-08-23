@@ -1,4 +1,4 @@
-// ERROR: Class 'A' must be declared abstract or implement abstract member public abstract fun run(): kotlin.Unit defined in java.lang.Runnable
+// ERROR: Class 'A' is not abstract and does not implement abstract member public abstract fun run(): Unit defined in java.lang.Runnable
 package foo
 
 // we use package 'foo'
@@ -8,7 +8,7 @@ import java.util.ArrayList // we need ArrayList
 
 // let's declare a class:
 internal class A /* just a sample name*/ : Runnable /* let's implement Runnable */ {
-    fun foo/* again a sample name */(p: Int /* parameter p */, c: Char /* parameter c */) {
+    fun foo /* again a sample name */(p: Int /* parameter p */, c: Char /* parameter c */) {
         // let's print something:
         println("1") // print 1
         println("2") // print 2
@@ -17,8 +17,7 @@ internal class A /* just a sample name*/ : Runnable /* let's implement Runnable 
 
         // end of printing
 
-        if (p > 0) {
-            // do this only when p > 0
+        if (p > 0) { // do this only when p > 0
             // we print 4 and return
             println("3")
             return  // do not continue

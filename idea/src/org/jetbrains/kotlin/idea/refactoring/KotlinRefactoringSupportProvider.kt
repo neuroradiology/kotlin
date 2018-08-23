@@ -22,6 +22,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiNameIdentifierOwner
 import com.intellij.refactoring.RefactoringActionHandler
 import org.jetbrains.kotlin.idea.refactoring.changeSignature.KotlinChangeSignatureHandler
+import org.jetbrains.kotlin.idea.refactoring.introduce.extractClass.KotlinExtractInterfaceHandler
+import org.jetbrains.kotlin.idea.refactoring.introduce.extractClass.KotlinExtractSuperclassHandler
 import org.jetbrains.kotlin.idea.refactoring.introduce.extractFunction.ExtractKotlinFunctionHandler
 import org.jetbrains.kotlin.idea.refactoring.introduce.introduceParameter.KotlinIntroduceLambdaParameterHandler
 import org.jetbrains.kotlin.idea.refactoring.introduce.introduceParameter.KotlinIntroduceParameterHandler
@@ -30,7 +32,8 @@ import org.jetbrains.kotlin.idea.refactoring.introduce.introduceVariable.KotlinI
 import org.jetbrains.kotlin.idea.refactoring.pullUp.KotlinPullUpHandler
 import org.jetbrains.kotlin.idea.refactoring.pushDown.KotlinPushDownHandler
 import org.jetbrains.kotlin.idea.refactoring.safeDelete.canDeleteElement
-import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.psi.KtConstructor
+import org.jetbrains.kotlin.psi.KtElement
 
 class KotlinRefactoringSupportProvider : RefactoringSupportProvider() {
     override fun isSafeDeleteAvailable(element: PsiElement) = element.canDeleteElement()
@@ -39,7 +42,7 @@ class KotlinRefactoringSupportProvider : RefactoringSupportProvider() {
 
     override fun getIntroduceParameterHandler() = KotlinIntroduceParameterHandler()
 
-    fun getIntroduceLambdaParameterHandler(): RefactoringActionHandler = KotlinIntroduceLambdaParameterHandler()
+    override fun getIntroduceFunctionalParameterHandler() = KotlinIntroduceLambdaParameterHandler()
 
     fun getIntroducePropertyHandler(): RefactoringActionHandler = KotlinIntroducePropertyHandler()
 
@@ -49,34 +52,15 @@ class KotlinRefactoringSupportProvider : RefactoringSupportProvider() {
     fun getExtractFunctionToScopeHandler(): RefactoringActionHandler =
             ExtractKotlinFunctionHandler(true, ExtractKotlinFunctionHandler.InteractiveExtractionHelper)
 
-    override fun isInplaceRenameAvailable(element: PsiElement, context: PsiElement?): Boolean {
-        when (element) {
-            is KtProperty -> {
-                if (element.isLocal) return true
-            }
-            is KtDestructuringDeclarationEntry -> return true
-            is KtFunction -> {
-                if (element.isLocal && element.nameIdentifier != null) return true
-            }
-            is KtParameter -> {
-                val parent = element.parent
-                if (parent is KtForExpression) {
-                    return true
-                }
-                if (parent is KtParameterList) {
-                    val grandparent = parent.parent
-                    return grandparent is KtCatchClause || grandparent is KtFunctionLiteral
-                }
-            }
-        }
-        return false
-    }
-
     override fun getChangeSignatureHandler() = KotlinChangeSignatureHandler()
 
     override fun getPullUpHandler() = KotlinPullUpHandler()
 
     override fun getPushDownHandler() = KotlinPushDownHandler()
+
+    override fun getExtractSuperClassHandler() = KotlinExtractSuperclassHandler
+
+    override fun getExtractInterfaceHandler() = KotlinExtractInterfaceHandler
 }
 
 class KotlinVetoRenameCondition: Condition<PsiElement> {

@@ -1,4 +1,5 @@
-import java.util.*
+// IGNORE_BACKEND: JS_IR
+// WITH_RUNTIME
 
 fun box() : String {
     val w = object : Comparator<String?> {

@@ -1,5 +1,4 @@
-// "Create extension property 'foo'" "true"
-// ERROR: Property must be initialized
+// "Create extension property 'Unit.foo'" "true"
 // WITH_RUNTIME
 
 fun test() {

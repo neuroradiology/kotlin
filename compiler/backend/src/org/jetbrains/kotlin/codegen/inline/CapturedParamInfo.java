@@ -17,38 +17,37 @@
 package org.jetbrains.kotlin.codegen.inline;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.codegen.StackValue;
-import org.jetbrains.org.objectweb.asm.Type;
 
 public class CapturedParamInfo extends ParameterInfo {
-
-    public static final CapturedParamInfo STUB = new CapturedParamInfo(CapturedParamDesc.createDesc(new CapturedParamOwner() {
-        @Override
-        public Type getType() {
-            return Type.getObjectType("STUB");
-        }
-    }, "STUB", Type.getObjectType("STUB")), true, -1, -1);
-
     public final CapturedParamDesc desc;
-
     private final String newFieldName;
+    private final boolean skipInConstructor;
 
-    private boolean skipInConstructor;
-
-    public CapturedParamInfo(@NotNull CapturedParamDesc desc, boolean skipped, int index, int remapIndex) {
-        this(desc, desc.getFieldName(), skipped, index, remapIndex);
-    }
+    //Now used only for bound function reference receiver
+    private boolean synthetic;
 
     public CapturedParamInfo(@NotNull CapturedParamDesc desc, @NotNull String newFieldName, boolean skipped, int index, int remapIndex) {
-        super(desc.getType(), skipped, index, remapIndex, index);
+        super(desc.getType(), skipped, index, remapIndex, -1);
         this.desc = desc;
         this.newFieldName = newFieldName;
+        this.skipInConstructor = false;
     }
 
-    public CapturedParamInfo(@NotNull CapturedParamDesc desc, @NotNull String newFieldName, boolean skipped, int index, StackValue remapIndex) {
-        super(desc.getType(), skipped, index, remapIndex, index);
+    public CapturedParamInfo(
+            @NotNull CapturedParamDesc desc,
+            @NotNull String newFieldName,
+            boolean skipped,
+            int index,
+            @Nullable StackValue remapIndex,
+            boolean skipInConstructor,
+            int declarationIndex
+    ) {
+        super(desc.getType(), skipped, index, remapIndex, declarationIndex);
         this.desc = desc;
         this.newFieldName = newFieldName;
+        this.skipInConstructor = skipInConstructor;
     }
 
     @NotNull
@@ -62,16 +61,13 @@ public class CapturedParamInfo extends ParameterInfo {
     }
 
     @NotNull
-    public CapturedParamInfo newIndex(int newIndex) {
-        return clone(newIndex, getRemapValue());
-    }
-
-    @NotNull
-    public CapturedParamInfo clone(int newIndex, StackValue newRamapIndex) {
-        CapturedParamInfo capturedParamInfo = new CapturedParamInfo(desc, newFieldName, isSkipped, newIndex, newRamapIndex);
-        capturedParamInfo.setLambda(lambda);
-        capturedParamInfo.setSkipInConstructor(skipInConstructor);
-        return capturedParamInfo;
+    public CapturedParamInfo cloneWithNewDeclarationIndex(int newDeclarationIndex) {
+        CapturedParamInfo result = new CapturedParamInfo(
+                desc, newFieldName, isSkipped, getIndex(), getRemapValue(), skipInConstructor, newDeclarationIndex
+        );
+        result.setLambda(getLambda());
+        result.setSynthetic(synthetic);
+        return result;
     }
 
     @NotNull
@@ -83,7 +79,15 @@ public class CapturedParamInfo extends ParameterInfo {
         return skipInConstructor;
     }
 
-    public void setSkipInConstructor(boolean skipInConstructor) {
-        this.skipInConstructor = skipInConstructor;
+    public boolean isSynthetic() {
+        return synthetic;
+    }
+
+    public void setSynthetic(boolean synthetic) {
+        this.synthetic = synthetic;
+    }
+
+    public static boolean isSynthetic(@NotNull ParameterInfo info) {
+        return info instanceof CapturedParamInfo && ((CapturedParamInfo) info).isSynthetic();
     }
 }

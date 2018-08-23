@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 JetBrains s.r.o.
+ * Copyright 2010-2016 JetBrains s.r.o.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,21 +16,20 @@
 
 package org.jetbrains.kotlin.js.translate.reference;
 
-import com.google.dart.compiler.backend.js.ast.JsExpression;
-import com.google.dart.compiler.backend.js.ast.JsNode;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor;
 import org.jetbrains.kotlin.descriptors.PackageViewDescriptor;
-import org.jetbrains.kotlin.js.translate.context.TemporaryVariable;
+import org.jetbrains.kotlin.js.backend.ast.JsExpression;
+import org.jetbrains.kotlin.js.backend.ast.JsNode;
 import org.jetbrains.kotlin.js.translate.context.TranslationContext;
 import org.jetbrains.kotlin.js.translate.utils.ErrorReportingUtils;
-import org.jetbrains.kotlin.js.translate.utils.JsAstUtils;
 import org.jetbrains.kotlin.psi.*;
+import org.jetbrains.kotlin.resolve.calls.callUtil.CallUtilKt;
+import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall;
 
 import static org.jetbrains.kotlin.js.translate.general.Translation.translateAsExpression;
 import static org.jetbrains.kotlin.js.translate.utils.BindingUtils.getDescriptorForReferenceExpression;
-import static org.jetbrains.kotlin.js.translate.utils.PsiUtils.getNotNullSimpleNameSelector;
 import static org.jetbrains.kotlin.js.translate.utils.PsiUtils.getSelector;
 
 public final class QualifiedExpressionTranslator {
@@ -43,11 +42,18 @@ public final class QualifiedExpressionTranslator {
                                                        @NotNull TranslationContext context, boolean forceOrderOfEvaluation) {
         JsExpression receiver = translateReceiver(expression, context);
         if (forceOrderOfEvaluation && receiver != null) {
-            TemporaryVariable temporaryVariable = context.declareTemporary(null);
-            context.addStatementToCurrentBlock(JsAstUtils.assignment(temporaryVariable.reference(), receiver).makeStmt());
-            receiver = temporaryVariable.reference();
+            receiver = context.defineTemporary(receiver);
         }
-        return VariableAccessTranslator.newInstance(context, getNotNullSimpleNameSelector(expression), receiver);
+
+        KtExpression selector = getSelector(expression);
+        if (selector instanceof KtSimpleNameExpression) {
+            return VariableAccessTranslator.newInstance(context, (KtSimpleNameExpression) selector, receiver);
+        }
+        if (selector instanceof KtCallExpression) {
+            return new QualifiedExpressionWithCallSelectorAccessTranslator((KtCallExpression) selector, receiver, context);
+        }
+
+        throw new AssertionError("Unexpected qualified expression: " + expression.getText());
     }
 
     @NotNull
@@ -55,7 +61,11 @@ public final class QualifiedExpressionTranslator {
             @NotNull KtQualifiedExpression expression,
             @NotNull TranslationContext context
     ) {
-        JsExpression receiver = translateReceiver(expression, context);
+        ResolvedCall<?> call = CallUtilKt.getResolvedCall(expression, context.bindingContext());
+        JsExpression receiver = null;
+        if (call != null) {
+            receiver = translateReceiver(expression, context);
+        }
         KtExpression selector = getSelector(expression);
         return dispatchToCorrectTranslator(receiver, selector, context);
     }
@@ -71,23 +81,23 @@ public final class QualifiedExpressionTranslator {
             return VariableAccessTranslator.newInstance(context, (KtSimpleNameExpression)selector, receiver).translateAsGet();
         }
         if (selector instanceof KtCallExpression) {
-            return invokeCallExpressionTranslator(receiver, selector, context);
+            return invokeCallExpressionTranslator(receiver, (KtCallExpression) selector, context);
         }
         //TODO: never get there
         if (selector instanceof KtSimpleNameExpression) {
-            return ReferenceTranslator.translateSimpleNameWithQualifier((KtSimpleNameExpression) selector, receiver, context);
+            return ReferenceTranslator.translateSimpleName((KtSimpleNameExpression) selector, context);
         }
         throw new AssertionError("Unexpected qualified expression: " + selector.getText());
     }
 
     @NotNull
-    private static JsNode invokeCallExpressionTranslator(
+    static JsNode invokeCallExpressionTranslator(
             @Nullable JsExpression receiver,
-            @NotNull KtExpression selector,
+            @NotNull KtCallExpression selector,
             @NotNull TranslationContext context
     ) {
         try {
-            return CallExpressionTranslator.translate((KtCallExpression) selector, receiver, context);
+            return CallExpressionTranslator.translate(selector, receiver, context);
         } catch (RuntimeException e) {
             throw  ErrorReportingUtils.reportErrorWithLocation(selector, e);
         }

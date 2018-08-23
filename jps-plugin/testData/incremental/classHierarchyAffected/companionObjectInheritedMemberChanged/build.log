@@ -2,6 +2,7 @@
 
 Cleaning output files:
   out/production/module/B.class
+  out/production/module/META-INF/module.kotlin_module
 End of files
 Compiling files:
   src/B.kt
@@ -33,10 +34,10 @@ End of files
 Exit code: ABORT
 ------------------------------------------
 COMPILATION FAILED
-Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type kotlin.String?
-Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type kotlin.String?
-Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type kotlin.String?
-Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type kotlin.String?
+Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type String?
+Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type String?
+Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type String?
+Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type String?
 
 ================ Step #2 =================
 

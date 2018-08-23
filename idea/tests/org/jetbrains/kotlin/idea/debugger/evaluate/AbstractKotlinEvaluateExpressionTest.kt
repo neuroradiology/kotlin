@@ -23,17 +23,16 @@ import com.intellij.debugger.engine.evaluation.EvaluateException
 import com.intellij.debugger.engine.evaluation.TextWithImports
 import com.intellij.debugger.engine.evaluation.TextWithImportsImpl
 import com.intellij.debugger.engine.evaluation.expression.EvaluatorBuilderImpl
-import com.intellij.debugger.impl.DescriptorTestCase
+import com.intellij.debugger.engine.events.SuspendContextCommandImpl
 import com.intellij.debugger.settings.NodeRendererSettings
 import com.intellij.debugger.ui.impl.watch.*
-import com.intellij.debugger.ui.tree.FieldDescriptor
-import com.intellij.debugger.ui.tree.LocalVariableDescriptor
-import com.intellij.debugger.ui.tree.StackFrameDescriptor
-import com.intellij.debugger.ui.tree.StaticDescriptor
+import com.intellij.debugger.ui.tree.*
 import com.intellij.execution.process.ProcessOutputTypes
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.io.FileUtil
-import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiExpression
 import com.intellij.xdebugger.impl.XDebugSessionImpl
 import com.intellij.xdebugger.impl.breakpoints.XExpressionImpl
 import com.intellij.xdebugger.impl.frame.XDebugViewSessionListener
@@ -54,8 +53,10 @@ import org.jetbrains.eval4j.jdi.asValue
 import org.jetbrains.kotlin.idea.KotlinFileType
 import org.jetbrains.kotlin.idea.debugger.KotlinDebuggerTestBase
 import org.jetbrains.kotlin.idea.debugger.KotlinFrameExtraVariablesProvider
+import org.jetbrains.kotlin.idea.debugger.evaluate.AbstractKotlinEvaluateExpressionTest.PrinterConfig.DescriptorViewOptions
+import org.jetbrains.kotlin.idea.debugger.invokeInManagerThread
 import org.jetbrains.kotlin.idea.util.application.runReadAction
-import org.jetbrains.kotlin.test.InTextDirectivesUtils
+import org.jetbrains.kotlin.test.InTextDirectivesUtils.*
 import org.junit.Assert
 import java.io.File
 import java.util.*
@@ -83,6 +84,7 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
             override fun append(event: LoggingEvent?) {
                 println(event?.renderedMessage, ProcessOutputTypes.SYSTEM)
             }
+
             override fun close() {}
             override fun requiresLayout() = false
         }
@@ -109,23 +111,32 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
         configureSettings(fileText)
         createAdditionalBreakpoints(fileText)
 
-        val shouldPrintFrame = InTextDirectivesUtils.isDirectiveDefined(fileText, "// PRINT_FRAME")
+        val shouldPrintFrame = isDirectiveDefined(fileText, "// PRINT_FRAME")
+        val skipInPrintFrame = if (shouldPrintFrame) findListWithPrefixes(fileText, "// SKIP: ") else emptyList()
+        val descriptorViewOptions = DescriptorViewOptions.valueOf(findStringWithPrefixes(fileText, "// DESCRIPTOR_VIEW_OPTIONS: ") ?: "FULL")
 
         val expressions = loadTestDirectivesPairs(fileText, "// EXPRESSION: ", "// RESULT: ")
 
         val blocks = findFilesWithBlocks(file).map { FileUtil.loadFile(it, true) }
-        val expectedBlockResults = blocks.map { InTextDirectivesUtils.findLinesWithPrefixesRemoved(it, "// RESULT: ").joinToString("\n") }
+        val expectedBlockResults = blocks.map { findLinesWithPrefixesRemoved(it, "// RESULT: ").joinToString("\n") }
 
         createDebugProcess(path)
 
         doStepping(path)
 
-        val variablesView = createVariablesView()
-        val watchesView = createWatchesView()
+        var variablesView: XVariablesView? = null
+        var watchesView: XWatchesViewImpl? = null
+
+        ApplicationManager.getApplication().invokeAndWait({
+            variablesView = createVariablesView()
+            watchesView = createWatchesView()
+        }, ModalityState.any())
 
         doOnBreakpoint {
             val exceptions = linkedMapOf<String, Throwable>()
             try {
+                createMarkers(fileText)
+
                 for ((expression, expected) in expressions) {
                     mayThrow(exceptions, expression) {
                         evaluate(expression, CodeFragmentKind.EXPRESSION, expected)
@@ -139,8 +150,8 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
                 }
             }
             finally {
-               if (shouldPrintFrame) {
-                    printFrame(variablesView, watchesView)
+                if (shouldPrintFrame) {
+                    printFrame(variablesView!!, watchesView!!, PrinterConfig(skipInPrintFrame, descriptorViewOptions))
                     println(fileText, ProcessOutputTypes.SYSTEM)
                 }
                 else {
@@ -150,6 +161,7 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
 
             checkExceptions(exceptions)
         }
+
         finish()
     }
 
@@ -183,10 +195,10 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
     }
 
     private fun createWatchesView(): XWatchesViewImpl {
-        val session = myDebuggerSession.xDebugSession  as XDebugSessionImpl
-        val watchesView = XWatchesViewImpl(session)
+        val session = myDebuggerSession.xDebugSession as XDebugSessionImpl
+        val watchesView = XWatchesViewImpl(session, false)
         Disposer.register(testRootDisposable, watchesView)
-        session.addSessionListener(XDebugViewSessionListener(watchesView), testRootDisposable)
+        XDebugViewSessionListener.attach(watchesView, session)
         return watchesView
     }
 
@@ -194,22 +206,22 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
         val session = myDebuggerSession.xDebugSession as XDebugSessionImpl
         val variablesView = XVariablesView(session)
         Disposer.register(testRootDisposable, variablesView)
-        session.addSessionListener(XDebugViewSessionListener(variablesView), testRootDisposable)
+        XDebugViewSessionListener.attach(variablesView, session)
         return variablesView
     }
 
-    private fun SuspendContextImpl.printFrame(variablesView: XVariablesView, watchesView: XWatchesViewImpl) {
-        val tree = variablesView.tree!!
+    private fun SuspendContextImpl.printFrame(variablesView: XVariablesView, watchesView: XWatchesViewImpl, config: PrinterConfig) {
+        val tree = variablesView.tree
         expandAll(
                 tree,
-                Runnable {
+                {
                     try {
-                        Printer().printTree(tree)
+                        Printer(config).printTree(tree)
 
                         for (extra in getExtraVars()) {
-                            watchesView.addWatchExpression(XExpressionImpl.fromText(extra.text), -1, false);
+                            watchesView.addWatchExpression(XExpressionImpl.fromText(extra.text), -1, false)
                         }
-                        Printer().printTree(watchesView.tree)
+                        Printer(config).printTree(watchesView.tree)
                     }
                     finally {
                         resume(this)
@@ -217,7 +229,7 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
                 },
                 hashSetOf(),
                 // TODO why this is needed? Otherwise some tests are never ended
-                DescriptorTestCase.NodeFilter { it !is XValueNodeImpl || it.name != "cause" },
+                { it !is XValueNodeImpl || it.name != "cause" },
                 this
         )
     }
@@ -226,53 +238,146 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
         return KotlinFrameExtraVariablesProvider().collectVariables(debuggerContext.sourcePosition, evaluationContext, hashSetOf())
     }
 
-    private inner class Printer() {
+    internal class PrinterConfig(
+            val variablesToSkipInPrintFrame: List<String> = emptyList(),
+            val viewOptions: DescriptorViewOptions = DescriptorViewOptions.FULL
+    ) {
+        enum class DescriptorViewOptions {
+            FULL,
+            NAME_EXPRESSION,
+            NAME_EXPRESSION_RESULT
+        }
+
+        fun shouldRenderSourcesPosition(): Boolean {
+            return when (viewOptions) {
+                DescriptorViewOptions.FULL -> true
+                else -> false
+            }
+        }
+
+        fun shouldRenderExpression(): Boolean {
+            return when {
+                viewOptions.toString().contains("EXPRESSION") -> true
+                else -> false
+            }
+        }
+
+        fun renderLabel(descriptor: NodeDescriptorImpl): String {
+            return when {
+                descriptor is WatchItemDescriptor -> descriptor.calcValueName()
+                viewOptions.toString().contains("NAME") -> descriptor.name ?: descriptor.label
+                else -> descriptor.label
+            }
+        }
+
+        fun shouldComputeResultOfCreateExpression(): Boolean {
+            return viewOptions == DescriptorViewOptions.NAME_EXPRESSION_RESULT
+        }
+    }
+
+    private inner class Printer(private val config: PrinterConfig) {
         fun printTree(tree: XDebuggerTree) {
             val root = tree.treeModel.root as TreeNode
             printNode(root, 0)
         }
 
-       private fun printNode(node: TreeNode, indent: Int) {
+        private fun printNode(node: TreeNode, indent: Int) {
             val descriptor = when {
                 node is DebuggerTreeNodeImpl -> node.descriptor
                 node is XValueNodeImpl -> (node.valueContainer as? JavaValue)?.descriptor ?: MessageDescriptor(node.text.toString())
                 node is XStackFrameNode -> (node.valueContainer as? JavaStackFrame)?.descriptor
                 node is XValueGroupNodeImpl -> (node.valueContainer as? JavaStaticGroup)?.descriptor
                 node is WatchesRootNode -> null
-                node is WatchMessageNode -> WatchItemDescriptor(project, TextWithImportsImpl(CodeFragmentKind.EXPRESSION, node.expression.expression))
+                node is WatchNodeImpl -> WatchItemDescriptor(project, TextWithImportsImpl(CodeFragmentKind.EXPRESSION, node.expression.expression))
                 node is MessageTreeNode -> MessageDescriptor(node.text.toString())
                 else -> MessageDescriptor(node.toString())
             }
 
-            if (descriptor != null && printDescriptor(descriptor, indent)) return
+            if (descriptor != null && printDescriptor(node, descriptor, indent)) return
 
             printChildren(node, indent + 2)
         }
 
-        fun printDescriptor(descriptor: NodeDescriptorImpl, indent: Int): Boolean {
+        fun printDescriptor(node: TreeNode, descriptor: NodeDescriptorImpl, indent: Int): Boolean {
             if (descriptor is DefaultNodeDescriptor) return true
+            if (config.variablesToSkipInPrintFrame.contains(descriptor.name)) return true
 
-            var label = descriptor.label
+            var label = config.renderLabel(descriptor)
+
             // TODO: update presentation before calc label
             if (label == NodeDescriptorImpl.UNKNOWN_VALUE_MESSAGE && descriptor is StaticDescriptor) {
                 label = "static = " + NodeRendererSettings.getInstance().classRenderer.renderTypeName(descriptor.type.name())
             }
             if (label.endsWith(XDebuggerUIConstants.COLLECTING_DATA_MESSAGE)) return true
 
-            val curIndent = " ".repeat(indent)
-            when (descriptor) {
-                is StackFrameDescriptor ->    logDescriptor(descriptor, "$curIndent frame    = $label\n")
-                is WatchItemDescriptor ->     logDescriptor(descriptor, "$curIndent extra    = ${descriptor.calcValueName()}\n")
-                is LocalVariableDescriptor -> logDescriptor(descriptor, "$curIndent local    = $label"
-                                                    + " (sp = ${render(SourcePositionProvider.getSourcePosition(descriptor, myProject, debuggerContext))})\n")
-                is StaticDescriptor ->        logDescriptor(descriptor, "$curIndent static   = $label\n")
-                is ThisDescriptorImpl ->      logDescriptor(descriptor, "$curIndent this     = $label\n")
-                is FieldDescriptor ->         logDescriptor(descriptor, "$curIndent field    = $label"
-                                                    + " (sp = ${render(SourcePositionProvider.getSourcePosition(descriptor, myProject, debuggerContext))})\n")
-                is MessageDescriptor ->       logDescriptor(descriptor, "$curIndent          - $label\n")
-                else ->                       logDescriptor(descriptor, "$curIndent unknown  = $label\n")
+            val builder = StringBuilder()
+
+            with(builder) {
+                append(" ".repeat(indent + 1))
+                append(getPrefix(descriptor))
+                append(label)
+                if (config.shouldRenderSourcesPosition() && hasSourcePosition(descriptor)) {
+                    val sp = debugProcess.invokeInManagerThread {
+                        SourcePositionProvider.getSourcePosition(descriptor, myProject, debuggerContext)
+                    }
+                    append(" (sp = ${render(sp)})")
+                }
+
+                if (config.shouldRenderExpression() && descriptor is ValueDescriptorImpl) {
+                    val expression = debugProcess.invokeInManagerThread {
+                        descriptor.getTreeEvaluation((node as XValueNodeImpl).valueContainer as JavaValue, it) as? PsiExpression
+                    }
+
+                    if (expression != null) {
+                        val text = TextWithImportsImpl(expression)
+                        val imports = expression.getUserData(DebuggerTreeNodeExpression.ADDITIONAL_IMPORTS_KEY)?.joinToString { it } ?: ""
+
+                        val codeFragment = KotlinCodeFragmentFactory().createPresentationCodeFragment(
+                                TextWithImportsImpl(text.kind, text.text, text.imports + imports, text.fileType),
+                                debuggerContext.sourcePosition.elementAt, project
+                        )
+                        val codeFragmentText = codeFragment.text
+
+                        if (config.shouldComputeResultOfCreateExpression()) {
+                            debugProcess.invokeInManagerThread {
+                                it.suspendContext?.evaluate(
+                                        TextWithImportsImpl(text.kind, codeFragmentText, codeFragment.importsToString(), text.fileType),
+                                        null)
+                            }
+                        }
+
+                        append(" (expression = $codeFragmentText)")
+                    }
+                }
+                append("\n")
             }
+
+            logDescriptor(descriptor, builder.toString())
+
             return false
+        }
+
+        private fun getPrefix(descriptor: NodeDescriptorImpl): String {
+            val prefix = when (descriptor) {
+                is StackFrameDescriptor -> "frame"
+                is WatchItemDescriptor -> "extra"
+                is LocalVariableDescriptor -> "local"
+                is StaticDescriptor -> "static"
+                is ThisDescriptorImpl -> "this"
+                is FieldDescriptor -> "field"
+                is ArrayElementDescriptor -> "element"
+                is MessageDescriptor -> ""
+                else -> "unknown"
+            }
+            return prefix + " ".repeat("unknown ".length - prefix.length) + if (descriptor is MessageDescriptor) " - " else " = "
+        }
+
+        private fun hasSourcePosition(descriptor: NodeDescriptorImpl): Boolean {
+            return when (descriptor) {
+                is LocalVariableDescriptor,
+                is FieldDescriptor -> true
+                else -> false
+            }
         }
 
         private fun printChildren(node: TreeNode, indent: Int) {
@@ -306,8 +411,8 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
     }
 
     private fun loadTestDirectivesPairs(fileContent: String, directivePrefix: String, expectedPrefix: String): List<Pair<String, String>> {
-        val directives = InTextDirectivesUtils.findLinesWithPrefixesRemoved(fileContent, directivePrefix)
-        val expected = InTextDirectivesUtils.findLinesWithPrefixesRemoved(fileContent, expectedPrefix)
+        val directives = findLinesWithPrefixesRemoved(fileContent, directivePrefix)
+        val expected = findLinesWithPrefixesRemoved(fileContent, expectedPrefix)
         assert(directives.size == expected.size) { "Sizes of test directives are different" }
         return directives.zip(expected)
     }
@@ -317,57 +422,81 @@ abstract class AbstractKotlinEvaluateExpressionTest : KotlinDebuggerTestBase() {
         return mainFile.parentFile?.listFiles()?.filter { it.name.startsWith(mainFileName) && it.name != mainFileName } ?: Collections.emptyList()
     }
 
-    private fun createContextElement(context: SuspendContextImpl): PsiElement {
-        val contextElement = ContextUtil.getContextElement(debuggerContext)!!
-        Assert.assertTrue("KotlinCodeFragmentFactory should be accepted for context element otherwise default evaluator will be called. ContextElement = ${contextElement.text}",
-                          KotlinCodeFragmentFactory().isContextAccepted(contextElement))
+    private fun createMarkers(fileText: String) {
+        val labelsAsText = findLinesWithPrefixesRemoved(fileText, "// DEBUG_LABEL: ")
+        if (labelsAsText.isEmpty()) return
 
-        val labelsAsText = InTextDirectivesUtils.findLinesWithPrefixesRemoved(contextElement.containingFile.text, "// DEBUG_LABEL: ")
-        if (labelsAsText.isEmpty()) return contextElement
+        val markupMap = NodeDescriptorImpl.getMarkupMap(debugProcess)
 
-        val markupMap = hashMapOf<com.sun.jdi.Value, ValueMarkup>()
         for (labelAsText in labelsAsText) {
             val labelParts = labelAsText.split("=")
-            assert(labelParts.size == 2) { "Wrong format for DEBUG_LABEL directive: // DEBUG_LABEL: {localVariableName} = {labelText}"}
+            assert(labelParts.size == 2) { "Wrong format for DEBUG_LABEL directive: // DEBUG_LABEL: {localVariableName} = {labelText}" }
             val localVariableName = labelParts[0].trim()
             val labelName = labelParts[1].trim()
-            val localVariable = context.frameProxy!!.visibleVariableByName(localVariableName)
+            val localVariable = debuggerContext.frameProxy!!.visibleVariableByName(localVariableName)
             assert(localVariable != null) { "Couldn't find localVariable for label: name = $localVariableName" }
-            val localVariableValue = context.frameProxy!!.getValue(localVariable)
+            val localVariableValue = debuggerContext.frameProxy!!.getValue(localVariable) as? ObjectReference
             assert(localVariableValue != null) { "Local variable $localVariableName should be an ObjectReference" }
             localVariableValue!!
-            markupMap.put(localVariableValue, ValueMarkup(labelName, null, labelName))
+            markupMap?.put(localVariableValue, ValueMarkup(labelName, null, labelName))
         }
-
-        val (text, labels) = KotlinCodeFragmentFactory.createCodeFragmentForLabeledObjects(contextElement.project, markupMap)
-        return KotlinCodeFragmentFactory().createWrappingContext(text, labels, KotlinCodeFragmentFactory.getContextElement(contextElement), project)!!
     }
 
-    private fun SuspendContextImpl.evaluate(text: String, codeFragmentKind: CodeFragmentKind, expectedResult: String) {
+    private fun SuspendContextImpl.evaluate(text: String, codeFragmentKind: CodeFragmentKind, expectedResult: String?) {
+        return evaluate(TextWithImportsImpl(codeFragmentKind, text, "", KotlinFileType.INSTANCE), expectedResult)
+    }
+
+    private fun SuspendContextImpl.evaluate(item: TextWithImportsImpl, expectedResult: String?) {
         runReadAction {
             val sourcePosition = ContextUtil.getSourcePosition(this)
-            val contextElement = createContextElement(this)
 
-            contextElement.putCopyableUserData(KotlinCodeFragmentFactory.DEBUG_FRAME_FOR_TESTS, this@AbstractKotlinEvaluateExpressionTest.evaluationContext.frameProxy)
+            val contextElement = ContextUtil.getContextElement(debuggerContext)!!
+            Assert.assertTrue("KotlinCodeFragmentFactory should be accepted for context element otherwise default evaluator will be called. ContextElement = ${contextElement.text}",
+                              KotlinCodeFragmentFactory().isContextAccepted(contextElement))
 
-            try {
-
-                val evaluator =
-                        EvaluatorBuilderImpl.build(TextWithImportsImpl(codeFragmentKind, text, "", KotlinFileType.INSTANCE),
-                                                   contextElement,
-                                                   sourcePosition)
+            contextElement.putCopyableUserData(KotlinCodeFragmentFactory.DEBUG_CONTEXT_FOR_TESTS, this@AbstractKotlinEvaluateExpressionTest.debuggerContext)
 
 
-                if (evaluator == null) throw AssertionError("Cannot create an Evaluator for Evaluate Expression")
+            runActionInSuspendCommand {
+                try {
+                    val evaluator = EvaluatorBuilderImpl.build(item, contextElement, sourcePosition, project)
+                                    ?: throw AssertionError("Cannot create an Evaluator for Evaluate Expression")
 
-                val value = evaluator.evaluate(this@AbstractKotlinEvaluateExpressionTest.evaluationContext)
-                val actualResult = value.asValue().asString()
-
-                Assert.assertTrue("Evaluate expression returns wrong result for $text:\nexpected = $expectedResult\nactual   = $actualResult\n", expectedResult == actualResult)
+                    val value = evaluator.evaluate(this@AbstractKotlinEvaluateExpressionTest.evaluationContext)
+                    val actualResult = value.asValue().asString()
+                    if (expectedResult != null) {
+                        Assert.assertEquals(
+                                "Evaluate expression returns wrong result for ${item.text}:\n" +
+                                "expected = $expectedResult\n" +
+                                "actual   = $actualResult\n",
+                                expectedResult, actualResult)
+                    }
+                }
+                catch (e: EvaluateException) {
+                    val expectedMessage = e.message?.replaceFirst(ID_PART_REGEX, "id=ID")
+                    Assert.assertEquals(
+                            "Evaluate expression throws wrong exception for ${item.text}:\n" +
+                            "expected = $expectedResult\n" +
+                            "actual   = $expectedMessage\n",
+                            expectedResult, expectedMessage)
+                }
             }
-            catch (e: EvaluateException) {
-                Assert.assertTrue("Evaluate expression throws wrong exception for $text:\nexpected = $expectedResult\nactual   = ${e.message}\n", expectedResult == e.message?.replaceFirst(ID_PART_REGEX, "id=ID"))
+        }
+    }
+
+    private fun SuspendContextImpl.runActionInSuspendCommand(action: SuspendContextImpl.() -> Unit) {
+        if (myInProgress) {
+            action()
+        }
+        else {
+            val command = object : SuspendContextCommandImpl(this) {
+                override fun contextAction(suspendContext: SuspendContextImpl) {
+                    action(suspendContext)
+                }
             }
+
+            // Try to execute the action inside a command if we aren't already inside it.
+            debuggerContext.debugProcess?.managerThread?.invoke(command) ?: command.contextAction(this)
         }
     }
 

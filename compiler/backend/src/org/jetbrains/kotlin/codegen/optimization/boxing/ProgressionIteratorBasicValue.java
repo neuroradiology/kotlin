@@ -18,22 +18,35 @@ package org.jetbrains.kotlin.codegen.optimization.boxing;
 
 import com.google.common.collect.ImmutableMap;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.jetbrains.kotlin.builtins.PrimitiveType;
+import org.jetbrains.kotlin.codegen.RangeCodegenUtilKt;
+import org.jetbrains.kotlin.codegen.intrinsics.IteratorNext;
+import org.jetbrains.kotlin.codegen.optimization.common.StrictBasicValue;
+import org.jetbrains.kotlin.name.FqName;
+import org.jetbrains.kotlin.name.Name;
+import org.jetbrains.kotlin.resolve.jvm.JvmPrimitiveType;
 import org.jetbrains.org.objectweb.asm.Type;
-import org.jetbrains.org.objectweb.asm.tree.analysis.BasicValue;
 
-public class ProgressionIteratorBasicValue extends BasicValue {
+public class ProgressionIteratorBasicValue extends StrictBasicValue {
     private final static ImmutableMap<String, Type> VALUES_TYPENAME_TO_TYPE;
 
     static {
-        VALUES_TYPENAME_TO_TYPE = ImmutableMap.<String, Type>builder().
-                put("Byte", Type.BYTE_TYPE).
-                put("Char", Type.CHAR_TYPE).
-                put("Short", Type.SHORT_TYPE).
-                put("Int", Type.INT_TYPE).
-                put("Long", Type.LONG_TYPE).
-                put("Float", Type.FLOAT_TYPE).
-                put("Double", Type.DOUBLE_TYPE).
-                build();
+        ImmutableMap.Builder<String, Type> builder = ImmutableMap.builder();
+        for (PrimitiveType primitiveType : RangeCodegenUtilKt.getSupportedRangeTypes()) {
+            builder.put(primitiveType.getTypeName().asString(), Type.getType(JvmPrimitiveType.get(primitiveType).getDesc()));
+        }
+        VALUES_TYPENAME_TO_TYPE = builder.build();
+    }
+
+    private static final ImmutableMap<PrimitiveType, ProgressionIteratorBasicValue> ITERATOR_VALUE_BY_ELEMENT_PRIMITIVE_TYPE;
+
+    static {
+        ImmutableMap.Builder<PrimitiveType, ProgressionIteratorBasicValue> builder = ImmutableMap.builder();
+        for (PrimitiveType elementType : RangeCodegenUtilKt.getSupportedRangeTypes()) {
+            builder.put(elementType, new ProgressionIteratorBasicValue(elementType.getTypeName().asString()));
+        }
+        ITERATOR_VALUE_BY_ELEMENT_PRIMITIVE_TYPE = builder.build();
     }
 
     @NotNull
@@ -46,18 +59,23 @@ public class ProgressionIteratorBasicValue extends BasicValue {
     private final Type valuesPrimitiveType;
     private final String valuesPrimitiveTypeName;
 
-    public ProgressionIteratorBasicValue(@NotNull String valuesPrimitiveTypeName) {
-        super(Type.getObjectType("kotlin/" + valuesPrimitiveTypeName + "Iterator"));
+    private ProgressionIteratorBasicValue(@NotNull String valuesPrimitiveTypeName) {
+        super(IteratorNext.Companion.getPrimitiveIteratorType(Name.identifier(valuesPrimitiveTypeName)));
         this.valuesPrimitiveType = getValuesType(valuesPrimitiveTypeName);
         this.valuesPrimitiveTypeName = valuesPrimitiveTypeName;
     }
 
-    public Type getValuesPrimitiveType() {
-        return valuesPrimitiveType;
+
+    @Nullable
+    public static ProgressionIteratorBasicValue byProgressionClassType(@NotNull Type progressionClassType) {
+        FqName classFqName = new FqName(progressionClassType.getClassName());
+        PrimitiveType elementType = RangeCodegenUtilKt.getPrimitiveRangeOrProgressionElementType(classFqName);
+        return ITERATOR_VALUE_BY_ELEMENT_PRIMITIVE_TYPE.get(elementType);
     }
 
-    public String getValuesPrimitiveTypeName() {
-        return valuesPrimitiveTypeName;
+    @NotNull
+    public Type getValuesPrimitiveType() {
+        return valuesPrimitiveType;
     }
 
     @Override
@@ -75,7 +93,7 @@ public class ProgressionIteratorBasicValue extends BasicValue {
 
     @NotNull
     public String getNextMethodName() {
-        return "next" + getValuesPrimitiveTypeName();
+        return "next" + valuesPrimitiveTypeName;
     }
 
     @NotNull
